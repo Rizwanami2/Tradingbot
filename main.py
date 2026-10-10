@@ -54,6 +54,7 @@ from multi_agent_trading_bot import (
     send_telegram,
 )
 from risk_manager import RiskManager
+from backtest_engine import BacktestConfig, run_backtest
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -488,31 +489,86 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Run backtest on demand."""
-    bars = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 2000
-    await update.message.reply_text(f"⏳ Running backtest simulation over **{bars}** candles...", parse_mode="Markdown")
+    """Run a historical OHLCV backtest without submitting exchange orders."""
+    args = list(ctx.args or [])
+    bars = 1000
+    if args:
+        try:
+            bars = int(args[0])
+        except (TypeError, ValueError):
+            await update.message.reply_text("Usage: /backtest [100-10000 bars] [SYMBOL] [TIMEFRAME]")
+            return
+    if not 100 <= bars <= 10000:
+        await update.message.reply_text("Choose between 100 and 10,000 candles.")
+        return
 
-    class DummyArgs:
-        def __init__(self, bars):
-            self.bars = bars
-            self.symbol = config.DEFAULT_SYMBOL
-            self.equity = config.INITIAL_EQUITY
+    symbol = args[1].upper() if len(args) > 1 else config.DEFAULT_SYMBOL.upper()
+    timeframe = args[2].lower() if len(args) > 2 else "1h"
+    allowed_timeframes = {"1m", "5m", "15m", "30m", "1h", "4h", "1d"}
+    if timeframe not in allowed_timeframes:
+        await update.message.reply_text("Supported timeframes: 1m, 5m, 15m, 30m, 1h, 4h, 1d")
+        return
+    if not symbol or len(symbol) > 30 or any(ch.isspace() for ch in symbol):
+        await update.message.reply_text("Please provide a valid symbol.")
+        return
 
-    from multi_agent_trading_bot import run_backtest
-    stats = run_backtest(DummyArgs(bars))
-
-    ret_arrow = "🟢" if stats["return_pct"] >= 0 else "🔴"
-    msg = (
-        f"📊 **Multi-Agent Backtest Results**\n\n"
-        f"• **Candles Simulated:** `{bars}` bars\n"
-        f"• **Total Trades:** `{stats['trades']}`\n"
-        f"• **Win Rate:** `{stats['winrate']}%` ({stats['wins']} wins)\n"
-        f"• **Net PnL:** `${stats['net_pnl']:+,.2f}`\n"
-        f"• **Return:** {ret_arrow} `{stats['return_pct']:+.2f}%`\n"
-        f"• **Max Drawdown:** `{stats['max_drawdown']}%`\n"
-        f"• **Final Equity:** `${stats['final_equity']:,.2f}`"
+    await update.message.reply_text(
+        f"Loading up to {bars} historical {timeframe} candles for {symbol}. "
+        "This is a simulation only; no exchange orders will be submitted."
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+
+    def _run_historical_backtest():
+        # Use the direct data_feed adapter, not the embedded multi-agent fallback
+        # that can synthesize demo candles. Missing history must fail closed.
+        from data_feed import DataFeed
+        feed = DataFeed(
+            symbol=symbol,
+            source="ccxt",
+            exchange_id=config.DEFAULT_EXCHANGE,
+            timeframe=timeframe,
+            api_key="",
+            api_secret="",
+        )
+        historical = feed.fetch(limit=bars, timeframe=timeframe)
+        if historical is None or historical.empty:
+            raise ValueError(
+                "No historical candles were returned. Check the symbol, timeframe, "
+                "data provider, and available history; synthetic candles are not used."
+            )
+        return run_backtest(
+            historical.tail(bars),
+            config=BacktestConfig(initial_equity=config.INITIAL_EQUITY),
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+
+    try:
+        stats = await asyncio.to_thread(_run_historical_backtest)
+    except Exception as exc:
+        logger.warning("Historical backtest failed for %s %s: %s", symbol, timeframe, exc)
+        await update.message.reply_text(f"Backtest unavailable: {exc}")
+        return
+
+    pf = stats["profit_factor"]
+    pf_text = "n/a" if pf is None else ("infinity" if pf == float("inf") else f"{pf:.2f}")
+    ret_icon = "🟢" if stats["return_pct"] >= 0 else "🔴"
+    message = (
+        f"📊 *Historical Backtest — {stats['symbol']} ({stats['timeframe']})*\n\n"
+        f"• Strategy: {stats['strategy']}\n"
+        f"• Candles: {stats['candles']}\n"
+        f"• Closed trades: {stats['trades']}\n"
+        f"• Win rate: {stats['win_rate_pct']:.1f}% ({stats['wins']} wins)\n"
+        f"• Net P&L: USD {stats['net_pnl']:+,.2f}\n"
+        f"• Return: {ret_icon} {stats['return_pct']:+.2f}%\n"
+        f"• Max drawdown: {stats['max_drawdown_pct']:.2f}%\n"
+        f"• Profit factor: {pf_text}\n"
+        f"• Expectancy/trade: USD {stats['expectancy_per_trade']:+,.2f}\n"
+        f"• Fees: USD {stats['fees']:,.2f}\n"
+        f"• Final equity: USD {stats['final_equity']:,.2f}\n\n"
+        "_Assumptions: next-candle-open entries, fees/slippage, stop-first on same-candle "
+        "stop/target touches. Historical results are estimates, not guarantees. No live orders submitted._"
+    )
+    await update.message.reply_text(message, parse_mode="Markdown")
 
 
 async def reset_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
