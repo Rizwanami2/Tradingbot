@@ -15,7 +15,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip numpy pandas pytest
+        run: python -m pip install --upgrade pip numpy pandas pytest requests
       - name: Compile changed Python modules
         run: python -m py_compile main.py config.py execution.py data_feed.py backtest_engine.py strategy_research.py market_regime.py ops_dashboard.py
       - name: Run backtesting, execution, and paper-broker regression tests
