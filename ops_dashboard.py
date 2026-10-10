@@ -5,11 +5,10 @@ requires a bearer token. It never controls the execution engine.
 """
 from __future__ import annotations
 
-import argparse
+import hmac
 import ipaddress
 import json
 import os
-import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -68,6 +67,8 @@ def health_from_snapshot(
     if stale_after_seconds < 1:
         raise ValueError("stale_after_seconds must be positive")
     now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     reasons = []
     last_success = snapshot.get("last_success_at")
     age_seconds = None
@@ -84,7 +85,13 @@ def health_from_snapshot(
         except (TypeError, ValueError):
             reasons.append("Invalid last_success_at timestamp")
 
-    errors = int(snapshot.get("consecutive_errors", 0) or 0)
+    try:
+        errors = int(snapshot.get("consecutive_errors", 0) or 0)
+        if errors < 0:
+            raise ValueError("negative error count")
+    except (TypeError, ValueError):
+        errors = 1
+        reasons.append("Invalid consecutive error count")
     if errors > 0:
         reasons.append(f"{errors} consecutive monitoring error(s)")
     if snapshot.get("last_error") and errors > 0:
@@ -145,7 +152,7 @@ def make_handler(store: StatusStore, token: str = ""):
             if not token:
                 return True
             supplied = self.headers.get("Authorization", "")
-            return supplied == f"Bearer {token}"
+            return hmac.compare_digest(supplied, f"Bearer {token}")
 
         def do_GET(self):
             if self.path == "/health":
