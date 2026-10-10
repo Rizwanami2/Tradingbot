@@ -19,11 +19,6 @@ class StatusReadError(RuntimeError):
     pass
 
 
-def is_authorized_user(user_id: Optional[int], allowed_user_ids: set[int]) -> bool:
-    """Fail closed when no explicit Telegram control allowlist is configured."""
-    return user_id is not None and bool(allowed_user_ids) and int(user_id) in allowed_user_ids
-
-
 class StatusStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
