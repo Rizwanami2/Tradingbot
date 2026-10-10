@@ -167,4 +167,9 @@ class DataFeed:
                 "open": float(c["open"]),
                 "source": self.source,
             }
-        return {"mark": 2650.0, "close": 2650.0, "source": "demo"}
+        return {
+            "ok": False,
+            "symbol": self.symbol,
+            "error": "Market data unavailable; no synthetic price was substituted.",
+            "source": "unavailable",
+        }
