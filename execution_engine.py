@@ -73,9 +73,29 @@ class ExecutionEngine:
     and manages position lifecycles with dynamic leverage.
     """
 
-    def __init__(self, risk_manager: RiskManager, event_callback: Optional[Callable] = None):
+    def __init__(
+        self,
+        risk_manager: RiskManager,
+        event_callback: Optional[Callable] = None,
+        broker: Optional[object] = None,
+    ):
         self.risk_manager = risk_manager
         self.event_callback = event_callback
+        if broker is not None:
+            self.broker = broker
+        else:
+            try:
+                from execution import create_broker
+                import config
+                self.broker = create_broker(
+                    broker_mode=getattr(config, "BROKER_MODE", "paper"),
+                    exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),
+                    api_key=getattr(config, "EXCHANGE_API_KEY", ""),
+                    api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),
+                    initial_balance=self.risk_manager.state.equity,
+                )
+            except Exception:
+                self.broker = None
         self.pending_setups: Dict[str, TradeOrder] = {}
         self.active_positions: Dict[str, TradeOrder] = {}
         self.trade_history: List[TradeOrder] = []
@@ -223,6 +243,20 @@ class ExecutionEngine:
                     del self.pending_setups[sym]
                     just_executed = True
 
+                    if getattr(self, "broker", None):
+                        try:
+                            side = "buy" if setup.direction == "LONG" else "sell"
+                            self.broker.place_order(
+                                symbol=setup.symbol,
+                                side=side,
+                                qty=setup.lots,
+                                price=exec_price,
+                                stop_loss=setup.stop_loss,
+                                take_profit=setup.tp1,
+                            )
+                        except Exception as ex:
+                            print(f"[ExecutionEngine] Broker place_order: {ex}")
+
                     ev = {
                         "event": "TRADE_EXECUTED",
                         "order": setup,
@@ -337,6 +371,12 @@ class ExecutionEngine:
                 pos.stop_loss = (entry + buf) if is_long else (entry - buf)
                 pos.be_stage = 2
 
+                if getattr(self, "broker", None):
+                    try:
+                        self.broker.close_position(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp1)
+                    except Exception as ex:
+                        print(f"[ExecutionEngine] Broker TP1 close: {ex}")
+
                 ev = {
                     "event": "TP1_PARTIAL_TAKEN",
                     "order": pos,
@@ -368,6 +408,12 @@ class ExecutionEngine:
                 pos.stop_loss = self.risk_manager.trailing_stop(
                     pos.direction.lower(), entry, pos.stop_loss, pos.highest_price, pos.lowest_price, initial_risk, tp1_hit=True
                 )
+
+                if getattr(self, "broker", None):
+                    try:
+                        self.broker.close_position(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp2)
+                    except Exception as ex:
+                        print(f"[ExecutionEngine] Broker TP2 close: {ex}")
 
                 ev = {
                     "event": "TP2_PARTIAL_TAKEN",
@@ -410,6 +456,12 @@ class ExecutionEngine:
                 pos.status = OrderStatus.CLOSED
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.close_reason = "Stop Loss / Break-Even Exit"
+
+                if getattr(self, "broker", None):
+                    try:
+                        self.broker.close_position(pos.symbol, price=exit_price)
+                    except Exception as ex:
+                        print(f"[ExecutionEngine] Broker exit close: {ex}")
 
                 r_mult = pos.realized_pnl / (initial_risk * pos.size) if (initial_risk * pos.size) > 0 else 0.0
                 self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=r_mult)
@@ -458,6 +510,12 @@ class ExecutionEngine:
 
         self.trade_history.append(pos)
         del self.active_positions[sym]
+
+        if getattr(self, "broker", None):
+            try:
+                self.broker.close_position(sym, price=current_price)
+            except Exception as ex:
+                print(f"[ExecutionEngine] Broker manual close: {ex}")
 
         msg = (
             f"⏹️ **MANUAL CLOSE EXECUTED** ({sym})\n"

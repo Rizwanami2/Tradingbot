@@ -260,6 +260,35 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertEqual(len(self.engine.trade_history), 1)
         self.assertEqual(self.engine.trade_history[0].status, OrderStatus.CANCELLED)
 
+    def test_broker_routing_on_trade_and_close(self):
+        self.assertIsNotNone(self.engine.broker)
+        sig = {
+            "symbol": "XAUUSD",
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop": 2640.0,
+            "tp1": 2665.0,
+            "tp2": 2675.0,
+            "lots": 0.02,
+            "size": 2.0,
+            "leverage": 20.0,
+            "margin_required": 265.0,
+            "liquidation_price": 2536.0,
+            "risk_amount": 20.0,
+            "rr": 1.5,
+        }
+        self.engine.register_setup(sig)
+        candle_trigger = {"open": 2652.0, "high": 2653.0, "low": 2649.0, "close": 2651.0}
+        self.engine.update_market_candle("XAUUSD", candle_trigger)
+        self.assertIn("XAUUSD", self.engine.active_positions)
+        # Verify broker holds active position
+        self.assertIn("XAUUSD", self.engine.broker.positions)
+
+        # Manually close and verify broker position is cleared
+        closed = self.engine.close_manually("XAUUSD", current_price=2660.0)
+        self.assertIsNotNone(closed)
+        self.assertNotIn("XAUUSD", self.engine.broker.positions)
+
 
 if __name__ == "__main__":
     unittest.main()

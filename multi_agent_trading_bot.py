@@ -391,11 +391,13 @@ class AILearnerAgent:
         w = self.memory["weights"]
 
         def mom(n):
-            return (c[-1] - c[-n - 1]) / c[-n - 1] if len(c) > n else 0.0
+            val = (c[-1] - c[-n - 1]) / c[-n - 1] if len(c) > n else 0.0
+            return float(np.clip(val, -0.05, 0.05))
 
         tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
         a = np.mean(tr[-14:])
-        slope = np.polyfit(np.arange(25), c[-25:], 1)[0] / c[-1]
+        raw_slope = np.polyfit(np.arange(25), c[-25:], 1)[0] / c[-1]
+        slope = float(np.clip(raw_slope, -0.05, 0.05))
         hh = np.mean(h[-10:] > h[-11:-1]) if len(h) > 11 else 0.5
         ll = np.mean(l[-10:] < l[-11:-1]) if len(l) > 11 else 0.5
 
@@ -446,6 +448,7 @@ class AILearnerAgent:
             m["weights"]["slope"] = round(min(1.7, m["weights"]["slope"] + 0.02), 3)
         else:
             m["weights"]["momentum"] = round(max(0.65, m["weights"]["momentum"] - 0.025), 3)
+            m["weights"]["slope"] = round(max(0.65, m["weights"]["slope"] - 0.025), 3)
 
         if won and conf > 0.72:
             m["min_conf"] = round(min(0.82, m["min_conf"] + 0.004), 3)

@@ -110,22 +110,49 @@ class PaperBroker(Broker):
     def get_positions(self) -> List[Position]:
         return list(self.positions.values())
 
-    def close_position(self, symbol: str, qty: float = None) -> bool:
+    def close_position(self, symbol: str, qty: float = None, price: float = None) -> bool:
         if symbol not in self.positions:
             return False
         pos = self.positions[symbol]
         close_qty = qty or pos.qty
+        exit_price = price or pos.entry_price
         side = "sell" if pos.side == "buy" else "buy"
-        self.place_order(symbol, side, close_qty, price=pos.entry_price)  # simplified
+
+        # Calculate realized PnL
+        pnl = (exit_price - pos.entry_price) * close_qty if pos.side == "buy" else (pos.entry_price - exit_price) * close_qty
+        self.balance += pnl
+        self.equity = self.balance
+
+        self.place_order(symbol, side, close_qty, price=exit_price)
         return True
 
     def _log(self, order: Order):
-        with open(self.journal_file, "a") as f:
-            f.write(json.dumps({
-                "id": order.id, "symbol": order.symbol, "side": order.side,
-                "qty": order.qty, "price": order.filled_price,
-                "time": order.created_at.isoformat()
-            }) + "\n")
+        try:
+            with open(self.journal_file, "a") as f:
+                f.write(json.dumps({
+                    "id": order.id, "symbol": order.symbol, "side": order.side,
+                    "qty": order.qty, "price": order.filled_price,
+                    "time": order.created_at.isoformat()
+                }) + "\n")
+        except Exception:
+            pass
+
+
+def create_broker(
+    broker_mode: str = "paper",
+    exchange_id: str = "binance",
+    api_key: str = "",
+    api_secret: str = "",
+    initial_balance: float = 10000.0,
+) -> Broker:
+    """Factory creating PaperBroker or live CCXTBroker based on configuration."""
+    if broker_mode.lower() == "live" and api_key and api_secret:
+        try:
+            return CCXTBroker(exchange_id=exchange_id, api_key=api_key, api_secret=api_secret)
+        except Exception as e:
+            print(f"[Broker] Warning: Could not initialize live {exchange_id} broker ({e}) -> falling back to PaperBroker")
+    return PaperBroker(initial_balance=initial_balance)
+
 
 class CCXTBroker(Broker):
     def __init__(self, exchange_id: str = "binance", api_key: str = "", api_secret: str = ""):

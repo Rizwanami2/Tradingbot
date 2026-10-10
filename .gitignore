@@ -16,5 +16,6 @@ env/
 # State & Logs
 risk_state.json
 multi_agent_memory.json
+*.jsonl
 *.log
 attachments/

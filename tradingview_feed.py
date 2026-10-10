@@ -187,14 +187,88 @@ def fetch_tradingview_quote(symbol: str = "XAUUSD") -> Dict:
     }
 
 
+def _fetch_real_ohlcv(symbol: str, limit: int = 600) -> Optional[pd.DataFrame]:
+    """
+    Fetches real live market OHLCV bars from public exchange REST endpoints
+    (Binance public API / CCXT) without requiring API keys.
+    """
+    sym = symbol.upper().replace("/", "").replace(":", "")
+    binance_sym = None
+    if sym in ("BTCUSD", "BTCUSDT", "BTC"):
+        binance_sym = "BTCUSDT"
+    elif sym in ("ETHUSD", "ETHUSDT", "ETH"):
+        binance_sym = "ETHUSDT"
+    elif sym in ("SOLUSD", "SOLUSDT", "SOL"):
+        binance_sym = "SOLUSDT"
+    elif sym in ("XAUUSD", "XAUTUSD", "GOLD", "PAXGUSD", "PAXGUSDT"):
+        binance_sym = "PAXGUSDT"
+    elif sym.endswith("USDT") or sym.endswith("BUSD"):
+        binance_sym = sym
+    elif sym.endswith("USD"):
+        binance_sym = sym.replace("USD", "USDT")
+
+    if binance_sym:
+        try:
+            url = "https://api.binance.com/api/v3/klines"
+            params = {"symbol": binance_sym, "interval": "1m", "limit": min(limit, 1000)}
+            r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+            if r.status_code == 200:
+                raw = r.json()
+                if isinstance(raw, list) and len(raw) > 0:
+                    records = []
+                    for k in raw:
+                        records.append({
+                            "timestamp": pd.to_datetime(k[0], unit="ms", utc=True),
+                            "open": float(k[1]),
+                            "high": float(k[2]),
+                            "low": float(k[3]),
+                            "close": float(k[4]),
+                            "volume": float(k[5]),
+                        })
+                    df = pd.DataFrame(records).set_index("timestamp")
+                    df["high"] = np.maximum(df["high"], np.maximum(df["open"], df["close"]))
+                    df["low"] = np.minimum(df["low"], np.minimum(df["open"], df["close"]))
+                    return df
+        except Exception:
+            pass
+
+    try:
+        import ccxt
+        ex = ccxt.binance({"enableRateLimit": True, "timeout": 6000})
+        ccxt_sym = f"{sym[:-4]}/{sym[-4:]}" if "/" not in sym and sym.endswith("USDT") else f"{sym}/USDT"
+        raw_bars = ex.fetch_ohlcv(ccxt_sym, timeframe="1m", limit=min(limit, 1000))
+        if raw_bars and len(raw_bars) > 0:
+            df = pd.DataFrame(raw_bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            df = df.set_index("timestamp").astype(float)
+            df["high"] = np.maximum(df["high"], np.maximum(df["open"], df["close"]))
+            df["low"] = np.minimum(df["low"], np.minimum(df["open"], df["close"]))
+            return df
+    except Exception:
+        pass
+
+    return None
+
+
 def fetch_tradingview_bars(symbol: str = "XAUUSD", limit: int = 600) -> pd.DataFrame:
     """
-    Generates high-resolution multi-timeframe candles anchored around
-    the live TradingView ticker quote and technical metrics.
+    Fetches real live multi-timeframe candles when available, anchored to
+    the live ticker quote. Falls back to realistic anchored generator if offline.
     """
     quote = fetch_tradingview_quote(symbol)
     base_price = float(quote.get("mark", 2650.0))
 
+    # 1. Try real live market candles from public exchange
+    real_df = _fetch_real_ohlcv(symbol, limit=limit)
+    if real_df is not None and len(real_df) >= 10:
+        # Align most recent candle close to live mark if quote is verified
+        if quote.get("ok"):
+            real_df.iloc[-1, real_df.columns.get_loc("close")] = base_price
+            real_df.iloc[-1, real_df.columns.get_loc("high")] = max(real_df.iloc[-1]["high"], base_price)
+            real_df.iloc[-1, real_df.columns.get_loc("low")] = min(real_df.iloc[-1]["low"], base_price)
+        return real_df.tail(limit)
+
+    # 2. Fallback: realistic anchored synthetic candles
     dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq="1min")
     noise = np.random.randn(limit) * (base_price * 0.0003)
     p = base_price + np.cumsum(noise)
@@ -216,3 +290,4 @@ def fetch_tradingview_bars(symbol: str = "XAUUSD", limit: int = 600) -> pd.DataF
         {"open": p, "high": highs, "low": lows, "close": closes, "volume": volumes},
         index=dates,
     )
+

@@ -31,6 +31,7 @@ import threading
 import time as time_module
 from typing import Dict, Optional
 
+import pandas as pd
 import requests
 from telegram import Update
 from telegram.ext import (
@@ -629,7 +630,9 @@ async def live_monitoring_worker(app):
         except Exception as e:
             logger.error(f"Monitoring worker error: {e}")
 
-        await asyncio.sleep(config.POLL_INTERVAL)
+        # Adaptive polling: fast-track when tracking active trades or pending setups
+        sleep_interval = config.FAST_POLL_INTERVAL if (engine.active_positions or engine.pending_setups) else config.POLL_INTERVAL
+        await asyncio.sleep(sleep_interval)
 
 
 # ======================================================================

@@ -25,9 +25,11 @@ class TestConfigAndUtils(unittest.TestCase):
         self.assertEqual(_safe_float(None, 10.0), 10.0)
 
     def test_config_defaults(self):
-        self.assertGreater(config.POLL_INTERVAL, 0)
+        self.assertEqual(config.POLL_INTERVAL, 10)
+        self.assertEqual(config.FAST_POLL_INTERVAL, 3)
+        self.assertEqual(config.DEFAULT_LEVERAGE, 20.0)
+        self.assertIn(config.BROKER_MODE, ("paper", "live"))
         self.assertGreater(config.INITIAL_EQUITY, 0.0)
-        self.assertGreater(config.DEFAULT_LEVERAGE, 0.0)
         self.assertIn(config.DEFAULT_SYMBOL, ("XAUTUSD", "XAUUSD"))
 
     def test_news_agent_naive_and_aware_datetimes(self):

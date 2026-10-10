@@ -90,7 +90,7 @@ class RiskConfig:
     max_lot: float = 10.0
     min_lot_override: Optional[float] = None
     # Leverage System (1x to 500x manually adjustable)
-    leverage: float = 100.0
+    leverage: float = 20.0
     min_leverage: float = 1.0
     max_leverage: float = 500.0
     max_margin_utilization_pct: float = 85.0
@@ -119,7 +119,7 @@ class TradeRiskResult:
     reason: str
     symbol: str = ""
     pip_value: float = 0.0
-    leverage: float = 100.0
+    leverage: float = 20.0
     margin_required: float = 0.0
     notional_value: float = 0.0
     liquidation_price: Optional[float] = None
@@ -141,7 +141,7 @@ class RiskState:
     total_wins: int = 0
     mode: str = "normal"
     rf: float = 1.0
-    leverage: float = 100.0
+    leverage: float = 20.0
 
 
 class RiskManager:
@@ -155,7 +155,7 @@ class RiskManager:
         self.config = config or RiskConfig()
         self.symbol = symbol.upper()
         self.state_file = state_file
-        self.state = RiskState(equity=equity, peak_equity=equity)
+        self.state = RiskState(equity=equity, peak_equity=equity, leverage=self.config.leverage)
         self.profile = INSTRUMENTS.get(self.symbol, INSTRUMENTS["DEFAULT"])
         self._load_state()
         self.state.equity = equity
@@ -182,7 +182,8 @@ class RiskManager:
         self.config.leverage = lev
         self.state.leverage = lev
         self._save_state()
-        return True, f"Leverage set to {lev:.0f}x"
+        warn = " ⚠️ [High Leverage Warning: >50x leaves <1.5% buffer; extreme risk of liquidation!]" if lev > 50.0 else ""
+        return True, f"Leverage set to {lev:.0f}x{warn}"
 
     def get_leverage(self) -> float:
         return getattr(self.state, "leverage", self.config.leverage)
@@ -192,17 +193,28 @@ class RiskManager:
         return notional_value / max(lev, 1.0)
 
     def calc_liquidation_price(
-        self, direction: str, entry: float, leverage: Optional[float] = None, maintenance_margin_pct: float = 0.005
+        self,
+        direction: str,
+        entry: float,
+        leverage: Optional[float] = None,
+        maintenance_margin_pct: float = 0.005,
+        slippage_buffer_pct: float = 0.002,
     ) -> float:
         lev = leverage or self.get_leverage()
         if lev <= 1.0:
             return 0.0 if direction.lower() in ("long", "buy", "1") else entry * 2.0
+
+        # Scale maintenance margin and slippage buffer so they do not exceed initial margin capacity
+        init_rate = 1.0 / lev
+        mm_rate = min(maintenance_margin_pct, init_rate * 0.5)
+        buffer_rate = min(slippage_buffer_pct, init_rate * 0.1)
+
         is_long = direction.lower() in ("long", "buy", "1")
         if is_long:
-            liq = entry * (1.0 - (1.0 / lev) + maintenance_margin_pct)
+            liq = entry * (1.0 - init_rate + mm_rate + buffer_rate)
             return max(round(liq, 4), 0.0)
         else:
-            liq = entry * (1.0 + (1.0 / lev) - maintenance_margin_pct)
+            liq = entry * (1.0 + init_rate - mm_rate - buffer_rate)
             return round(liq, 4)
 
     def _load_state(self):
@@ -624,6 +636,21 @@ class RiskManager:
             return {"ok": False, "reason": res.reason, "lots": 0.0, "size": 0.0}
         if not self.meets_min_rr(entry, stop, res.tp1):
             return {"ok": False, "reason": f"TP1 RR < {self.config.min_rr}", "lots": 0.0, "size": 0.0}
+        if res.liquidation_price and res.liquidation_price > 0:
+            if direction.lower() in ("long", "buy", "1") and stop <= res.liquidation_price:
+                return {
+                    "ok": False,
+                    "reason": f"Stop Loss (${stop:,.2f}) is below Liquidation Price (${res.liquidation_price:,.2f})",
+                    "lots": 0.0,
+                    "size": 0.0,
+                }
+            elif direction.lower() in ("short", "sell", "-1") and stop >= res.liquidation_price:
+                return {
+                    "ok": False,
+                    "reason": f"Stop Loss (${stop:,.2f}) is above Liquidation Price (${res.liquidation_price:,.2f})",
+                    "lots": 0.0,
+                    "size": 0.0,
+                }
         return {
             "ok": True,
             "symbol": res.symbol,

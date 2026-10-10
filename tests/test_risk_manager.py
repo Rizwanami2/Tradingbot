@@ -73,13 +73,15 @@ class TestRiskManager(unittest.TestCase):
 
     def test_leverage_adjustment(self):
         # Default leverage
-        self.assertEqual(self.rm.get_leverage(), 100.0)
+        self.assertEqual(self.rm.get_leverage(), 20.0)
 
         # Valid leverage adjustments between 1x and 500x
         for lev in [1.0, 10.0, 50.0, 200.0, 500.0]:
             ok, msg = self.rm.set_leverage(lev)
             self.assertTrue(ok)
             self.assertEqual(self.rm.get_leverage(), lev)
+            if lev > 50.0:
+                self.assertIn("High Leverage Warning", msg)
 
         # Invalid leverage adjustments (out of bounds)
         ok, msg = self.rm.set_leverage(0.5)
@@ -114,12 +116,18 @@ class TestRiskManager(unittest.TestCase):
 
     def test_autotrade_plan_with_leverage(self):
         self.rm.set_leverage(200.0)
-        plan = self.rm.autotrade_plan(entry=2650.0, stop=2640.0, direction="long")
+        # At 200x leverage, liquidation is ~2644.70, so stop at 2648.0 is safe
+        plan = self.rm.autotrade_plan(entry=2650.0, stop=2648.0, direction="long")
         self.assertTrue(plan.get("ok"))
         self.assertEqual(plan.get("leverage"), 200.0)
         self.assertGreater(plan.get("margin_required"), 0.0)
         self.assertGreater(plan.get("notional_value"), 0.0)
         self.assertIsNotNone(plan.get("liquidation_price"))
+
+        # A stop at 2640.0 is below liquidation price and must be rejected
+        unsafe_plan = self.rm.autotrade_plan(entry=2650.0, stop=2640.0, direction="long")
+        self.assertFalse(unsafe_plan.get("ok"))
+        self.assertIn("Liquidation Price", unsafe_plan.get("reason"))
 
     def test_lots_for_risk_zero_and_negative(self):
         from risk_manager import lots_for_risk
