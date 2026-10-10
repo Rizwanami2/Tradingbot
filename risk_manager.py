@@ -2,6 +2,7 @@
 PRACTICAL RISK MANAGER – AUTOTRADE READY
 =======================================
 Risk + lot-size module for automated trading.
+import math
 
 Features:
 - Auto-adjust risk (drawdown, loss streak, expectancy)
@@ -186,8 +187,8 @@ class RiskManager:
         try:
             lev = float(leverage)
         except (ValueError, TypeError):
-            return False, f"Invalid leverage '{leverage}'. Must be a number between 1 and 500."
-        if lev < self.config.min_leverage or lev > self.config.max_leverage:
+            return False, f"Invalid leverage '{leverage}'. Must be a finite number within the configured leverage range."
+        if not math.isfinite(lev) or lev < self.config.min_leverage or lev > self.config.max_leverage:
             return False, f"Leverage {lev:.0f}x out of bounds. Must be between {self.config.min_leverage:.0f}x and {self.config.max_leverage:.0f}x."
         self.config.leverage = lev
         self.state.leverage = lev
