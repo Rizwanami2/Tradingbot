@@ -45,7 +45,7 @@ class TestMarketRegime(unittest.TestCase):
     def test_volatility_is_normalized_for_different_price_scales(self):
         close = 100 + np.arange(180, dtype=float) * 0.2
         low_scale = classify_market_regime(make_candles(close))
-        high_scale = classify_market_regime(make_candles(close * 100))
+        high_scale = classify_market_regime(make_candles(close * 100, spread=40.0))
         self.assertEqual(low_scale["regime"], high_scale["regime"])
         self.assertAlmostEqual(low_scale["atr_pct"], high_scale["atr_pct"], places=5)
 
