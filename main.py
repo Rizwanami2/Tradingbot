@@ -568,6 +568,11 @@ async def live_monitoring_worker(app):
                         "close": float(candle["close"]),
                     }
 
+                    # Autotrade OFF disables pending entries too, but never stops
+                    # monitoring positions that are already open.
+                    if not autotrade_active and symbol in engine.pending_setups:
+                        engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
+
                     # 1. Update pending setups and open positions
                     events = engine.update_market_candle(symbol, candle_dict)
                     for ev in events:
