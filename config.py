@@ -5,6 +5,7 @@ Loads configuration from environment variables and an optional .env file.
 
 import os
 from pathlib import Path
+from typing import Optional
 
 
 def load_dotenv(env_path: str = ".env"):
@@ -27,6 +28,24 @@ def load_dotenv(env_path: str = ".env"):
         print(f"[Config] Warning: could not read {env_path}: {e}")
 
 
+def _safe_int(val: Optional[str], default: int) -> int:
+    if val is None or str(val).strip() == "":
+        return default
+    try:
+        return int(float(str(val).strip()))
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(val: Optional[str], default: float) -> float:
+    if val is None or str(val).strip() == "":
+        return default
+    try:
+        return float(str(val).strip())
+    except (ValueError, TypeError):
+        return default
+
+
 # Load .env file if present in workspace root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
@@ -44,17 +63,18 @@ DEFAULT_DATA_SOURCE = os.getenv("BOT_DATA_SOURCE", "tradingview").lower()
 DEFAULT_EXCHANGE = os.getenv("BOT_EXCHANGE", "binance").lower()
 TRADINGVIEW_EXCHANGE = os.getenv("TRADINGVIEW_EXCHANGE", "")
 TRADINGVIEW_SCREENER = os.getenv("TRADINGVIEW_SCREENER", "")
-POLL_INTERVAL = int(os.getenv("BOT_POLL", "30"))
-INITIAL_EQUITY = float(os.getenv("BOT_EQUITY", "10000.0"))
-DEFAULT_RISK_PCT = float(os.getenv("BOT_RISK", "0.18"))
-DEFAULT_LEVERAGE = float(os.getenv("BOT_LEVERAGE", "100.0"))
+POLL_INTERVAL = _safe_int(os.getenv("BOT_POLL"), 30)
+INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
+DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.18)
+DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 100.0)
 AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
 
 # News settings
 NEWS_ENABLED = os.getenv("BOT_NEWS", "true").lower() in ("true", "1", "yes", "on")
-NEWS_WINDOW_MIN = int(os.getenv("BOT_NEWS_WINDOW", "30"))
+NEWS_WINDOW_MIN = _safe_int(os.getenv("BOT_NEWS_WINDOW"), 30)
 
 # Exchange APIs
 DELTA_API = os.getenv("DELTA_API", "https://api.india.delta.exchange/v2/tickers")
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
+

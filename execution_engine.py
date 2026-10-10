@@ -133,6 +133,21 @@ class ExecutionEngine:
         self._dispatch_event("SETUP_REGISTERED", order, f"Setup registered @ {entry:.2f}. Waiting for trigger.")
         return order
 
+    def cancel_setup(self, symbol: str, reason: str = "User cancelled") -> Optional[TradeOrder]:
+        """Manually cancels a pending setup before it executes."""
+        sym = symbol.upper()
+        if sym in self.pending_setups:
+            setup = self.pending_setups[sym]
+            setup.status = OrderStatus.CANCELLED
+            setup.close_reason = reason
+            setup.closed_at = datetime.now(timezone.utc).isoformat()
+            self.trade_history.append(setup)
+            del self.pending_setups[sym]
+            msg = f"🚫 **SETUP CANCELLED** ({sym}): {reason}"
+            self._dispatch_event("SETUP_CANCELLED", setup, msg)
+            return setup
+        return None
+
     def update_market_candle(self, symbol: str, candle: Dict) -> List[Dict]:
         """
         Evaluates incoming candle against pending setups and active positions.
@@ -147,59 +162,85 @@ class ExecutionEngine:
         curr_price = close
 
         # ----------------------------------------------------
-        # ----------------------------------------------------
-        # 1. Check Pending Setup Execution
+        # 1. Check Pending Setup Execution & Invalidation
         # ----------------------------------------------------
         just_executed = False
         if sym in self.pending_setups:
             setup = self.pending_setups[sym]
-            should_execute = False
-            exec_price = setup.entry_level
 
-            # LONG TRIGGER: Price trades at or touches entry level
-            if setup.direction == "LONG":
-                if low <= setup.entry_level <= high or curr_price <= setup.entry_level * 1.0008:
-                    should_execute = True
-                    exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
+            # Invalidate setup if market breaches stop loss before entry fill
+            invalidated = False
+            if setup.direction == "LONG" and curr_price <= setup.stop_loss:
+                invalidated = True
+            elif setup.direction == "SHORT" and curr_price >= setup.stop_loss:
+                invalidated = True
 
-            # SHORT TRIGGER: Price trades at or touches entry level
-            elif setup.direction == "SHORT":
-                if low <= setup.entry_level <= high or curr_price >= setup.entry_level * 0.9992:
-                    should_execute = True
-                    exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
-
-            if should_execute:
-                # Promote from PENDING to OPEN active position
-                setup.status = OrderStatus.OPEN
-                setup.executed_at = datetime.now(timezone.utc).isoformat()
-                setup.executed_price = exec_price
-                setup.highest_price = exec_price
-                setup.lowest_price = exec_price
-                setup.remaining_size = setup.size
-                setup.remaining_lots = setup.lots
-
-                self.active_positions[sym] = setup
+            if invalidated:
+                setup.status = OrderStatus.CANCELLED
+                setup.close_reason = f"Setup invalidated: market breached stop loss ({setup.stop_loss:.2f}) prior to fill."
+                setup.closed_at = datetime.now(timezone.utc).isoformat()
+                self.trade_history.append(setup)
                 del self.pending_setups[sym]
-                just_executed = True
-
                 ev = {
-                    "event": "TRADE_EXECUTED",
+                    "event": "SETUP_INVALIDATED",
                     "order": setup,
-                    "price": exec_price,
+                    "price": curr_price,
                     "message": (
-                        f"🚀 **TRADE AUTOMATICALLY EXECUTED**\n"
-                        f"Symbol: `{setup.symbol}` | **{setup.direction}**\n"
-                        f"• Entry: `${exec_price:,.2f}` | Lots: `{setup.lots}`\n"
-                        f"• Leverage: `{setup.leverage:.0f}x` | Margin: `${setup.margin_required:,.2f}`\n"
-                        f"• Stop Loss: `${setup.stop_loss:,.2f}`\n"
-                        f"• Target 1: `${setup.tp1:,.2f}` | Target 2: `${setup.tp2:,.2f}`\n"
-                        f"• Est. Liquidation: `${setup.liquidation_price:,.2f}`"
-                        if setup.liquidation_price
-                        else ""
+                        f"⚠️ **SETUP INVALIDATED & CANCELLED** ({setup.symbol})\n"
+                        f"Direction: {setup.direction} | Planned Entry: `${setup.entry_level:,.2f}`\n"
+                        f"Market price (`${curr_price:,.2f}`) breached stop loss (`${setup.stop_loss:,.2f}`) before entry was reached."
                     ),
                 }
                 events.append(ev)
                 self._dispatch_event(ev["event"], setup, ev["message"])
+            else:
+                should_execute = False
+                exec_price = setup.entry_level
+
+                # LONG TRIGGER: Price trades at or touches entry level
+                if setup.direction == "LONG":
+                    if low <= setup.entry_level <= high or curr_price <= setup.entry_level * 1.0008:
+                        should_execute = True
+                        exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
+
+                # SHORT TRIGGER: Price trades at or touches entry level
+                elif setup.direction == "SHORT":
+                    if low <= setup.entry_level <= high or curr_price >= setup.entry_level * 0.9992:
+                        should_execute = True
+                        exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
+
+                if should_execute:
+                    # Promote from PENDING to OPEN active position
+                    setup.status = OrderStatus.OPEN
+                    setup.executed_at = datetime.now(timezone.utc).isoformat()
+                    setup.executed_price = exec_price
+                    setup.highest_price = exec_price
+                    setup.lowest_price = exec_price
+                    setup.remaining_size = setup.size
+                    setup.remaining_lots = setup.lots
+
+                    self.active_positions[sym] = setup
+                    del self.pending_setups[sym]
+                    just_executed = True
+
+                    ev = {
+                        "event": "TRADE_EXECUTED",
+                        "order": setup,
+                        "price": exec_price,
+                        "message": (
+                            f"🚀 **TRADE AUTOMATICALLY EXECUTED**\n"
+                            f"Symbol: `{setup.symbol}` | **{setup.direction}**\n"
+                            f"• Entry: `${exec_price:,.2f}` | Lots: `{setup.lots}`\n"
+                            f"• Leverage: `{setup.leverage:.0f}x` | Margin: `${setup.margin_required:,.2f}`\n"
+                            f"• Stop Loss: `${setup.stop_loss:,.2f}`\n"
+                            f"• Target 1: `${setup.tp1:,.2f}` | Target 2: `${setup.tp2:,.2f}`\n"
+                            f"• Est. Liquidation: `${setup.liquidation_price:,.2f}`"
+                            if setup.liquidation_price
+                            else ""
+                        ),
+                    }
+                    events.append(ev)
+                    self._dispatch_event(ev["event"], setup, ev["message"])
 
         # ----------------------------------------------------
         # 2. Manage Open Positions

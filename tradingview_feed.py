@@ -203,6 +203,10 @@ def fetch_tradingview_bars(symbol: str = "XAUUSD", limit: int = 600) -> pd.DataF
     closes = p + np.random.randn(limit) * (base_price * 0.0001)
     volumes = np.random.randint(50, 1500, limit)
 
+    # Ensure valid candlestick geometry across all bars
+    highs = np.maximum(highs, np.maximum(p, closes))
+    lows = np.minimum(lows, np.minimum(p, closes))
+
     # Ensure the most recent candle matches the live TradingView mark price
     closes[-1] = base_price
     highs[-1] = max(highs[-1], base_price)

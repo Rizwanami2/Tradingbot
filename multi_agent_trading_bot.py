@@ -209,6 +209,8 @@ class MarketDataFeed:
         highs = p + np.random.uniform(0.1, 1.8, limit)
         lows = p - np.random.uniform(0.1, 1.8, limit)
         closes = p + np.random.randn(limit) * 0.15
+        highs = np.maximum(highs, np.maximum(p, closes))
+        lows = np.minimum(lows, np.minimum(p, closes))
         volumes = np.random.randint(50, 1500, limit)
         return pd.DataFrame(
             {"open": p, "high": highs, "low": lows, "close": closes, "volume": volumes},
@@ -553,15 +555,24 @@ class NewsAgent:
         self._feed_at = time_module.time()
         return self._feed
 
+    @staticmethod
+    def _to_utc(dt_val) -> datetime:
+        if dt_val is None:
+            return datetime.now(timezone.utc)
+        if hasattr(dt_val, "to_pydatetime"):
+            dt_val = dt_val.to_pydatetime()
+        if getattr(dt_val, "tzinfo", None) is None:
+            return dt_val.replace(tzinfo=timezone.utc)
+        return dt_val.astimezone(timezone.utc)
+
     def blackout(self, ts: datetime) -> Tuple[bool, str]:
         """True => hard veto (high-impact event within window)."""
         if not self.enabled:
             return False, ""
-        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
-            ts = ts.tz_localize("UTC") if hasattr(ts, "tz_localize") else ts.replace(tzinfo=timezone.utc)
+        ts_utc = self._to_utc(ts)
         for dt, title in self.calendar():
-            d = dt if hasattr(dt, "to_pydatetime") is False else dt
-            if abs((d - ts).total_seconds()) <= self.window.total_seconds():
+            d_utc = self._to_utc(dt)
+            if abs((d_utc - ts_utc).total_seconds()) <= self.window.total_seconds():
                 msg = f"News blackout active: {title}"
                 if msg != self.last_msg:
                     self.last_msg = msg
@@ -840,6 +851,7 @@ def evaluate_symbol(
     symbol: str = "XAUUSD",
     source: str = "demo",
     exchange_id: str = "binance",
+    leverage: Optional[float] = None,
 ) -> Dict:
     """
     Evaluates current market conditions for a symbol across all 5 agents.
@@ -848,6 +860,7 @@ def evaluate_symbol(
     feed = MarketDataFeed(symbol=symbol, source=source, exchange_id=exchange_id)
     arbiter = Arbiter()
     risk = RiskManager(equity=config.INITIAL_EQUITY, symbol=symbol)
+    risk.set_leverage(leverage if leverage is not None else config.DEFAULT_LEVERAGE)
     quote = feed.get_latest_price()
 
     data = feed.multi_tf(limit_1m=700)

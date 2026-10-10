@@ -208,7 +208,7 @@ class IndicatorEngine:
 
     @staticmethod
     def supertrend(df: pd.DataFrame, period=10, mult=3.0):
-        atr_vals = IndicatorEngine.atr_series(df, period).values
+        atr_vals = IndicatorEngine.atr_series(df, period).bfill().fillna(0.0).values
         hl2_vals = ((df["high"] + df["low"]) / 2.0).values
         upper_vals = hl2_vals + mult * atr_vals
         lower_vals = hl2_vals - mult * atr_vals
@@ -723,8 +723,12 @@ def make_data(n=7000):
     np.random.seed(42)
     d = pd.date_range("2025-01-01", periods=n, freq="1min")
     p = 2000 + np.cumsum(np.random.randn(n)*0.4)
-    df1 = pd.DataFrame({"open":p,"high":p+np.random.uniform(0.15,2.6,n),"low":p-np.random.uniform(0.15,2.6,n),
-                        "close":p+np.random.randn(n)*0.11,"volume":np.random.randint(40,2000,n)}, index=d)
+    h = p + np.random.uniform(0.15, 2.6, n)
+    l = p - np.random.uniform(0.15, 2.6, n)
+    c = p + np.random.randn(n) * 0.11
+    h = np.maximum(h, np.maximum(p, c))
+    l = np.minimum(l, np.minimum(p, c))
+    df1 = pd.DataFrame({"open": p, "high": h, "low": l, "close": c, "volume": np.random.randint(40, 2000, n)}, index=d)
     df5 = df1.resample("5min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna()
     df15 = df1.resample("15min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna()
     df1h = df1.resample("1h").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna()

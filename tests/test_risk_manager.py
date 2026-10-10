@@ -121,6 +121,27 @@ class TestRiskManager(unittest.TestCase):
         self.assertGreater(plan.get("notional_value"), 0.0)
         self.assertIsNotNone(plan.get("liquidation_price"))
 
+    def test_lots_for_risk_zero_and_negative(self):
+        from risk_manager import lots_for_risk
+        # Zero or negative equity/risk should return 0.0 lots
+        self.assertEqual(lots_for_risk(equity=0.0, risk_pct=0.18, entry=2650.0, stop=2640.0), 0.0)
+        self.assertEqual(lots_for_risk(equity=-100.0, risk_pct=0.18, entry=2650.0, stop=2640.0), 0.0)
+        self.assertEqual(lots_for_risk(equity=10000.0, risk_pct=0.0, entry=2650.0, stop=2640.0), 0.0)
+        self.assertEqual(lots_for_risk(equity=10000.0, risk_pct=-0.5, entry=2650.0, stop=2640.0), 0.0)
+
+    def test_state_load_fallbacks(self):
+        import tempfile, json
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+            json.dump({"equity": 12000.0, "peak_equity": 12500.0}, f)
+            temp_path = f.name
+        try:
+            rm = RiskManager(equity=10000.0, state_file=temp_path)
+            self.assertEqual(rm.state.total_wins, 0)
+            self.assertEqual(rm.state.total_trades, 0)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
 
 if __name__ == "__main__":
     unittest.main()

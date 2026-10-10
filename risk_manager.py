@@ -215,6 +215,10 @@ class RiskManager:
                         setattr(self.state, k, v)
             except Exception:
                 pass
+        if not hasattr(self.state, "total_wins") or self.state.total_wins is None:
+            self.state.total_wins = 0
+        if not hasattr(self.state, "total_trades") or self.state.total_trades is None:
+            self.state.total_trades = 0
 
     def _save_state(self):
         with open(self.state_file, "w") as f:
@@ -659,6 +663,8 @@ class RiskManager:
 
 
 def lots_for_risk(equity: float, risk_pct: float, entry: float, stop: float, symbol: str = "XAUUSD") -> float:
+    if equity <= 0 or risk_pct <= 0:
+        return 0.0
     profile = INSTRUMENTS.get(symbol.upper(), INSTRUMENTS["DEFAULT"])
     risk_amount = equity * (risk_pct / 100.0)
     stop_dist = abs(entry - stop)
@@ -667,10 +673,12 @@ def lots_for_risk(equity: float, risk_pct: float, entry: float, stop: float, sym
     stop_pips = stop_dist / profile["pip_size"]
     if stop_pips <= 0 or profile["pip_value_per_lot"] <= 0:
         return 0.0
-    lots = risk_amount / (stop_pips * profile["pip_value_per_lot"])
+    raw_lots = risk_amount / (stop_pips * profile["pip_value_per_lot"])
     step = profile["lot_step"]
-    lots = math.floor(lots / step) * step
-    return max(profile["min_lot"], min(10.0, round(lots, 4)))
+    lots = math.floor(raw_lots / step) * step
+    if lots < profile["min_lot"]:
+        return profile["min_lot"] if raw_lots > 0 else 0.0
+    return min(10.0, round(lots, 4))
 
 
 if __name__ == "__main__":

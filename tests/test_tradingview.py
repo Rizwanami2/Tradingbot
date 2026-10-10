@@ -35,10 +35,16 @@ class TestTradingViewFeed(unittest.TestCase):
         self.assertIn("recommendation", quote)
 
     def test_fetch_bars(self):
-        df = fetch_tradingview_bars("XAUUSD", limit=20)
-        self.assertEqual(len(df), 20)
+        df = fetch_tradingview_bars("XAUUSD", limit=50)
+        self.assertEqual(len(df), 50)
         self.assertTrue(all(col in df.columns for col in ["open", "high", "low", "close", "volume"]))
         self.assertGreater(df["close"].iloc[-1], 0.0)
+
+        # Invariant: high >= max(open, close) and low <= min(open, close)
+        self.assertTrue((df["high"] >= df["open"]).all())
+        self.assertTrue((df["high"] >= df["close"]).all())
+        self.assertTrue((df["low"] <= df["open"]).all())
+        self.assertTrue((df["low"] <= df["close"]).all())
 
 
 if __name__ == "__main__":

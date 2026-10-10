@@ -206,6 +206,60 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertEqual(summary["used_margin"], 0.0)
         self.assertEqual(summary["free_margin"], 10000.0)
 
+    def test_cancel_setup(self):
+        sig = {
+            "symbol": "XAUUSD",
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop": 2640.0,
+            "tp1": 2665.0,
+            "tp2": 2675.0,
+            "lots": 0.02,
+            "size": 2.0,
+            "leverage": 100.0,
+            "margin_required": 53.0,
+            "liquidation_price": 2623.5,
+            "risk_amount": 20.0,
+            "rr": 1.5,
+        }
+        self.engine.register_setup(sig)
+        self.assertIn("XAUUSD", self.engine.pending_setups)
+
+        cancelled = self.engine.cancel_setup("XAUUSD", reason="User cancel request")
+        self.assertIsNotNone(cancelled)
+        self.assertEqual(cancelled.status, OrderStatus.CANCELLED)
+        self.assertEqual(cancelled.close_reason, "User cancel request")
+        self.assertNotIn("XAUUSD", self.engine.pending_setups)
+        self.assertIn(cancelled, self.engine.trade_history)
+        self.assertIsNone(self.engine.cancel_setup("NONEXISTENT"))
+
+    def test_setup_invalidation(self):
+        sig = {
+            "symbol": "XAUUSD",
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop": 2640.0,
+            "tp1": 2665.0,
+            "tp2": 2675.0,
+            "lots": 0.02,
+            "size": 2.0,
+            "leverage": 100.0,
+            "margin_required": 53.0,
+            "liquidation_price": 2623.5,
+            "risk_amount": 20.0,
+            "rr": 1.5,
+        }
+        self.engine.register_setup(sig)
+        self.assertIn("XAUUSD", self.engine.pending_setups)
+
+        candle_breach = {"open": 2642.0, "high": 2643.0, "low": 2635.0, "close": 2638.0}
+        events = self.engine.update_market_candle("XAUUSD", candle_breach)
+        self.assertTrue(any(ev["event"] == "SETUP_INVALIDATED" for ev in events))
+        self.assertNotIn("XAUUSD", self.engine.pending_setups)
+        self.assertNotIn("XAUUSD", self.engine.active_positions)
+        self.assertEqual(len(self.engine.trade_history), 1)
+        self.assertEqual(self.engine.trade_history[0].status, OrderStatus.CANCELLED)
+
 
 if __name__ == "__main__":
     unittest.main()

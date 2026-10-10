@@ -17,6 +17,8 @@ import os
 import subprocess
 import sys
 
+import config
+
 
 def run_telegram():
     import main
@@ -61,16 +63,16 @@ def main_launcher():
         nargs="?",
         help="Run mode (default: telegram)",
     )
-    parser.add_argument("--symbol", default=os.getenv("BOT_SYMBOL", "XAUTUSD"))
-    parser.add_argument("--source", default=os.getenv("BOT_DATA_SOURCE", "demo"))
-    parser.add_argument("--exchange", default=os.getenv("BOT_EXCHANGE", "binance"))
-    parser.add_argument("--poll", type=int, default=int(os.getenv("BOT_POLL", "30")))
-    parser.add_argument("--equity", type=float, default=float(os.getenv("BOT_EQUITY", "10000")))
-    parser.add_argument("--risk", type=float, default=float(os.getenv("BOT_RISK", "0.18")))
-    parser.add_argument("--leverage", type=float, default=float(os.getenv("BOT_LEVERAGE", "100.0")), help="Leverage multiplier (1x to 500x)")
+    parser.add_argument("--symbol", default=config.DEFAULT_SYMBOL)
+    parser.add_argument("--source", default=config.DEFAULT_DATA_SOURCE)
+    parser.add_argument("--exchange", default=config.DEFAULT_EXCHANGE)
+    parser.add_argument("--poll", type=int, default=config.POLL_INTERVAL)
+    parser.add_argument("--equity", type=float, default=config.INITIAL_EQUITY)
+    parser.add_argument("--risk", type=float, default=config.DEFAULT_RISK_PCT)
+    parser.add_argument("--leverage", type=float, default=config.DEFAULT_LEVERAGE, help="Leverage multiplier (1x to 500x)")
     parser.add_argument("--bars", type=int, default=2000)
-    parser.add_argument("--news", action="store_true", default=True)
-    parser.add_argument("--news-window", type=int, default=30)
+    parser.add_argument("--news", action="store_true", default=config.NEWS_ENABLED)
+    parser.add_argument("--news-window", type=int, default=config.NEWS_WINDOW_MIN)
     args = parser.parse_args()
 
     if args.mode == "telegram":

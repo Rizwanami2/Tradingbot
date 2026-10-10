@@ -179,6 +179,7 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• `/leverage [1-500]` — View or manually adjust account leverage\n"
         "• `/positions` — View active positions & pending setup triggers\n"
         "• `/close [SYMBOL]` — Manually close an active position immediately\n"
+        "• `/cancel [SYMBOL]` — Cancel a pending setup order before it executes\n"
         "• `/status` — View bot state, leverage, margin utilization, and equity\n"
         "• `/risk` — Lot-sizing, margin requirements, and risk report\n"
         "• `/news` — High-impact economic calendar & crypto sentiment\n"
@@ -202,7 +203,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• `/leverage` — View current leverage (1x-500x), margin requirement rate, and lot capacities.\n"
         "• `/leverage [1-500]` — Manually set leverage (e.g., `/leverage 50`, `/leverage 200`, `/leverage 500`).\n"
         "• `/positions` — View active live trades and pending setups waiting for level trigger.\n"
-        "• `/close [SYMBOL]` — Manually exit an active trade immediately at current market price.\n\n"
+        "• `/close [SYMBOL]` — Manually exit an active trade immediately at current market price.\n"
+        "• `/cancel [SYMBOL]` — Cancel a pending setup order before it executes.\n\n"
         "**Risk & Portfolio:**\n"
         "• `/status` — Overall status, equity, used margin, free margin, margin level %, and active mode.\n"
         "• `/risk` — Drawdown, loss limits, margin calculations, and auto-BE rules.\n\n"
@@ -229,7 +231,7 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     await update.message.reply_text(f"⏳ Evaluating **{sym}** across all 5 agents...", parse_mode="Markdown")
 
-    res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE)
+    res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE, leverage=risk_mgr.get_leverage())
     price_val = res.get("price", 0.0)
     sig = res.get("signal")
     votes = res.get("votes", [])
@@ -387,6 +389,17 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     else:
         text = f"Could not close position for `{sym}`."
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Cancel a pending trade setup order."""
+    sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
+    cancelled = engine.cancel_setup(sym, reason="Telegram user cancelled via /cancel")
+    if cancelled:
+        text = f"🚫 **SETUP CANCELLED**\nPending setup for `{sym}` ({cancelled.direction} @ `${cancelled.entry_level:,.2f}`) has been cancelled."
+    else:
+        text = f"ℹ️ No pending setup found for `{sym}`."
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
@@ -654,6 +667,7 @@ def run_cli_interactive():
                 print("  /leverage [1-500] - View or adjust leverage (1x to 500x)")
                 print("  /positions        - View open positions and pending level triggers")
                 print("  /close [SYM]      - Manually exit an open trade")
+                print("  /cancel [SYM]     - Cancel a pending setup order")
                 print("  /autotrade on|off - Toggle automated setup execution")
                 print("  /status           - Account equity, margin, and bot status")
                 print("  /risk             - Risk report and lot-size calculation")
@@ -698,6 +712,13 @@ def run_cli_interactive():
                     print(f"\n[Close] ✅ Closed {sym} @ ${curr_p:,.2f} | PnL: ${closed_order.realized_pnl:+,.2f} | Equity: ${risk_mgr.state.equity:,.2f}\n")
                 else:
                     print(f"\n[Close] ❌ No active position for {sym}\n")
+            elif c == "/cancel":
+                sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+                cancelled = engine.cancel_setup(sym, reason="CLI manual cancel")
+                if cancelled:
+                    print(f"\n[Cancel] 🚫 Cancelled pending setup for {sym} ({cancelled.direction} @ ${cancelled.entry_level:,.2f})\n")
+                else:
+                    print(f"\n[Cancel] ℹ️ No pending setup found for {sym}\n")
             elif c == "/autotrade":
                 if len(parts) > 1 and parts[1].lower() in ("on", "start", "enable"):
                     autotrade_active = True
@@ -709,7 +730,7 @@ def run_cli_interactive():
                     print(f"\n[Autotrade] Currently {'ENABLED 🟢' if autotrade_active else 'DISABLED ⚪'}\n")
             elif c == "/signal":
                 sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
-                res = evaluate_symbol(sym, source=config.DEFAULT_DATA_SOURCE)
+                res = evaluate_symbol(sym, source=config.DEFAULT_DATA_SOURCE, leverage=risk_mgr.get_leverage())
                 print(f"\n[Signal for {sym}] Price: ${res['price']:,.2f} | Status: {res['status']}")
                 for v in res['votes']:
                     print(f"  • {v['agent']:<12}: {v['direction']} ({v['reason']})")
@@ -802,6 +823,7 @@ def main():
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
     app.add_handler(CommandHandler("close", close_command))
+    app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("news", news_command))
     app.add_handler(CommandHandler("positions", positions_command))
     app.add_handler(CommandHandler("autotrade", autotrade_command))
