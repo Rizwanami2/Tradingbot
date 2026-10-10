@@ -44,7 +44,8 @@ class TestPaperBrokerAccounting(unittest.TestCase):
         position = broker.positions["ETH/USDT"]
         self.assertAlmostEqual(position.qty, 3)
         self.assertAlmostEqual(broker.balance, 10010)
-        self.assertAlmostEqual(broker.equity, 10010)
+        # Remaining 3 units are marked at 60: +30 unrealized.
+        self.assertAlmostEqual(broker.equity, 10040)
 
     def test_opposite_order_cannot_flip_position(self):
         broker = self.make_broker(fee=0)
