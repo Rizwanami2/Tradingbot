@@ -17,7 +17,7 @@ Commands:
   /risk             - Risk manager report, drawdown, and lot sizing
   /news             - Macroeconomic calendar events and crypto sentiment
   /positions        - Open positions and trailing stop status
-  /autotrade [on|off] - Toggle automated live signal alerts
+  /autotrade [on|off] - Toggle setup monitoring and alerts
   /backtest [bars]  - Run backtest on demand and return report
   /reset            - Clear conversation memory
   any text          - Chat with Gemini AI trading assistant
@@ -214,7 +214,7 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• `/status` — View bot state, leverage, margin utilization, and equity\n"
         "• `/risk` — Lot-sizing, margin requirements, and risk report\n"
         "• `/news` — High-impact economic calendar & crypto sentiment\n"
-        "• `/autotrade on|off` — Toggle automated live execution & alerts\n"
+        "• `/autotrade on|off` — Toggle setup monitoring and alerts (no exchange orders)\n"
         "• `/backtest 2000` — Run historical simulation\n"
         "• `/help` — Full command manual\n\n"
         "💬 *You can also ask me anything about setups, risk, or market levels!*"
@@ -719,7 +719,7 @@ async def live_monitoring_worker(app):
                                 f"{liq_str}"
                                 f"• Score: `{sig.get('score', 0.0):.2f}`\n\n"
                                 f"**Confluence:** {order.setup_reason}\n"
-                                f"_Status: PENDING. Will execute automatically when price reaches ${order.entry_level:,.2f}._"
+                                f"_Status: PENDING. Local setup tracking only; no exchange order is sent when price reaches ${order.entry_level:,.2f}._"
                             )
                             if config.TELEGRAM_CHAT_ID:
                                 try:
@@ -790,7 +790,7 @@ def run_cli_interactive():
                 print("  /positions        - View open positions and pending level triggers")
                 print("  /close [SYM]      - Manually exit an open trade")
                 print("  /cancel [SYM]     - Cancel a pending setup order")
-                print("  /autotrade on|off - Toggle automated setup execution")
+                print("  /autotrade on|off - Toggle setup monitoring (no exchange orders)")
                 print("  /status           - Account equity, margin, and bot status")
                 print("  /risk             - Risk report and lot-size calculation")
                 print("  /news             - Economic calendar & crypto sentiment")
