@@ -55,6 +55,24 @@ class TestBacktestEngine(unittest.TestCase):
         costly = run_backtest(data, BacktestConfig(**base, fee_rate=0.001, slippage_bps=10))
         self.assertLessEqual(costly["final_equity"], free["final_equity"])
 
+    def test_stop_wins_when_stop_and_target_touch_same_candle(self):
+        from backtest_engine import _indicators
+        data = candles([10,9,8,7,8,9,10,11,12,13,12,11,10,9,8,7,8,9,10,11,12,13,14,15,14,13,12,11,10,9,8,9,10,11,12,13,14,15,16,17,16,15])
+        cfg = BacktestConfig(initial_equity=10000, risk_per_trade=0.01, max_leverage=3,
+                             fee_rate=0, slippage_bps=0, fast_ema=3, slow_ema=6,
+                             atr_period=3, stop_atr=1.0, reward_risk=1.0, allow_short=False)
+        prepared = _indicators(_validated_frame(data), cfg)
+        signals = np.flatnonzero(prepared["signal"].to_numpy() == 1)
+        self.assertGreater(len(signals), 0)
+        entry_i = int(signals[0]) + 1
+        data.iloc[entry_i, data.columns.get_loc("high")] = data.iloc[entry_i]["close"] + 100
+        data.iloc[entry_i, data.columns.get_loc("low")] = max(0.1, data.iloc[entry_i]["close"] - 100)
+        result = run_backtest(data, cfg, symbol="TEST", timeframe="1h")
+        entry_time = str(data.index[entry_i])
+        trade = next((t for t in result["trades_detail"] if t["entry_time"] == entry_time), None)
+        self.assertIsNotNone(trade)
+        self.assertEqual(trade["exit_reason"], "stop")
+
     def test_insufficient_history_rejected(self):
         with self.assertRaisesRegex(ValueError, "Not enough candles"):
             run_backtest(candles([10,11,12,13,14]), BacktestConfig(fast_ema=2, slow_ema=4, atr_period=3))
