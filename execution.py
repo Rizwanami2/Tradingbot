@@ -131,6 +131,14 @@ class PaperBroker(Broker):
         take_profit: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Order:
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be 'buy' or 'sell'.")
+        if not isinstance(qty, (int, float)) or qty <= 0:
+            raise ValueError("qty must be greater than zero.")
+        if order_type not in {"market", "limit"}:
+            raise ValueError("order_type must be 'market' or 'limit'.")
+        if order_type == "limit" and (price is None or price <= 0):
+            raise ValueError("A positive price is required for limit orders.")
         order = Order(
             id=str(uuid.uuid4())[:8],
             symbol=symbol,
@@ -190,8 +198,14 @@ class PaperBroker(Broker):
         if symbol not in self.positions:
             return False
         pos = self.positions[symbol]
-        close_qty = qty or pos.qty
-        exit_price = price or pos.entry_price
+        close_qty = pos.qty if qty is None else qty
+        if not isinstance(close_qty, (int, float)) or close_qty <= 0:
+            raise ValueError("close qty must be greater than zero.")
+        if close_qty > pos.qty:
+            raise ValueError("close qty cannot exceed the open position quantity.")
+        exit_price = pos.entry_price if price is None else price
+        if not isinstance(exit_price, (int, float)) or exit_price <= 0:
+            raise ValueError("exit price must be greater than zero.")
         side = "sell" if pos.side == "buy" else "buy"
 
         # Calculate realized PnL
@@ -341,7 +355,12 @@ def classify_order_response(
             else ExecutionStatus.UNKNOWN
         )
     elif raw_status in {"canceled", "cancelled", "rejected", "expired"}:
-        status = ExecutionStatus.REJECTED
+        # A canceled order may still have executed part of its quantity.
+        status = (
+            ExecutionStatus.PARTIALLY_FILLED
+            if filled_qty > 0
+            else ExecutionStatus.REJECTED
+        )
     elif raw_status in {"open", "new"}:
         status = (
             ExecutionStatus.PARTIALLY_FILLED
@@ -474,10 +493,18 @@ class CCXTBroker(Broker):
         take_profit: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Order:
-        if getattr(self.exchange, "markets", None):
-            resolved_symbol = resolve_ccxt_symbol(self.exchange, symbol)
-        else:
-            resolved_symbol = symbol
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be 'buy' or 'sell'.")
+        if not isinstance(qty, (int, float)) or qty <= 0:
+            raise ValueError("qty must be greater than zero.")
+        if order_type not in {"market", "limit"}:
+            raise ValueError("order_type must be 'market' or 'limit'.")
+        if order_type == "limit" and (price is None or price <= 0):
+            raise ValueError("A positive price is required for limit orders.")
+
+        # Always load market metadata before validating or submitting an order.
+        self.ensure_markets()
+        resolved_symbol = resolve_ccxt_symbol(self.exchange, symbol)
 
         order_params = dict(params or {})
         if stop_loss:
@@ -533,12 +560,22 @@ class CCXTBroker(Broker):
         for pos in positions:
             if pos.symbol == symbol or pos.symbol.replace("/", "") == symbol:
                 side = "sell" if pos.side == "buy" else "buy"
-                close_qty = qty or pos.qty
+                close_qty = pos.qty if qty is None else qty
+                if not isinstance(close_qty, (int, float)) or close_qty <= 0:
+                    raise ValueError("close qty must be greater than zero.")
+                if close_qty > pos.qty:
+                    raise ValueError("close qty cannot exceed the open position quantity.")
+
+                # Do not submit a close order unless reduce-only is explicitly confirmed.
                 close_params = dict(params or {})
-                try:
-                    close_params.update(close_order_params(self.exchange))
-                except BrokerConfigurationError:
-                    pass
-                self.place_order(symbol, side, close_qty, order_type="market", price=price, params=close_params)
+                close_params.update(close_order_params(self.exchange))
+                self.place_order(
+                    pos.symbol,
+                    side,
+                    close_qty,
+                    order_type="market",
+                    price=price,
+                    params=close_params,
+                )
                 return True
         return False
