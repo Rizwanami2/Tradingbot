@@ -5,7 +5,7 @@ Loads configuration from environment variables and an optional .env file.
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Set
 
 
 def load_dotenv(env_path: str = ".env"):
@@ -46,12 +46,26 @@ def _safe_float(val: Optional[str], default: float) -> float:
         return default
 
 
+def _parse_user_ids(val: Optional[str]) -> Set[int]:
+    """Parse a comma-separated Telegram user ID allowlist; malformed IDs are ignored."""
+    result: Set[int] = set()
+    for item in (val or "").split(","):
+        try:
+            parsed = int(item.strip())
+            if parsed > 0:
+                result.add(parsed)
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
 # Load .env file if present in workspace root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # Telegram settings
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or ""
+TELEGRAM_ALLOWED_USER_IDS = _parse_user_ids(os.getenv("TELEGRAM_ALLOWED_USER_IDS"))
 
 # Gemini AI settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
@@ -68,10 +82,19 @@ FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.18)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
-AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
+AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false").lower() in ("true", "1", "yes", "on")
 
 # Broker settings ("paper" or "live")
 BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
+
+# Operations dashboard: local-only by default. A non-loopback bind requires a token.
+STATUS_FILE = os.getenv(
+    "BOT_STATUS_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".runtime", "bot_status.json"),
+)
+DASHBOARD_HOST = os.getenv("BOT_DASHBOARD_HOST", "127.0.0.1")
+DASHBOARD_PORT = _safe_int(os.getenv("BOT_DASHBOARD_PORT"), 8765)
+DASHBOARD_TOKEN = os.getenv("BOT_DASHBOARD_TOKEN", "")
 
 # News settings
 NEWS_ENABLED = os.getenv("BOT_NEWS", "true").lower() in ("true", "1", "yes", "on")
