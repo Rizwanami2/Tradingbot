@@ -50,7 +50,7 @@ class TestStrategyResearch(unittest.TestCase):
         with self.assertRaises(ValueError):
             analyze_timeframes({"1h": candles()}, fast_ema=12, slow_ema=10)
         with self.assertRaisesRegex(ValueError, "enough valid candles"):
-            analyze_timeframes({"1m": candles(n=8)}, fast_ema=3, slow_ema=6, atr_period=3)
+            analyze_timeframes({"1m": candles(n=5)}, fast_ema=3, slow_ema=6, atr_period=3)
 
     def test_journal_aggregates_by_strategy_symbol_timeframe(self):
         with tempfile.TemporaryDirectory() as directory:
