@@ -56,7 +56,7 @@ from multi_agent_trading_bot import (
 )
 from risk_manager import RiskManager
 from backtest_engine import BacktestConfig, run_backtest
-from ops_dashboard import StatusStore, health_from_snapshot, is_authorized_user
+from ops_dashboard import StatusStore, health_from_snapshot
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -70,7 +70,7 @@ risk_mgr.set_leverage(config.DEFAULT_LEVERAGE)
 arbiter = Arbiter()
 engine = ExecutionEngine(risk_manager=risk_mgr)
 
-# Bot runtime state. Monitoring is off by default until explicitly enabled by an authorized user.
+# Bot runtime state. Monitoring is off by default until explicitly enabled.
 autotrade_active: bool = config.AUTOTRADE_ENABLED
 background_task: Optional[asyncio.Task] = None
 monitoring_health = {
@@ -112,21 +112,6 @@ def _write_runtime_status() -> None:
         StatusStore(config.STATUS_FILE).write(snapshot)
     except Exception as exc:
         logger.warning("Could not publish operations status: %s", exc)
-
-
-async def require_control_authorization(update: Update) -> bool:
-    """Protect state-changing Telegram commands with an explicit user ID allowlist."""
-    user = update.effective_user
-    user_id = getattr(user, "id", None)
-    if not is_authorized_user(user_id, config.TELEGRAM_ALLOWED_USER_IDS):
-        message = update.effective_message
-        if message:
-            await message.reply_text(
-                "Control command denied. Configure TELEGRAM_ALLOWED_USER_IDS with your "
-                "Telegram numeric user ID before using this command."
-            )
-        return False
-    return True
 
 
 # ======================================================================
@@ -371,8 +356,6 @@ async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """View or adjust configured leverage."""
-    if ctx.args and not await require_control_authorization(update):
-        return
     if ctx.args:
         try:
             val = float(ctx.args[0])
@@ -418,9 +401,7 @@ async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Close an in-process position after authorization."""
-    if not await require_control_authorization(update):
-        return
+    """Close an in-process position ."""
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     if sym not in engine.active_positions:
         await update.message.reply_text(f"📂 No active position found for `{sym}`.", parse_mode="Markdown")
@@ -444,8 +425,6 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Cancel a pending setup after authorization."""
-    if not await require_control_authorization(update):
-        return
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     cancelled = engine.cancel_setup(sym, reason="Telegram user cancelled via /cancel")
     if cancelled:
@@ -538,13 +517,9 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     action = ctx.args[0].lower() if ctx.args else ""
 
     if action in ("on", "start", "enable"):
-        if not await require_control_authorization(update):
-            return
         autotrade_active = True
         msg = "🟢 **Monitoring ENABLED**\nThe bot will scan market data and report setups. This build's monitoring toggle does not authorize live exchange orders."
     elif action in ("off", "stop", "disable"):
-        if not await require_control_authorization(update):
-            return
         autotrade_active = False
         msg = "⚪ **Monitoring DISABLED**\nNew setup scanning is paused. Existing in-process positions continue to be monitored."
     else:
