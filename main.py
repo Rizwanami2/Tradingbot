@@ -201,7 +201,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "**Automation & Backtesting:**\n"
         "• `/autotrade on` — Activate live automatic execution when setup levels are reached.\n"
         "• `/autotrade off` — Deactivate automated trading execution.\n"
-        "• `/backtest [bars]` — Simulate trading on historical/demo candles.\n\n"
+        "• `/backtest [bars] [SYMBOL] [TIMEFRAME]` — Backtest historical candles (no live orders).\n\n"
         "**AI Assistant:**\n"
         "• `/reset` — Clear conversational memory.\n"
         "• Send any question — The AI answers with latest live price context!"
@@ -810,14 +810,23 @@ def run_cli_interactive():
                 print()
             elif c == "/backtest":
                 bars = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1000
-                from multi_agent_trading_bot import run_backtest
-                class DummyArgs:
-                    def __init__(self, b):
-                        self.bars = b
-                        self.symbol = config.DEFAULT_SYMBOL
-                        self.equity = config.INITIAL_EQUITY
-                        self.leverage = risk_mgr.get_leverage()
-                run_backtest(DummyArgs(bars))
+                symbol = parts[2].upper() if len(parts) > 2 else config.DEFAULT_SYMBOL.upper()
+                timeframe = parts[3].lower() if len(parts) > 3 else "1h"
+                if not 100 <= bars <= 10000 or timeframe not in {"1m", "5m", "15m", "30m", "1h", "4h", "1d"}:
+                    print("Usage: /backtest [100-10000 bars] [SYMBOL] [1m|5m|15m|30m|1h|4h|1d]")
+                    continue
+                from data_feed import DataFeed
+                historical = DataFeed(symbol=symbol, source="ccxt", exchange_id=config.DEFAULT_EXCHANGE,
+                                      timeframe=timeframe, api_key="", api_secret="").fetch(limit=bars, timeframe=timeframe)
+                if historical is None or historical.empty:
+                    print("Backtest unavailable: no real historical candles found; synthetic data is not used.")
+                else:
+                    stats = run_backtest(historical.tail(bars),
+                                         config=BacktestConfig(initial_equity=config.INITIAL_EQUITY),
+                                         symbol=symbol, timeframe=timeframe)
+                    print(f"Backtest {symbol} {timeframe}: {stats['trades']} trades | "
+                          f"net PnL {stats['net_pnl']:+.2f} | return {stats['return_pct']:+.2f}% | "
+                          f"max DD {stats['max_drawdown_pct']:.2f}% | final equity {stats['final_equity']:.2f}")
             else:
                 # Regular chat
                 p_info = get_price_info(config.DEFAULT_SYMBOL)
