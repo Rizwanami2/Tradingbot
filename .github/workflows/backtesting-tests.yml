@@ -16,5 +16,5 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --upgrade pip numpy pandas pytest
-      - name: Run backtesting, execution, and paper-broker regression tests
+      - name: Compile changed Python modules\n        run: python -m py_compile main.py config.py execution.py backtest_engine.py strategy_research.py ops_dashboard.py\n      - name: Run backtesting, execution, and paper-broker regression tests
         run: python -m pytest -q tests/test_backtest_engine.py tests/test_execution_engine.py tests/test_paper_broker_accounting.py tests/test_strategy_research.py tests/test_ops_dashboard.py
