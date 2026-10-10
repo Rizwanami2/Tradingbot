@@ -20,6 +20,11 @@ class StatusReadError(RuntimeError):
     pass
 
 
+def is_authorized_user(user_id: Optional[int], allowed_user_ids: set[int]) -> bool:
+    """Fail closed when no explicit Telegram control allowlist is configured."""
+    return user_id is not None and bool(allowed_user_ids) and int(user_id) in allowed_user_ids
+
+
 class StatusStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -83,7 +88,7 @@ def health_from_snapshot(
     if errors > 0:
         reasons.append(f"{errors} consecutive monitoring error(s)")
     if snapshot.get("last_error") and errors > 0:
-        reasons.append(str(snapshot["last_error"])[:240])
+        reasons.append("Recent monitoring error(s) recorded")
 
     healthy = not reasons
     return {
@@ -116,7 +121,7 @@ if(token)headers.Authorization='Bearer '+token;
 try{const r=await fetch('/api/status',{headers,cache:'no-store'});const j=await r.json();
 if(!r.ok)throw new Error(j.error||('HTTP '+r.status));
 const items=[['Health',j.health?.status||'unknown'],['Symbol',j.symbol||'—'],['Autotrade monitoring',j.autotrade_active?'ON':'OFF'],['Configured broker mode',j.configured_broker_mode||'unknown'],['Equity',j.equity==null?'—':Number(j.equity).toLocaleString()],['Open positions',j.active_positions??'—'],['Pending setups',j.pending_setups??'—'],['Consecutive errors',j.consecutive_errors??0]];
-document.getElementById('cards').innerHTML=items.map(([k,v])=>'<div class="card"><div class="label">'+k+'</div><div class="value">'+String(v)+'</div></div>').join('');
+const cards=document.getElementById('cards');cards.replaceChildren();for(const [k,v] of items){const card=document.createElement('div');card.className='card';const label=document.createElement('div');label.className='label';label.textContent=k;const value=document.createElement('div');value.className='value';value.textContent=String(v);card.append(label,value);cards.append(card);}
 document.getElementById('health').textContent=JSON.stringify({health:j.health,last_poll_at:j.last_poll_at,last_success_at:j.last_success_at,last_error:j.last_error},null,2);
 document.getElementById('updated').textContent=' Updated '+new Date().toLocaleTimeString();
 }catch(e){document.getElementById('health').textContent=String(e);}}
