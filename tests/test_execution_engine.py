@@ -14,7 +14,7 @@ class TestExecutionEngine(unittest.TestCase):
         if os.path.exists(self.state_file):
             os.remove(self.state_file)
         self.rm = RiskManager(equity=10000.0, symbol="XAUUSD", state_file=self.state_file)
-        self.rm.set_leverage(100.0)
+        self.rm.set_leverage(20.0)
         self.events = []
 
         def callback(event_name, order, message):
@@ -202,7 +202,7 @@ class TestExecutionEngine(unittest.TestCase):
     def test_portfolio_summary_with_leverage(self):
         summary = self.engine.get_portfolio_summary()
         self.assertEqual(summary["equity"], 10000.0)
-        self.assertEqual(summary["leverage"], 100.0)
+        self.assertEqual(summary["leverage"], 20.0)
         self.assertEqual(summary["used_margin"], 0.0)
         self.assertEqual(summary["free_margin"], 10000.0)
 
