@@ -158,6 +158,16 @@ class RiskManager:
         self.state = RiskState(equity=equity, peak_equity=equity, leverage=self.config.leverage)
         self.profile = INSTRUMENTS.get(self.symbol, INSTRUMENTS["DEFAULT"])
         self._load_state()
+        # Clamp persisted settings too: older state files may contain leverage
+        # values above the current configured ceiling.
+        try:
+            persisted_leverage = float(self.state.leverage)
+        except (TypeError, ValueError):
+            persisted_leverage = self.config.leverage
+        if not math.isfinite(persisted_leverage):
+            persisted_leverage = self.config.leverage
+        self.state.leverage = min(max(persisted_leverage, self.config.min_leverage), self.config.max_leverage)
+        self.config.leverage = self.state.leverage
         self.state.equity = equity
         self.state.peak_equity = max(self.state.peak_equity, equity)
         if not getattr(self.state, "rf", None):
