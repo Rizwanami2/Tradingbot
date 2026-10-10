@@ -115,21 +115,9 @@ def get_price_info(symbol: str = "XAUTUSD") -> Dict:
     except Exception as e:
         logger.warning(f"Delta API fallback notice for {sym}: {e}")
 
-    # Fallback to feed
-    feed = MarketDataFeed(symbol=sym, source="demo")
-    q = feed.get_latest_price()
-    return {
-        "ok": True,
-        "symbol": sym,
-        "mark": q.get("mark", 2650.0),
-        "close": q.get("close", 2650.0),
-        "open": q.get("open", 2650.0),
-        "high": q.get("high", 2651.0),
-        "low": q.get("low", 2649.0),
-        "change_pct": 0.0,
-        "recommendation": "NEUTRAL",
-        "source": "Synthetic",
-    }
+    # Fail closed instead of presenting generated values as live market data.
+    logger.error("Live quote unavailable for %s from TradingView and Delta Exchange", sym)
+    return {"ok": False, "symbol": sym, "error": "Live market data unavailable; no synthetic price was substituted.", "source": "unavailable"}
 
 
 def format_price_string(info: Dict) -> str:
@@ -540,11 +528,14 @@ async def chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Fetch live price for default symbol to give Gemini latest market context
     p_info = get_price_info(config.DEFAULT_SYMBOL)
-    market_context = (
-        f"[LIVE MARKET DATA: {p_info['symbol']} Mark: {p_info['mark']:.2f} | "
-        f"Close: {p_info['close']:.2f} | High: {p_info['high']:.2f} | Low: {p_info['low']:.2f} | "
-        f"24h: {p_info['change_pct']:+.2f}%]"
-    )
+    if p_info.get("ok"):
+        market_context = (
+            f"[LIVE MARKET DATA: {p_info['symbol']} Mark: {p_info['mark']:.2f} | "
+            f"Close: {p_info['close']:.2f} | High: {p_info['high']:.2f} | Low: {p_info['low']:.2f} | "
+            f"24h: {p_info['change_pct']:+.2f}%]"
+        )
+    else:
+        market_context = "[LIVE MARKET DATA UNAVAILABLE. Do not infer or invent a current price.]"
 
     # Let user know assistant is thinking for lengthy queries
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -563,7 +554,8 @@ async def live_monitoring_worker(app):
 
     while True:
         try:
-            if autotrade_active:
+            # Continue monitoring existing positions even when new entries are disabled.
+            if True:
                 data = feed.multi_tf(limit_1m=500)
                 if data and "1m" in data and not data["1m"].empty:
                     df1 = data["1m"]
@@ -575,6 +567,11 @@ async def live_monitoring_worker(app):
                         "low": float(candle["low"]),
                         "close": float(candle["close"]),
                     }
+
+                    # Autotrade OFF disables pending entries too, but never stops
+                    # monitoring positions that are already open.
+                    if not autotrade_active and symbol in engine.pending_setups:
+                        engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
                     # 1. Update pending setups and open positions
                     events = engine.update_market_candle(symbol, candle_dict)
@@ -589,7 +586,7 @@ async def live_monitoring_worker(app):
                                 pass
 
                     # 2. Scan for new entries if flat and no pending order
-                    if symbol not in engine.active_positions and symbol not in engine.pending_setups:
+                    if autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups:
                         sig, why, votes = arbiter.decide(
                             df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr, symbol=symbol
                         )

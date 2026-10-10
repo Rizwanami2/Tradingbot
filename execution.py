@@ -190,8 +190,12 @@ class PaperBroker(Broker):
         if symbol not in self.positions:
             return False
         pos = self.positions[symbol]
-        close_qty = qty or pos.qty
-        exit_price = price or pos.entry_price
+        close_qty = pos.qty if qty is None else float(qty)
+        if not (0 < close_qty <= pos.qty):
+            return False
+        exit_price = price if price is not None else pos.entry_price
+        if exit_price <= 0:
+            return False
         side = "sell" if pos.side == "buy" else "buy"
 
         # Calculate realized PnL
@@ -200,6 +204,7 @@ class PaperBroker(Broker):
         self.equity = self.balance
 
         self.place_order(symbol, side, close_qty, price=exit_price, params=params)
+        self.equity = self.balance
         return True
 
     def _log(self, order: Order):
