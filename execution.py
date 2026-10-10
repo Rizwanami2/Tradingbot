@@ -112,13 +112,37 @@ class Broker(ABC):
         pass
 
 class PaperBroker(Broker):
-    def __init__(self, initial_balance: float = 10000.0, commission_pct: float = 0.0004):
-        self.balance = initial_balance
-        self.equity = initial_balance
-        self.commission_pct = commission_pct
+    """Deterministic paper broker with fee-aware accounting and optional durable state.
+
+    Orders are simulated at the supplied price; this class does not fetch quotes or
+    submit exchange orders. Persistence is opt-in through state_file.
+    """
+
+    def __init__(
+        self,
+        initial_balance: float = 10000.0,
+        commission_pct: float = 0.0004,
+        *,
+        state_file: Optional[str] = None,
+        journal_file: Optional[str] = "trades_journal.jsonl",
+    ):
+        import math
+
+        if not math.isfinite(float(initial_balance)) or initial_balance <= 0:
+            raise ValueError("initial_balance must be finite and greater than zero")
+        if not math.isfinite(float(commission_pct)) or not 0 <= commission_pct <= 0.1:
+            raise ValueError("commission_pct must be finite and between 0 and 0.1")
+        self.commission_pct = float(commission_pct)
+        self.state_file = Path(state_file) if state_file else None
+        self.journal_file = Path(journal_file) if journal_file else None
+        self.balance = float(initial_balance)
+        self.equity = float(initial_balance)
         self.positions: Dict[str, Position] = {}
         self.orders: List[Order] = []
-        self.journal_file = Path("trades_journal.jsonl")
+        self.mark_prices: Dict[str, float] = {}
+        if self.state_file and self.state_file.exists():
+            self._load_state(float(initial_balance))
+        self._refresh_equity()
 
     def place_order(
         self,
@@ -131,49 +155,74 @@ class PaperBroker(Broker):
         take_profit: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Order:
+        import math
+
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise ValueError("symbol must be a non-empty string")
+        symbol = symbol.strip()
+        side = str(side).lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be 'buy' or 'sell'")
+        if order_type not in {"market", "limit"}:
+            raise ValueError("order_type must be 'market' or 'limit'")
+        if price is None or not math.isfinite(float(price)) or float(price) <= 0:
+            raise ValueError("Paper orders require a finite, positive fill price")
+        if not math.isfinite(float(qty)) or float(qty) <= 0:
+            raise ValueError("qty must be finite and greater than zero")
+        qty, fill_price = float(qty), float(price)
+
+        current = self.positions.get(symbol)
+        if current and current.side != side and qty > current.qty + 1e-12:
+            raise ValueError("Opposite-side order exceeds open quantity; position flips are disabled")
+
         order = Order(
-            id=str(uuid.uuid4())[:8],
+            id=str(uuid.uuid4()),
             symbol=symbol,
             side=side,
             order_type=order_type,
             qty=qty,
-            price=price,
+            price=fill_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
             status="filled",
-            filled_price=price or 0.0,  # caller should pass current price
+            filled_price=fill_price,
             filled_qty=qty,
         )
-        # Apply commission
-        cost = order.filled_price * qty * self.commission_pct
-        self.balance -= cost
+        fee = fill_price * qty * self.commission_pct
+        self.balance -= fee
 
-        # Update or create position
-        key = symbol
-        if key in self.positions:
-            pos = self.positions[key]
-            if pos.side == side:
-                # Average in
-                total_qty = pos.qty + qty
-                pos.entry_price = (pos.entry_price * pos.qty + order.filled_price * qty) / total_qty
-                pos.qty = total_qty
-            else:
-                # Reduce / close
-                if qty >= pos.qty:
-                    del self.positions[key]
-                else:
-                    pos.qty -= qty
-        else:
-            self.positions[key] = Position(
-                symbol=symbol,
-                side=side,
-                qty=qty,
-                entry_price=order.filled_price,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
+        if current is None:
+            self.positions[symbol] = Position(
+                symbol=symbol, side=side, qty=qty, entry_price=fill_price,
+                stop_loss=stop_loss, take_profit=take_profit,
             )
+            self.mark_prices[symbol] = fill_price
+        elif current.side == side:
+            new_qty = current.qty + qty
+            current.entry_price = ((current.entry_price * current.qty) + (fill_price * qty)) / new_qty
+            current.qty = new_qty
+            if stop_loss is not None:
+                current.stop_loss = stop_loss
+            if take_profit is not None:
+                current.take_profit = take_profit
+        else:
+            closed_qty = qty
+            gross_pnl = (
+                (fill_price - current.entry_price) * closed_qty
+                if current.side == "buy"
+                else (current.entry_price - fill_price) * closed_qty
+            )
+            self.balance += gross_pnl
+            remaining = current.qty - closed_qty
+            if remaining <= 1e-12:
+                del self.positions[symbol]
+                self.mark_prices.pop(symbol, None)
+            else:
+                current.qty = remaining
 
         self.orders.append(order)
+        self._refresh_equity()
+        self._persist_state()
         self._log(order)
         return order
 
@@ -187,35 +236,132 @@ class PaperBroker(Broker):
         price: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        if symbol not in self.positions:
+        position = self.positions.get(symbol)
+        if position is None:
             return False
-        pos = self.positions[symbol]
-        close_qty = pos.qty if qty is None else float(qty)
-        if not (0 < close_qty <= pos.qty):
+        close_qty = position.qty if qty is None else float(qty)
+        if close_qty <= 0 or close_qty > position.qty + 1e-12:
             return False
-        exit_price = price if price is not None else pos.entry_price
-        if exit_price <= 0:
+        exit_price = price if price is not None else self.mark_prices.get(symbol, position.entry_price)
+        if exit_price is None or exit_price <= 0:
             return False
-        side = "sell" if pos.side == "buy" else "buy"
-
-        # Calculate realized PnL
-        pnl = (exit_price - pos.entry_price) * close_qty if pos.side == "buy" else (pos.entry_price - exit_price) * close_qty
-        self.balance += pnl
-        self.equity = self.balance
-
-        self.place_order(symbol, side, close_qty, price=exit_price, params=params)
-        self.equity = self.balance
+        closing_side = "sell" if position.side == "buy" else "buy"
+        self.place_order(symbol, closing_side, close_qty, price=exit_price, params=params)
         return True
 
-    def _log(self, order: Order):
+    def mark_price(self, symbol: str, price: float) -> float:
+        """Update mark-to-market equity without realizing P&L."""
+        import math
+
+        if not math.isfinite(float(price)) or float(price) <= 0:
+            raise ValueError("mark price must be finite and greater than zero")
+        if symbol not in self.positions:
+            raise KeyError(f"No open paper position for {symbol}")
+        self.mark_prices[symbol] = float(price)
+        self._refresh_equity()
+        self._persist_state()
+        return self.equity
+
+    def get_account_summary(self) -> Dict[str, Any]:
+        self._refresh_equity()
+        unrealized = self.equity - self.balance
+        return {
+            "balance": self.balance,
+            "equity": self.equity,
+            "unrealized_pnl": unrealized,
+            "realized_pnl_net_fees": self.balance - self._initial_balance,
+            "open_positions": len(self.positions),
+            "open_quantity_by_symbol": {k: v.qty for k, v in self.positions.items()},
+        }
+
+    def _refresh_equity(self) -> None:
+        unrealized = 0.0
+        for symbol, pos in self.positions.items():
+            mark = self.mark_prices.get(symbol, pos.entry_price)
+            unrealized += (
+                (mark - pos.entry_price) * pos.qty
+                if pos.side == "buy"
+                else (pos.entry_price - mark) * pos.qty
+            )
+            pos.unrealized_pnl = unrealized
+        self.equity = self.balance + unrealized
+
+    def _persist_state(self) -> None:
+        if self.state_file is None:
+            return
+        import os
+        payload = {
+            "version": 1,
+            "balance": self.balance,
+            "equity": self.equity,
+            "commission_pct": self.commission_pct,
+            "positions": {
+                symbol: {
+                    "symbol": p.symbol, "side": p.side, "qty": p.qty,
+                    "entry_price": p.entry_price, "stop_loss": p.stop_loss,
+                    "take_profit": p.take_profit, "unrealized_pnl": p.unrealized_pnl,
+                    "mark_price": self.mark_prices.get(symbol, p.entry_price),
+                }
+                for symbol, p in self.positions.items()
+            },
+            "orders": [
+                {
+                    "id": o.id, "symbol": o.symbol, "side": o.side,
+                    "order_type": o.order_type, "qty": o.qty, "price": o.price,
+                    "stop_loss": o.stop_loss, "take_profit": o.take_profit,
+                    "status": o.status, "filled_price": o.filled_price,
+                    "filled_qty": o.filled_qty, "created_at": o.created_at.isoformat(),
+                } for o in self.orders
+            ],
+        }
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        temp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, allow_nan=False)
+            handle.flush()
+        os.replace(temp, self.state_file)
+
+    def _load_state(self, initial_balance: float) -> None:
         try:
-            with open(self.journal_file, "a") as f:
-                f.write(json.dumps({
+            with open(self.state_file, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if payload.get("version") != 1:
+                raise ValueError("Unsupported paper state version")
+            self.balance = float(payload["balance"])
+            self.equity = float(payload.get("equity", self.balance))
+            self.commission_pct = float(payload.get("commission_pct", self.commission_pct))
+            for symbol, raw in payload.get("positions", {}).items():
+                self.positions[symbol] = Position(
+                    symbol=raw["symbol"], side=raw["side"], qty=float(raw["qty"]),
+                    entry_price=float(raw["entry_price"]), stop_loss=raw.get("stop_loss"),
+                    take_profit=raw.get("take_profit"),
+                    unrealized_pnl=float(raw.get("unrealized_pnl", 0.0)),
+                )
+                self.mark_prices[symbol] = float(raw.get("mark_price", raw["entry_price"]))
+            for raw in payload.get("orders", []):
+                self.orders.append(Order(
+                    id=raw["id"], symbol=raw["symbol"], side=raw["side"],
+                    order_type=raw["order_type"], qty=float(raw["qty"]), price=raw.get("price"),
+                    stop_loss=raw.get("stop_loss"), take_profit=raw.get("take_profit"),
+                    status=raw.get("status", "filled"), filled_price=raw.get("filled_price"),
+                    filled_qty=float(raw.get("filled_qty", 0.0)),
+                    created_at=datetime.fromisoformat(raw["created_at"]),
+                ))
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Could not safely load paper broker state: {exc}") from exc
+
+    def _log(self, order: Order) -> None:
+        if self.journal_file is None:
+            return
+        try:
+            with open(self.journal_file, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
                     "id": order.id, "symbol": order.symbol, "side": order.side,
                     "qty": order.qty, "price": order.filled_price,
-                    "time": order.created_at.isoformat()
+                    "time": order.created_at.isoformat(),
                 }) + "\n")
-        except Exception:
+        except OSError:
+            # The durable state file is the source of truth; journal is supplementary.
             pass
 
 
