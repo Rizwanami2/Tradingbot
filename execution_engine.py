@@ -12,6 +12,7 @@ Features:
 """
 
 import time
+import math
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
@@ -129,6 +130,20 @@ class ExecutionEngine:
         tp1 = float(sig["tp1"])
         tp2 = float(sig["tp2"])
         tp3 = sig.get("tp3")
+
+        numeric_values = [entry, stop, tp1, tp2, lots, size, leverage, margin_required, risk_amt, rr]
+        if not all(math.isfinite(value) for value in numeric_values):
+            raise ValueError("Setup contains a non-finite numeric value.")
+        if direction not in ("LONG", "SHORT"):
+            raise ValueError(f"Unsupported trade direction: {direction!r}")
+        if lots <= 0 or size <= 0 or leverage < self.risk_manager.config.min_leverage:
+            raise ValueError("Lots, size, and leverage must be positive and within configured limits.")
+        if leverage > self.risk_manager.config.max_leverage:
+            raise ValueError(f"Requested leverage {leverage:g}x exceeds configured cap {self.risk_manager.config.max_leverage:g}x.")
+        if direction == "LONG" and not (stop < entry < tp1 <= tp2):
+            raise ValueError("Invalid LONG levels: expected stop < entry < TP1 <= TP2.")
+        if direction == "SHORT" and not (stop > entry > tp1 >= tp2):
+            raise ValueError("Invalid SHORT levels: expected stop > entry > TP1 >= TP2.")
 
         order = TradeOrder(
             id=self._next_order_id(),
