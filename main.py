@@ -216,7 +216,7 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "🤖 **Institutional Multi-Agent Trading Assistant**\n\n"
         "Welcome! I am an automated trading and technical analysis bot combining:\n"
         "• **5 Specialized Analysis Agents:** Trend, SMC Liquidity, 10 Indicators, AI-Learner, and Global News.\n"
-        "• **Automated Execution Engine:** Limit setup triggers, auto break-even, partials & trailing stops.\n"
+        "• **In-process Setup Tracker:** Entry triggers, stop/target tracking, and partial management; live exchange execution is not enabled.\n"
         "• **Configured leverage cap (1x - 20x):** Manually adjustable margin management and liquidation protection.\n"
         "• **Gemini AI:** Technical analysis, trade planning, and conversational assistance.\n\n"
         "⚡ **Quick Commands:**\n"
@@ -323,7 +323,7 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"📈 **Trading Bot Status Dashboard**\n\n"
-        f"• **Autotrade Execution:** {auto_status}\n"
+        f"• **Setup Monitoring:** {auto_status}\n"
         f"• **Active Symbol:** `{config.DEFAULT_SYMBOL}`\n"
         f"• **Account Equity:** `${summary['equity']:,.2f}` (Balance: `${summary['balance']:,.2f}`)\n"
         f"• **Leverage:** `{summary['leverage']:.0f}x` (1x-500x adjustable)\n"
@@ -484,7 +484,7 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines = []
 
     if engine.active_positions:
-        lines.append("🟢 **LIVE ACTIVE POSITIONS:**")
+        lines.append("🟢 **IN-PROCESS ACTIVE POSITIONS:**")
         for sym, p in engine.active_positions.items():
             dir_icon = "🟢 LONG" if p.direction == "LONG" else "🔴 SHORT"
             curr_p = get_price_info(sym).get("mark", p.executed_price or p.entry_level)
@@ -515,7 +515,7 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"  Planned Lots: `{s.lots}` | Leverage: `{s.leverage:.0f}x` | Margin: `${s.margin_required:,.2f}`\n"
                 f"  Targets: TP1 `${s.tp1:,.2f}` | TP2 `${s.tp2:,.2f}`\n"
                 f"  Setup Reason: {s.setup_reason}\n"
-                f"  Status: ⚡ Auto-execute when level is reached"
+                f"  Status: ⚡ Local setup tracker triggers when level is reached"
             )
 
     if not lines:
@@ -533,7 +533,7 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Toggle automated live monitoring and alerts."""
+    """Toggle setup monitoring and alerts; this does not enable live exchange orders."""
     global autotrade_active, background_task
     action = ctx.args[0].lower() if ctx.args else ""
 
