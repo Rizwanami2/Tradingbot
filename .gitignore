@@ -19,3 +19,6 @@ multi_agent_memory.json
 *.jsonl
 *.log
 attachments/
+
+# Local runtime status (may contain account metrics)
+.runtime/
