@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import math
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -238,50 +239,233 @@ def demo_signal(window: pd.DataFrame) -> Optional[Dict]:
     return None
 
 
+
+
+@dataclass(frozen=True)
+class BacktestConfig:
+    """Parameters for the isolated OHLCV simulator."""
+    initial_equity: float = 10000.0
+    risk_per_trade: float = 0.01
+    max_leverage: float = 5.0
+    fee_rate: float = 0.0004
+    slippage_bps: float = 2.0
+    fast_ema: int = 12
+    slow_ema: int = 26
+    atr_period: int = 14
+    stop_atr: float = 2.0
+    reward_risk: float = 2.0
+    allow_short: bool = True
+
+    def validate(self):
+        for name in ("initial_equity", "risk_per_trade", "max_leverage", "stop_atr", "reward_risk"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a finite positive number")
+        if self.risk_per_trade > 0.05:
+            raise ValueError("risk_per_trade must be <= 0.05 (5%)")
+        if not math.isfinite(self.fee_rate) or self.fee_rate < 0:
+            raise ValueError("fee_rate must be finite and >= 0")
+        if not math.isfinite(self.slippage_bps) or not 0 <= self.slippage_bps <= 500:
+            raise ValueError("slippage_bps must be between 0 and 500")
+        if self.fast_ema < 2 or self.slow_ema <= self.fast_ema:
+            raise ValueError("EMA windows must satisfy 2 <= fast_ema < slow_ema")
+        if self.atr_period < 2:
+            raise ValueError("atr_period must be >= 2")
+
+
+def _validated_frame(data: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        raise ValueError("Historical OHLCV data is empty")
+    frame = data.copy()
+    frame.columns = [str(c).lower() for c in frame.columns]
+    missing = {"open", "high", "low", "close"} - set(frame.columns)
+    if missing:
+        raise ValueError(f"Missing OHLC columns: {', '.join(sorted(missing))}")
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        col = next((c for c in ("timestamp", "datetime", "date", "time") if c in frame.columns), None)
+        if col is None:
+            raise ValueError("Data must use a DatetimeIndex or include a timestamp column")
+        frame.index = pd.to_datetime(frame.pop(col), utc=True, errors="coerce")
+    if frame.index.isna().any():
+        raise ValueError("Historical data contains invalid timestamps")
+    if frame.index.has_duplicates:
+        raise ValueError("Historical data contains duplicate timestamps")
+    frame = frame.sort_index()
+    for col in ("open", "high", "low", "close"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    vals = frame[["open", "high", "low", "close"]].to_numpy(dtype=float)
+    if not np.isfinite(vals).all() or (vals <= 0).any():
+        raise ValueError("OHLC values must be finite and positive")
+    invalid = ((frame["high"] < frame[["open", "close", "low"]].max(axis=1)) |
+               (frame["low"] > frame[["open", "close", "high"]].min(axis=1)))
+    if invalid.any():
+        raise ValueError("OHLC candle has inconsistent high/low values")
+    return frame
+
+
+def _indicators(frame: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
+    out = frame.copy()
+    out["ema_fast"] = out["close"].ewm(span=cfg.fast_ema, adjust=False, min_periods=cfg.fast_ema).mean()
+    out["ema_slow"] = out["close"].ewm(span=cfg.slow_ema, adjust=False, min_periods=cfg.slow_ema).mean()
+    prev_close = out["close"].shift(1)
+    tr = pd.concat([out["high"] - out["low"],
+                    (out["high"] - prev_close).abs(),
+                    (out["low"] - prev_close).abs()], axis=1).max(axis=1)
+    out["atr"] = tr.rolling(cfg.atr_period, min_periods=cfg.atr_period).mean()
+    up = (out["ema_fast"].shift(1) <= out["ema_slow"].shift(1)) & (out["ema_fast"] > out["ema_slow"])
+    down = (out["ema_fast"].shift(1) >= out["ema_slow"].shift(1)) & (out["ema_fast"] < out["ema_slow"])
+    out["signal"] = np.select([up, down], [1, -1], default=0)
+    out.loc[out["atr"].isna() | out["ema_slow"].isna(), "signal"] = 0
+    return out
+
+
+def run_backtest(data: pd.DataFrame, config: Optional[BacktestConfig] = None,
+                 symbol: str = "UNKNOWN", timeframe: str = "unknown") -> Dict:
+    """Run an EMA crossover simulation; signals fill on the next candle open.
+
+    If stop and target are both touched in one candle, the stop is assumed first.
+    Fees and slippage are applied at entry and exit. No broker calls are made.
+    """
+    cfg = config or BacktestConfig()
+    cfg.validate()
+    frame = _indicators(_validated_frame(data), cfg)
+    if len(frame) < max(cfg.slow_ema + 2, cfg.atr_period + 2):
+        raise ValueError("Not enough candles for the configured EMA/ATR windows")
+
+    equity = float(cfg.initial_equity)
+    peak = equity
+    max_dd = 0.0
+    curve = []
+    trades = []
+    position = None
+    slip = cfg.slippage_bps / 10000.0
+
+    def close_position(ts, raw_exit, reason):
+        nonlocal equity, position
+        pos = position
+        direction = pos["direction"]
+        exit_price = raw_exit * (1 - slip if direction == 1 else 1 + slip)
+        gross = (exit_price - pos["entry"]) * pos["qty"] * direction
+        exit_fee = abs(exit_price * pos["qty"]) * cfg.fee_rate
+        equity += gross - exit_fee
+        fees = pos["entry_fee"] + exit_fee
+        trades.append({
+            "symbol": symbol.upper(), "direction": "LONG" if direction == 1 else "SHORT",
+            "entry_time": str(pos["entry_time"]), "exit_time": str(ts),
+            "entry_price": float(pos["entry"]), "exit_price": float(exit_price),
+            "quantity": float(pos["qty"]), "stop_price": float(pos["stop"]),
+            "target_price": float(pos["target"]), "gross_pnl": float(gross),
+            "fees": float(fees), "net_pnl": float(gross - fees), "exit_reason": reason,
+        })
+        position = None
+
+    for i in range(1, len(frame)):
+        row, ts = frame.iloc[i], frame.index[i]
+        closed_this_bar = False
+        if position is not None:
+            d, stop, target = position["direction"], position["stop"], position["target"]
+            if d == 1:
+                if float(row["low"]) <= stop:
+                    close_position(ts, min(stop, float(row["open"])), "stop")
+                    closed_this_bar = True
+                elif float(row["high"]) >= target:
+                    close_position(ts, target, "target")
+                    closed_this_bar = True
+            else:
+                if float(row["high"]) >= stop:
+                    close_position(ts, max(stop, float(row["open"])), "stop")
+                    closed_this_bar = True
+                elif float(row["low"]) <= target:
+                    close_position(ts, target, "target")
+                    closed_this_bar = True
+
+        if position is None and not closed_this_bar:
+            sigrow = frame.iloc[i - 1]
+            direction = int(sigrow["signal"])
+            atr = float(sigrow["atr"]) if pd.notna(sigrow["atr"]) else 0.0
+            if direction and (direction == 1 or cfg.allow_short) and math.isfinite(atr) and atr > 0:
+                entry = float(row["open"]) * (1 + slip if direction == 1 else 1 - slip)
+                distance = atr * cfg.stop_atr
+                stop = entry - distance if direction == 1 else entry + distance
+                target = entry + distance * cfg.reward_risk if direction == 1 else entry - distance * cfg.reward_risk
+                qty = min((equity * cfg.risk_per_trade) / distance, (equity * cfg.max_leverage) / entry)
+                if math.isfinite(qty) and qty > 0:
+                    entry_fee = abs(entry * qty) * cfg.fee_rate
+                    equity -= entry_fee
+                    position = {"direction": direction, "entry": entry, "entry_time": ts,
+                                "stop": stop, "target": target, "qty": qty, "entry_fee": entry_fee}
+                    # Entry candle is eligible; ambiguous same-candle exits are stop-first.
+                    if direction == 1:
+                        if float(row["low"]) <= stop:
+                            close_position(ts, min(stop, float(row["open"])), "stop")
+                        elif float(row["high"]) >= target:
+                            close_position(ts, target, "target")
+                    else:
+                        if float(row["high"]) >= stop:
+                            close_position(ts, max(stop, float(row["open"])), "stop")
+                        elif float(row["low"]) <= target:
+                            close_position(ts, target, "target")
+
+        marked = equity
+        if position is not None:
+            marked += (float(row["close"]) - position["entry"]) * position["qty"] * position["direction"]
+        peak = max(peak, marked)
+        dd = (peak - marked) / peak * 100 if peak > 0 else 0.0
+        max_dd = max(max_dd, dd)
+        curve.append({"time": str(ts), "equity": float(marked), "drawdown_pct": float(dd)})
+
+    if position is not None:
+        ts = frame.index[-1]
+        close_position(ts, float(frame.iloc[-1]["close"]), "end_of_data")
+        peak = max(peak, equity)
+        dd = (peak - equity) / peak * 100 if peak > 0 else 0.0
+        max_dd = max(max_dd, dd)
+        curve[-1] = {"time": str(ts), "equity": float(equity), "drawdown_pct": float(dd)}
+
+    net = equity - cfg.initial_equity
+    wins = [t["net_pnl"] for t in trades if t["net_pnl"] > 0]
+    losses = [t["net_pnl"] for t in trades if t["net_pnl"] < 0]
+    gp, gl = sum(wins), abs(sum(losses))
+    return {
+        "symbol": symbol.upper(), "timeframe": timeframe,
+        "strategy": "EMA crossover with ATR stop and fixed-R target",
+        "candles": len(frame), "initial_equity": float(cfg.initial_equity),
+        "final_equity": float(equity), "net_pnl": float(net),
+        "return_pct": float(net / cfg.initial_equity * 100),
+        "max_drawdown_pct": float(max_dd), "trades": len(trades),
+        "wins": len(wins), "losses": len(losses),
+        "win_rate_pct": float(len(wins) / len(trades) * 100) if trades else 0.0,
+        "profit_factor": float(gp / gl) if gl > 0 else (None if gp == 0 else float("inf")),
+        "expectancy_per_trade": float(np.mean([t["net_pnl"] for t in trades])) if trades else 0.0,
+        "fees": float(sum(t["fees"] for t in trades)), "trades_detail": trades,
+        "equity_curve": curve,
+        "assumptions": {"entry": "next candle open after signal candle close",
+                        "same_candle_stop_and_target": "stop first",
+                        "fees_and_slippage": "charged on entry and exit", "live_orders_submitted": False},
+    }
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Backtest Engine")
-    parser.add_argument("--symbol", default="XAUUSD")
-    parser.add_argument("--bars", type=int, default=2000)
-    parser.add_argument("--source", default="demo")
+    parser = argparse.ArgumentParser(description="Run historical OHLCV backtest (no exchange orders).")
+    parser.add_argument("--csv", required=True, help="CSV containing timestamp, open, high, low, close")
+    parser.add_argument("--symbol", default="UNKNOWN")
+    parser.add_argument("--timeframe", default="unknown")
     parser.add_argument("--equity", type=float, default=10000.0)
-    parser.add_argument("--risk", type=float, default=0.0025)
+    parser.add_argument("--risk", type=float, default=0.01)
+    parser.add_argument("--fee-rate", type=float, default=0.0004)
+    parser.add_argument("--slippage-bps", type=float, default=2.0)
     args = parser.parse_args()
-
-    print(f"Loading data for {args.symbol} ...")
-    if DataFeed is None:
-        dates = pd.date_range(end=datetime.now(timezone.utc), periods=args.bars, freq="1min")
-        np.random.seed(42)
-        rets = np.random.randn(args.bars) * 0.0006
-        price = 2650 * np.cumprod(1 + rets)
-        df = pd.DataFrame({
-            "open": price, "high": price * 1.0006, "low": price * 0.9994,
-            "close": price, "volume": np.random.randint(100, 2000, args.bars),
-        }, index=dates)
-    else:
-        feed = DataFeed(symbol=args.symbol, source=args.source)
-        df = feed.fetch(limit=args.bars, timeframe="1m")
-
-    if df.empty:
-        print("No data available")
-        return
-
-    bt = SimpleBacktester(initial_equity=args.equity, risk_per_trade=args.risk)
-    result = bt.run(df, demo_signal, symbol=args.symbol)
-    print(result.summary())
-
-    out = Path("backtest_result.json")
-    with open(out, "w") as f:
-        json.dump({
-            "summary": {
-                "final_equity": result.final_equity,
-                "return_pct": result.total_return_pct,
-                "max_dd": result.max_drawdown_pct,
-                "sharpe": result.sharpe,
-                "trades": result.total_trades,
-            },
-            "equity_curve": result.equity_curve[-500:],
-        }, f, indent=2)
-    print(f"Saved summary → {out}")
+    data = pd.read_csv(args.csv)
+    timestamp_col = next((c for c in data.columns if c.lower() in ("timestamp", "datetime", "date", "time")), None)
+    if timestamp_col:
+        data[timestamp_col] = pd.to_datetime(data[timestamp_col], utc=True, errors="coerce")
+        data = data.set_index(timestamp_col)
+    cfg = BacktestConfig(initial_equity=args.equity, risk_per_trade=args.risk,
+                         fee_rate=args.fee_rate, slippage_bps=args.slippage_bps)
+    result = run_backtest(data, cfg, symbol=args.symbol, timeframe=args.timeframe)
+    if result["profit_factor"] == float("inf"):
+        result["profit_factor"] = None
+    print(json.dumps(result, indent=2, allow_nan=False))
 
 
 if __name__ == "__main__":
