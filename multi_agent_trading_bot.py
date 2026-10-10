@@ -32,6 +32,7 @@ import pandas as pd
 import requests
 
 import config
+from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
 from risk_manager import RiskManager, RiskConfig, INSTRUMENTS, TradeRiskResult
 from trading_strategy_indicators_pro import IndicatorEngine, IndicatorSnapshot
 
@@ -714,6 +715,10 @@ class Arbiter:
                 "symbol": symbol,
                 "risk_amount": plan.get("risk_amount", 0.0),
                 "risk_pct": plan.get("risk_pct", 0.18),
+                "leverage": plan.get("leverage"),
+                "margin_required": plan.get("margin_required", 0.0),
+                "liquidation_price": plan.get("liquidation_price"),
+                "notional_value": plan.get("notional_value", 0.0),
                 "reason": " | ".join(f"{v.agent}:{v.reason}" for v in votes),
             }
         else:
@@ -738,6 +743,10 @@ class Arbiter:
                 "symbol": symbol,
                 "risk_amount": plan.get("risk_amount", 0.0),
                 "risk_pct": plan.get("risk_pct", 0.18),
+                "leverage": plan.get("leverage"),
+                "margin_required": plan.get("margin_required", 0.0),
+                "liquidation_price": plan.get("liquidation_price"),
+                "notional_value": plan.get("notional_value", 0.0),
                 "reason": " | ".join(f"{v.agent}:{v.reason}" for v in votes),
             }
 
@@ -888,10 +897,19 @@ def run_live(args):
     arbiter.news = NewsAgent(symbol=args.symbol, window_min=args.news_window, enabled=args.news)
     risk = RiskManager(equity=args.equity, symbol=args.symbol)
 
-    pos: Optional[Position] = None
+    leverage = getattr(args, "leverage", config.DEFAULT_LEVERAGE)
+    risk.set_leverage(leverage)
+
+    def on_execution_event(event_name: str, order: TradeOrder, message: str):
+        print(f"\n{message}\n")
+        send_telegram(message)
+
+    engine = ExecutionEngine(risk_manager=risk, event_callback=on_execution_event)
+
     print(f"\n{'='*64}")
     print(f"  MULTI-AGENT TRADING ENGINE - LIVE")
     print(f"  Symbol: {args.symbol} | Feed: {feed.source} | Poll: {args.poll}s | Equity: {risk.state.equity:.2f}")
+    print(f"  Leverage: {risk.get_leverage():.0f}x (1x-500x adjustable) | Autotrade: ACTIVE")
     print(f"  Agents: TREND + LIQUIDITY + INDICATORS + AI-LEARNER + NEWS -> ARBITER -> RISK VETO")
     print(f"{'='*64}\n")
 
@@ -908,63 +926,38 @@ def run_live(args):
                 daily = df1.resample("1D").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
 
             candle = df1.iloc[-1]
-            ts = df1.index[-1]
+            candle_dict = {
+                "open": float(candle.get("open", candle["close"])),
+                "high": float(candle["high"]),
+                "low": float(candle["low"]),
+                "close": float(candle["close"]),
+            }
 
-            # Manage existing position
-            if pos is not None:
-                ep, closed, reason = arbiter.manage(pos, candle, risk)
-                if ep > 0:
-                    pnl = (
-                        (ep - pos.entry) if pos.direction == Dir.LONG else (pos.entry - ep)
-                    ) * pos.remaining
-                    r_mult = pnl / (pos.risk * pos.size) if (pos.risk * pos.size) > 0 else 0.0
-                    risk.update_after_trade(pnl, r_multiple=r_mult)
-                    arbiter.ai.learn(True, 0.70, pnl > 0, pnl)
+            # 1. Update active and pending trades with live candle
+            engine.update_market_candle(args.symbol, candle_dict)
 
-                    msg = (
-                        f"🔔 **TRADE UPDATE ({pos.symbol})**\n"
-                        f"Action: {reason}\n"
-                        f"Exit: `{ep:.2f}` | PnL: `{pnl:+.2f}`\n"
-                        f"{risk.summary()}"
-                    )
-                    print(f"\n{msg}\n")
-                    send_telegram(msg)
-
-                    if closed:
-                        pos = None
-
-            # Look for new setups if flat
-            if pos is None:
+            # 2. Look for new setups if flat and no pending order
+            if args.symbol not in engine.active_positions and args.symbol not in engine.pending_setups:
                 sig, why, votes = arbiter.decide(
                     df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk,
                     news=arbiter.news, symbol=args.symbol,
                 )
                 if sig:
-                    pos = Position(
-                        direction=sig["direction"],
-                        entry=sig["entry"],
-                        stop=sig["stop"],
-                        size=sig["size"],
-                        lots=sig["lots"],
-                        tp1=sig["tp1"],
-                        tp2=sig["tp2"],
-                        tp3=sig.get("tp3"),
-                        remaining=sig["size"],
-                        risk=abs(sig["entry"] - sig["stop"]),
-                        highest=sig["entry"],
-                        lowest=sig["entry"],
-                        symbol=args.symbol,
-                    )
+                    order = engine.register_setup(sig, reason=sig.get("reason", ""))
                     msg = (
-                        f"⚡ **NEW MULTI-AGENT SIGNAL**\n"
-                        f"Symbol: `{args.symbol}` | **{sig['direction'].name}**\n"
-                        f"Entry: `{sig['entry']:.2f}` | Stop: `{sig['stop']:.2f}`\n"
-                        f"Lots: `{sig['lots']}` | Target 1: `{sig['tp1']:.2f}` | Target 2: `{sig['tp2']:.2f}`\n"
-                        f"Score: `{sig['score']:.2f}` | R:R: `1:{sig['rr']:.1f}`\n\n"
-                        f"**Confluence:** {sig['reason']}"
+                        f"⚡ **NEW MULTI-AGENT SETUP IDENTIFIED**\n"
+                        f"Symbol: `{args.symbol}` | **{order.direction}**\n"
+                        f"• Entry Level: `${order.entry_level:,.2f}`\n"
+                        f"• Stop Loss: `${order.stop_loss:,.2f}` | R:R: `1:{order.rr_ratio:.1f}`\n"
+                        f"• Lots: `{order.lots}` | Leverage: `{order.leverage:.0f}x` | Margin: `${order.margin_required:,.2f}`\n"
+                        f"• Target 1: `${order.tp1:,.2f}` | Target 2: `${order.tp2:,.2f}`\n\n"
+                        f"**Confluence:** {order.setup_reason}\n"
+                        f"_Monitoring market levels. Trade will execute automatically upon reach._"
                     )
                     print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
                     send_telegram(msg)
+                    # Check if entry is reached on current candle
+                    engine.update_market_candle(args.symbol, candle_dict)
 
             time_module.sleep(args.poll)
 
@@ -1090,6 +1083,7 @@ def main():
     p.add_argument("--poll", type=int, default=config.POLL_INTERVAL)
     p.add_argument("--equity", type=float, default=config.INITIAL_EQUITY)
     p.add_argument("--risk", type=float, default=config.DEFAULT_RISK_PCT)
+    p.add_argument("--leverage", type=float, default=config.DEFAULT_LEVERAGE, help="Leverage multiplier (1x to 500x)")
     p.add_argument("--bars", type=int, default=2000)
     p.add_argument("--news", action="store_true", default=config.NEWS_ENABLED)
     p.add_argument("--news-window", type=int, default=config.NEWS_WINDOW_MIN)

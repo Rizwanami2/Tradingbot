@@ -67,6 +67,7 @@ def main_launcher():
     parser.add_argument("--poll", type=int, default=int(os.getenv("BOT_POLL", "30")))
     parser.add_argument("--equity", type=float, default=float(os.getenv("BOT_EQUITY", "10000")))
     parser.add_argument("--risk", type=float, default=float(os.getenv("BOT_RISK", "0.18")))
+    parser.add_argument("--leverage", type=float, default=float(os.getenv("BOT_LEVERAGE", "100.0")), help="Leverage multiplier (1x to 500x)")
     parser.add_argument("--bars", type=int, default=2000)
     parser.add_argument("--news", action="store_true", default=True)
     parser.add_argument("--news-window", type=int, default=30)

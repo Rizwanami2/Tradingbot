@@ -71,6 +71,56 @@ class TestRiskManager(unittest.TestCase):
         self.assertEqual(self.rm.state.win_streak, 0)
         self.assertEqual(self.rm.state.consecutive_losses, 1)
 
+    def test_leverage_adjustment(self):
+        # Default leverage
+        self.assertEqual(self.rm.get_leverage(), 100.0)
+
+        # Valid leverage adjustments between 1x and 500x
+        for lev in [1.0, 10.0, 50.0, 200.0, 500.0]:
+            ok, msg = self.rm.set_leverage(lev)
+            self.assertTrue(ok)
+            self.assertEqual(self.rm.get_leverage(), lev)
+
+        # Invalid leverage adjustments (out of bounds)
+        ok, msg = self.rm.set_leverage(0.5)
+        self.assertFalse(ok)
+        self.assertIn("out of bounds", msg)
+
+        ok, msg = self.rm.set_leverage(501.0)
+        self.assertFalse(ok)
+        self.assertIn("out of bounds", msg)
+
+        ok, msg = self.rm.set_leverage("invalid")
+        self.assertFalse(ok)
+        self.assertIn("Invalid leverage", msg)
+
+    def test_margin_and_liquidation_calculation(self):
+        self.rm.set_leverage(100.0)
+        margin = self.rm.calc_margin(notional_value=10000.0)
+        self.assertEqual(margin, 100.0)
+
+        self.rm.set_leverage(500.0)
+        margin_500 = self.rm.calc_margin(notional_value=10000.0)
+        self.assertEqual(margin_500, 20.0)
+
+        # Liquidation price
+        self.rm.set_leverage(100.0)
+        liq_long = self.rm.calc_liquidation_price("long", entry=2650.0, leverage=100.0)
+        self.assertLess(liq_long, 2650.0)
+        self.assertGreater(liq_long, 2600.0)
+
+        liq_short = self.rm.calc_liquidation_price("short", entry=2650.0, leverage=100.0)
+        self.assertGreater(liq_short, 2650.0)
+
+    def test_autotrade_plan_with_leverage(self):
+        self.rm.set_leverage(200.0)
+        plan = self.rm.autotrade_plan(entry=2650.0, stop=2640.0, direction="long")
+        self.assertTrue(plan.get("ok"))
+        self.assertEqual(plan.get("leverage"), 200.0)
+        self.assertGreater(plan.get("margin_required"), 0.0)
+        self.assertGreater(plan.get("notional_value"), 0.0)
+        self.assertIsNotNone(plan.get("liquidation_price"))
+
 
 if __name__ == "__main__":
     unittest.main()

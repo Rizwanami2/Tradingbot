@@ -47,6 +47,8 @@ TRADINGVIEW_SCREENER = os.getenv("TRADINGVIEW_SCREENER", "")
 POLL_INTERVAL = int(os.getenv("BOT_POLL", "30"))
 INITIAL_EQUITY = float(os.getenv("BOT_EQUITY", "10000.0"))
 DEFAULT_RISK_PCT = float(os.getenv("BOT_RISK", "0.18"))
+DEFAULT_LEVERAGE = float(os.getenv("BOT_LEVERAGE", "100.0"))
+AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
 
 # News settings
 NEWS_ENABLED = os.getenv("BOT_NEWS", "true").lower() in ("true", "1", "yes", "on")

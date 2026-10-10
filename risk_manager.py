@@ -89,6 +89,11 @@ class RiskConfig:
     min_rr: float = 1.5
     max_lot: float = 10.0
     min_lot_override: Optional[float] = None
+    # Leverage System (1x to 500x manually adjustable)
+    leverage: float = 100.0
+    min_leverage: float = 1.0
+    max_leverage: float = 500.0
+    max_margin_utilization_pct: float = 85.0
     # RF (Risk Factor) – master multiplier for risk & BE sensitivity
     # 1.0 = normal | <1 safer | >1 more aggressive
     rf: float = 1.0
@@ -114,6 +119,10 @@ class TradeRiskResult:
     reason: str
     symbol: str = ""
     pip_value: float = 0.0
+    leverage: float = 100.0
+    margin_required: float = 0.0
+    notional_value: float = 0.0
+    liquidation_price: Optional[float] = None
 
 
 @dataclass
@@ -132,6 +141,7 @@ class RiskState:
     total_wins: int = 0
     mode: str = "normal"
     rf: float = 1.0
+    leverage: float = 100.0
 
 
 class RiskManager:
@@ -152,10 +162,48 @@ class RiskManager:
         self.state.peak_equity = max(self.state.peak_equity, equity)
         if not getattr(self.state, "rf", None):
             self.state.rf = self.config.rf
+        if not getattr(self.state, "leverage", None):
+            self.state.leverage = self.config.leverage
+        else:
+            self.config.leverage = self.state.leverage
 
     def set_symbol(self, symbol: str):
         self.symbol = symbol.upper()
         self.profile = INSTRUMENTS.get(self.symbol, INSTRUMENTS["DEFAULT"])
+
+    def set_leverage(self, leverage: float) -> Tuple[bool, str]:
+        """Manually adjust leverage from 1x to 500x."""
+        try:
+            lev = float(leverage)
+        except (ValueError, TypeError):
+            return False, f"Invalid leverage '{leverage}'. Must be a number between 1 and 500."
+        if lev < self.config.min_leverage or lev > self.config.max_leverage:
+            return False, f"Leverage {lev:.0f}x out of bounds. Must be between {self.config.min_leverage:.0f}x and {self.config.max_leverage:.0f}x."
+        self.config.leverage = lev
+        self.state.leverage = lev
+        self._save_state()
+        return True, f"Leverage set to {lev:.0f}x"
+
+    def get_leverage(self) -> float:
+        return getattr(self.state, "leverage", self.config.leverage)
+
+    def calc_margin(self, notional_value: float, leverage: Optional[float] = None) -> float:
+        lev = leverage or self.get_leverage()
+        return notional_value / max(lev, 1.0)
+
+    def calc_liquidation_price(
+        self, direction: str, entry: float, leverage: Optional[float] = None, maintenance_margin_pct: float = 0.005
+    ) -> float:
+        lev = leverage or self.get_leverage()
+        if lev <= 1.0:
+            return 0.0 if direction.lower() in ("long", "buy", "1") else entry * 2.0
+        is_long = direction.lower() in ("long", "buy", "1")
+        if is_long:
+            liq = entry * (1.0 - (1.0 / lev) + maintenance_margin_pct)
+            return max(round(liq, 4), 0.0)
+        else:
+            liq = entry * (1.0 + (1.0 / lev) - maintenance_margin_pct)
+            return round(liq, 4)
 
     def _load_state(self):
         if os.path.exists(self.state_file):
@@ -301,6 +349,29 @@ class RiskManager:
         direction = "long" if entry > stop else "short"
         tps = self.take_profits(entry, stop, direction)
 
+        lev = self.get_leverage()
+        contract_size = self.profile.get("contract_size", 100)
+        notional_value = round(lots * contract_size * entry, 2)
+        margin_required = round(self.calc_margin(notional_value, lev), 2)
+
+        # Enforce leverage margin capacity
+        max_margin = self.state.equity * (self.config.max_margin_utilization_pct / 100.0)
+        if margin_required > max_margin and entry > 0 and contract_size > 0:
+            affordable_notional = max_margin * lev
+            affordable_lots = affordable_notional / (contract_size * entry)
+            step = self.profile["lot_step"]
+            min_lot = self.config.min_lot_override or self.profile["min_lot"]
+            lots = max(min_lot, math.floor(affordable_lots / step) * step)
+            lots = round(lots, 4)
+            notional_value = round(lots * contract_size * entry, 2)
+            margin_required = round(self.calc_margin(notional_value, lev), 2)
+
+        liq_price = self.calc_liquidation_price(direction, entry, lev)
+        if direction == "long" and liq_price > 0 and stop <= liq_price:
+            reason += f" | SL ({stop}) <= Liq ({liq_price:.2f})"
+        elif direction == "short" and stop >= liq_price:
+            reason += f" | SL ({stop}) >= Liq ({liq_price:.2f})"
+
         return TradeRiskResult(
             size=round(unit_size, 6),
             lots=lots,
@@ -315,6 +386,10 @@ class RiskManager:
             reason=reason,
             symbol=self.symbol,
             pip_value=pip_value,
+            leverage=lev,
+            margin_required=margin_required,
+            notional_value=notional_value,
+            liquidation_price=liq_price,
         )
 
     def take_profits(self, entry: float, stop: float, direction: str = "long") -> Dict[str, float]:
@@ -556,6 +631,10 @@ class RiskManager:
             "risk_amount": res.risk_amount,
             "risk_pct": res.risk_pct_used,
             "stop_pips": res.stop_pips,
+            "leverage": res.leverage,
+            "margin_required": res.margin_required,
+            "notional_value": res.notional_value,
+            "liquidation_price": res.liquidation_price,
             "tp1": res.tp1,
             "tp2": res.tp2,
             "tp3": res.tp3,
@@ -571,9 +650,10 @@ class RiskManager:
         s = self.state
         dd = (s.peak_equity - s.equity) / s.peak_equity * 100 if s.peak_equity else 0
         rf = getattr(s, "rf", self.config.rf)
+        lev = getattr(s, "leverage", self.config.leverage)
         return (
             f"Eq:{s.equity:.2f} Peak:{s.peak_equity:.2f} DD:{dd:.1f}% | "
-            f"Risk:{risk:.2f}% RF×{rf:.2f} ({reason}) Mode:{s.mode} | "
+            f"Risk:{risk:.2f}% RF×{rf:.2f} Lev:{lev:.0f}x ({reason}) Mode:{s.mode} | "
             f"DayPnL:{s.daily_pnl:.2f} | CanTrade:{ok} ({why}) | Symbol:{self.symbol}"
         )
 
