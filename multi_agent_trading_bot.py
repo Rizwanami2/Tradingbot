@@ -1,4 +1,118 @@
 #!/usr/bin/env python3
+class AILearnerAgent:
+    name = "AI-LEARNER"
+
+    def __init__(self, path: str = "multi_agent_memory.json"):
+        self.path = path
+        self.memory = {
+            "trades": 0,
+            "wins": 0,
+            "pnl": 0.0,
+            "feature_importance": {},
+            "min_conf": 0.62,
+            "model_weights": None,
+        }
+        self._load()
+        self.feature_names = [
+            "ret_5", "ret_15", "ret_60", "slope_25", "atr_pct",
+            "rsi", "adx", "volume_z", "ema_dist", "hh_ll"
+        ]
+
+    def _extract_features(self, df: pd.DataFrame) -> np.ndarray:
+        if len(df) < 80:
+            return np.zeros(len(self.feature_names))
+
+        c = df["close"].values
+        h, l, v = df["high"].values, df["low"].values, df["volume"].values
+
+        def ret(n):
+            return (c[-1] - c[-n-1]) / c[-n-1] if len(c) > n else 0.0
+
+        # ATR%
+        tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
+        atr = np.mean(tr[-14:])
+        atr_pct = atr / c[-1]
+
+        # RSI simple
+        delta = np.diff(c[-15:])
+        gain = np.mean(delta[delta > 0]) if np.any(delta > 0) else 0
+        loss = -np.mean(delta[delta < 0]) if np.any(delta < 0) else 1e-9
+        rsi = 100 - (100 / (1 + gain / loss))
+
+        # ADX proxy (simplified)
+        adx = min(abs(ret(10)) * 500, 60)
+
+        # Volume z-score
+        vol_mean = np.mean(v[-20:])
+        vol_std = np.std(v[-20:]) + 1e-9
+        volume_z = (v[-1] - vol_mean) / vol_std
+
+        # EMA distance
+        ema21 = pd.Series(c).ewm(span=21).mean().iloc[-1]
+        ema_dist = (c[-1] - ema21) / c[-1]
+
+        # Higher-high / Lower-low
+        hh = np.mean(h[-10:] > h[-11:-1]) if len(h) > 11 else 0.5
+        ll = np.mean(l[-10:] < l[-11:-1]) if len(l) > 11 else 0.5
+
+        slope = np.polyfit(np.arange(25), c[-25:], 1)[0] / c[-1]
+
+        feats = np.array([
+            ret(5), ret(15), ret(60), slope, atr_pct,
+            rsi / 100, adx / 100, volume_z, ema_dist, hh - ll
+        ], dtype=float)
+        return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def predict(self, df: pd.DataFrame):
+        feats = self._extract_features(df)
+        # Simple but better linear model with learned weights
+        if self.memory.get("model_weights") is None:
+            # Default weights (momentum heavy)
+            w = np.array([2.8, 1.9, 0.8, 3.5, -1.2, 1.1, 1.4, 0.6, 1.8, 1.3])
+        else:
+            w = np.array(self.memory["model_weights"])
+
+        score = np.dot(feats, w)
+        conf = 1 / (1 + np.exp(-score * 3.5))  # sigmoid
+
+        if conf > 0.58:
+            direction = Dir.LONG
+        elif conf < 0.42:
+            direction = Dir.SHORT
+            conf = 1 - conf
+        else:
+            direction = Dir.FLAT
+
+        return direction, float(conf), float(abs(score))
+
+    def vote(self, df: pd.DataFrame) -> Vote:
+        d, conf, _ = self.predict(df)
+        if d == Dir.FLAT or conf < self.memory["min_conf"]:
+            return Vote(self.name, Dir.FLAT, conf, f"AI conf {conf:.0%} too low")
+        return Vote(self.name, d, conf, f"AI Ensemble (conf {conf:.0%})")
+
+    def learn(self, direction_correct: bool, conf: float, won: bool, pnl: float, features: np.ndarray = None):
+        m = self.memory
+        m["trades"] += 1
+        m["wins"] += int(won)
+        m["pnl"] = round(m["pnl"] + pnl, 2)
+
+        # Online weight update (very simple gradient-like)
+        if features is not None and m["model_weights"] is not None:
+            w = np.array(m["model_weights"])
+            target = 1.0 if won else -1.0
+            pred = np.dot(features, w)
+            error = target - np.tanh(pred)
+            w += 0.01 * error * features
+            m["model_weights"] = w.tolist()
+
+        # Adaptive confidence threshold
+        if won and conf > 0.70:
+            m["min_conf"] = min(0.78, m["min_conf"] + 0.003)
+        elif not won:
+            m["min_conf"] = max(0.55, m["min_conf"] - 0.006)
+
+        self._save()
 """
 MULTI-AGENT TRADING BOT
 =======================
