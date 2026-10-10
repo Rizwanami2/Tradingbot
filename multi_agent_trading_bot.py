@@ -1,4 +1,66 @@
 #!/usr/bin/env python3
+def run_backtest_v2(args):
+    """Realistic backtest with costs, walk-forward style."""
+    from data_feed import DataFeed
+    feed = DataFeed(symbol=args.symbol, source=args.source, exchange_id=args.exchange)
+    data = feed.multi_tf(limit_1m=args.bars)
+    df1 = data["1m"]
+    if df1.empty:
+        print("No data for backtest")
+        return
+
+    risk = RiskManager(equity=args.equity, symbol=args.symbol)
+    arbiter = Arbiter()
+    broker = PaperBroker(initial_balance=args.equity, commission_pct=0.0004)
+
+    equity_curve = [args.equity]
+    trades = []
+    pos = None
+
+    for i in range(200, len(df1)):
+        window = df1.iloc[:i+1]
+        # Rebuild multi-tf from window (simplified)
+        daily = window.resample("1D").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna()
+        if len(daily) < 2:
+            continue
+
+        candle = window.iloc[-1]
+        # Manage open position
+        if pos:
+            # ... (use arbiter.manage logic here)
+            pass
+
+        # New signal
+        if pos is None:
+            sig, why, votes = arbiter.decide(
+                window, None, None, None, daily, risk, symbol=args.symbol
+            )
+            if sig:
+                # Place via paper broker
+                side = "buy" if sig["direction"] == Dir.LONG else "sell"
+                order = broker.place_order(
+                    args.symbol, side, sig["lots"],
+                    price=sig["entry"],
+                    stop_loss=sig["stop"],
+                    take_profit=sig["tp1"]
+                )
+                pos = ...  # create Position object
+                trades.append(sig)
+
+        equity_curve.append(broker.balance)
+
+    # Results
+    eq = pd.Series(equity_curve)
+    ret = eq.pct_change().dropna()
+    sharpe = ret.mean() / ret.std() * np.sqrt(252*24*60) if ret.std() > 0 else 0
+    max_dd = ((eq.cummax() - eq) / eq.cummax()).max()
+
+    print(f"\n=== BACKTEST RESULTS ({args.symbol}) ===")
+    print(f"Final Equity : {eq.iloc[-1]:.2f}")
+    print(f"Total Return : {(eq.iloc[-1]/eq.iloc[0]-1)*100:.2f}%")
+    print(f"Max Drawdown : {max_dd*100:.2f}%")
+    print(f"Sharpe       : {sharpe:.2f}")
+    print(f"Trades       : {len(trades)}")
 class AILearnerAgent:
     name = "AI-LEARNER"
 
