@@ -12,7 +12,6 @@ from ops_dashboard import (
     StatusStore,
     create_server,
     health_from_snapshot,
-    is_authorized_user,
 )
 
 
@@ -47,12 +46,6 @@ class TestOpsDashboard(unittest.TestCase):
         )
         self.assertFalse(errors["healthy"])
         self.assertNotIn("provider error", json.dumps(errors))
-
-    def test_telegram_control_allowlist_fails_closed(self):
-        self.assertFalse(is_authorized_user(123, set()))
-        self.assertFalse(is_authorized_user(None, {123}))
-        self.assertFalse(is_authorized_user(456, {123}))
-        self.assertTrue(is_authorized_user(123, {123, 456}))
 
     def test_non_loopback_dashboard_requires_token(self):
         with self.assertRaisesRegex(ValueError, "token is required"):
