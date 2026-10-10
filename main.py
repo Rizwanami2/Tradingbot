@@ -13,7 +13,7 @@ Commands:
   /help             - Detailed guide and explanation
   /price [SYMBOL]   - Live price, technical ratings, and stats from TradingView
   /signal [SYMBOL]  - Run 5-agent consensus analysis on demand
-  /status           - Current bot status, active mode, and equity
+  /status           - Current bot status, active mode, and equity\n  /health           - Monitoring freshness and error status
   /risk             - Risk manager report, drawdown, and lot sizing
   /news             - Macroeconomic calendar events and crypto sentiment
   /positions        - Open positions and trailing stop status
@@ -25,6 +25,7 @@ Commands:
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 import os
 import sys
 import threading
@@ -55,6 +56,7 @@ from multi_agent_trading_bot import (
 )
 from risk_manager import RiskManager
 from backtest_engine import BacktestConfig, run_backtest
+from ops_dashboard import StatusStore, health_from_snapshot
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -68,9 +70,48 @@ risk_mgr.set_leverage(config.DEFAULT_LEVERAGE)
 arbiter = Arbiter()
 engine = ExecutionEngine(risk_manager=risk_mgr)
 
-# Bot runtime state
+# Bot runtime state. Monitoring is off by default until explicitly enabled.
 autotrade_active: bool = config.AUTOTRADE_ENABLED
 background_task: Optional[asyncio.Task] = None
+monitoring_health = {
+    "started_at": datetime.now(timezone.utc).isoformat(),
+    "last_poll_at": None,
+    "last_success_at": None,
+    "last_error": None,
+    "consecutive_errors": 0,
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_runtime_status() -> None:
+    """Publish a read-only operations snapshot; never blocks bot operation on dashboard I/O."""
+    try:
+        summary = engine.get_portfolio_summary()
+        state = risk_mgr.state
+        snapshot = {
+            "service": "TradingBot",
+            "state": "running",
+            "started_at": monitoring_health["started_at"],
+            "last_poll_at": monitoring_health["last_poll_at"],
+            "last_success_at": monitoring_health["last_success_at"],
+            "last_error": monitoring_health["last_error"],
+            "consecutive_errors": monitoring_health["consecutive_errors"],
+            "autotrade_active": bool(autotrade_active),
+            "configured_broker_mode": config.BROKER_MODE,
+            "symbol": config.DEFAULT_SYMBOL,
+            "data_source": config.DEFAULT_DATA_SOURCE,
+            "equity": float(summary.get("equity", 0.0)),
+            "balance": float(summary.get("balance", 0.0)),
+            "active_positions": int(summary.get("active_positions_count", 0)),
+            "pending_setups": int(summary.get("pending_setups_count", 0)),
+            "risk_mode": str(state.mode),
+        }
+        StatusStore(config.STATUS_FILE).write(snapshot)
+    except Exception as exc:
+        logger.warning("Could not publish operations status: %s", exc)
 
 
 # ======================================================================
@@ -160,7 +201,7 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "🤖 **Institutional Multi-Agent Trading Assistant**\n\n"
         "Welcome! I am an automated trading and technical analysis bot combining:\n"
         "• **5 Specialized Analysis Agents:** Trend, SMC Liquidity, 10 Indicators, AI-Learner, and Global News.\n"
-        "• **Automated Execution Engine:** Limit setup triggers, auto break-even, partials & trailing stops.\n"
+        "• **In-process Setup Tracker:** Entry triggers, stop/target tracking, and partial management; live exchange execution is not enabled.\n"
         "• **Configured leverage cap (1x - 20x):** Manually adjustable margin management and liquidation protection.\n"
         "• **Gemini AI:** Technical analysis, trade planning, and conversational assistance.\n\n"
         "⚡ **Quick Commands:**\n"
@@ -267,7 +308,7 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"📈 **Trading Bot Status Dashboard**\n\n"
-        f"• **Autotrade Execution:** {auto_status}\n"
+        f"• **Setup Monitoring:** {auto_status}\n"
         f"• **Active Symbol:** `{config.DEFAULT_SYMBOL}`\n"
         f"• **Account Equity:** `${summary['equity']:,.2f}` (Balance: `${summary['balance']:,.2f}`)\n"
         f"• **Leverage:** `{summary['leverage']:.0f}x` (1x-500x adjustable)\n"
@@ -314,7 +355,7 @@ async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """View or adjust configured leverage (1x to 20x)."""
+    """View or adjust configured leverage."""
     if ctx.args:
         try:
             val = float(ctx.args[0])
@@ -360,7 +401,7 @@ async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Manually close an active position immediately."""
+    """Close an in-process position ."""
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     if sym not in engine.active_positions:
         await update.message.reply_text(f"📂 No active position found for `{sym}`.", parse_mode="Markdown")
@@ -383,7 +424,7 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Cancel a pending trade setup order."""
+    """Cancel a pending setup after authorization."""
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     cancelled = engine.cancel_setup(sym, reason="Telegram user cancelled via /cancel")
     if cancelled:
@@ -422,7 +463,7 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines = []
 
     if engine.active_positions:
-        lines.append("🟢 **LIVE ACTIVE POSITIONS:**")
+        lines.append("🟢 **IN-PROCESS ACTIVE POSITIONS:**")
         for sym, p in engine.active_positions.items():
             dir_icon = "🟢 LONG" if p.direction == "LONG" else "🔴 SHORT"
             curr_p = get_price_info(sym).get("mark", p.executed_price or p.entry_level)
@@ -453,7 +494,7 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"  Planned Lots: `{s.lots}` | Leverage: `{s.leverage:.0f}x` | Margin: `${s.margin_required:,.2f}`\n"
                 f"  Targets: TP1 `${s.tp1:,.2f}` | TP2 `${s.tp2:,.2f}`\n"
                 f"  Setup Reason: {s.setup_reason}\n"
-                f"  Status: ⚡ Auto-execute when level is reached"
+                f"  Status: ⚡ Local setup tracker triggers when level is reached"
             )
 
     if not lines:
@@ -471,16 +512,16 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Toggle automated live monitoring and alerts."""
+    """Toggle setup monitoring and alerts; this does not enable live exchange orders."""
     global autotrade_active, background_task
     action = ctx.args[0].lower() if ctx.args else ""
 
     if action in ("on", "start", "enable"):
         autotrade_active = True
-        msg = "🟢 **Autotrade Monitoring ENABLED**\nThe bot is now monitoring market candles in the background and will dispatch real-time trade signals to this chat!"
+        msg = "🟢 **Monitoring ENABLED**\nThe bot will scan market data and report setups. This build's monitoring toggle does not authorize live exchange orders."
     elif action in ("off", "stop", "disable"):
         autotrade_active = False
-        msg = "⚪ **Autotrade Monitoring DISABLED**\nBackground scanning paused. You can still use `/signal` for on-demand analysis."
+        msg = "⚪ **Monitoring DISABLED**\nNew setup scanning is paused. Existing in-process positions continue to be monitored."
     else:
         status_text = "ENABLED 🟢" if autotrade_active else "DISABLED ⚪"
         msg = f"Autotrade monitoring is currently **{status_text}**.\nUse `/autotrade on` or `/autotrade off` to toggle."
@@ -571,6 +612,20 @@ async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, parse_mode="Markdown")
 
 
+async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show monitoring freshness and recent error count."""
+    health = health_from_snapshot(monitoring_health)
+    age = health.get("last_success_age_seconds")
+    age_text = "never" if age is None else f"{int(age)} seconds ago"
+    reasons = "; ".join(health.get("reasons", [])) or "No health warnings"
+    await update.message.reply_text(
+        f"Health: {health['status'].upper()}\n"
+        f"Last successful market-data poll: {age_text}\n"
+        f"Consecutive errors: {monitoring_health['consecutive_errors']}\n"
+        f"Details: {reasons}"
+    )
+
+
 async def reset_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Clear conversation history."""
     gemini.reset(update.effective_chat.id)
@@ -608,12 +663,17 @@ async def live_monitoring_worker(app):
     feed = MarketDataFeed(symbol=config.DEFAULT_SYMBOL, source=config.DEFAULT_DATA_SOURCE)
     symbol = config.DEFAULT_SYMBOL
 
+    _write_runtime_status()
     while True:
+        monitoring_health["last_poll_at"] = _now_iso()
         try:
             # Continue monitoring existing positions even when new entries are disabled.
             if True:
                 data = feed.multi_tf(limit_1m=500)
                 if data and "1m" in data and not data["1m"].empty:
+                    monitoring_health["last_success_at"] = _now_iso()
+                    monitoring_health["last_error"] = None
+                    monitoring_health["consecutive_errors"] = 0
                     df1 = data["1m"]
                     daily = data.get("daily", pd.DataFrame())
                     candle = df1.iloc[-1]
@@ -679,10 +739,16 @@ async def live_monitoring_worker(app):
                                         )
                                     except Exception:
                                         pass
+                else:
+                    monitoring_health["last_error"] = "No market data returned for the monitoring timeframe"
+                    monitoring_health["consecutive_errors"] += 1
 
         except Exception as e:
+            monitoring_health["last_error"] = str(e)
+            monitoring_health["consecutive_errors"] += 1
             logger.error(f"Monitoring worker error: {e}")
 
+        _write_runtime_status()
         # Adaptive polling: fast-track when tracking active trades or pending setups
         sleep_interval = config.FAST_POLL_INTERVAL if (engine.active_positions or engine.pending_setups) else config.POLL_INTERVAL
         await asyncio.sleep(sleep_interval)
@@ -885,6 +951,7 @@ def main():
     app.add_handler(CommandHandler("price", price_command))
     app.add_handler(CommandHandler("signal", signal_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
     app.add_handler(CommandHandler("close", close_command))

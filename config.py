@@ -68,10 +68,19 @@ FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.18)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
-AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
+AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false").lower() in ("true", "1", "yes", "on")
 
 # Broker settings ("paper" or "live")
 BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
+
+# Operations dashboard: local-only by default. A non-loopback bind requires a token.
+STATUS_FILE = os.getenv(
+    "BOT_STATUS_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".runtime", "bot_status.json"),
+)
+DASHBOARD_HOST = os.getenv("BOT_DASHBOARD_HOST", "127.0.0.1")
+DASHBOARD_PORT = _safe_int(os.getenv("BOT_DASHBOARD_PORT"), 8765)
+DASHBOARD_TOKEN = os.getenv("BOT_DASHBOARD_TOKEN", "")
 
 # News settings
 NEWS_ENABLED = os.getenv("BOT_NEWS", "true").lower() in ("true", "1", "yes", "on")
