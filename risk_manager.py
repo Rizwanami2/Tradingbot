@@ -89,10 +89,10 @@ class RiskConfig:
     min_rr: float = 1.5
     max_lot: float = 10.0
     min_lot_override: Optional[float] = None
-    # Leverage System (1x to 500x manually adjustable)
-    leverage: float = 20.0
+    # Conservative configured cap; exchange-side limits must be verified separately.
+    leverage: float = 5.0
     min_leverage: float = 1.0
-    max_leverage: float = 500.0
+    max_leverage: float = 20.0
     max_margin_utilization_pct: float = 85.0
     # RF (Risk Factor) – master multiplier for risk & BE sensitivity
     # 1.0 = normal | <1 safer | >1 more aggressive
@@ -172,7 +172,7 @@ class RiskManager:
         self.profile = INSTRUMENTS.get(self.symbol, INSTRUMENTS["DEFAULT"])
 
     def set_leverage(self, leverage: float) -> Tuple[bool, str]:
-        """Manually adjust leverage from 1x to 500x."""
+        """Set leverage within the configured conservative bounds (default 1x-20x)."""
         try:
             lev = float(leverage)
         except (ValueError, TypeError):
@@ -182,7 +182,7 @@ class RiskManager:
         self.config.leverage = lev
         self.state.leverage = lev
         self._save_state()
-        warn = " ⚠️ [High Leverage Warning: >50x leaves <1.5% buffer; extreme risk of liquidation!]" if lev > 50.0 else ""
+        warn = " ⚠️ Leverage increases liquidation risk; exchange limits and margin mode must also be verified." if lev > 5.0 else ""
         return True, f"Leverage set to {lev:.0f}x{warn}"
 
     def get_leverage(self) -> float:
