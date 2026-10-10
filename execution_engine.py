@@ -100,6 +100,8 @@ class ExecutionEngine:
         self.active_positions: Dict[str, TradeOrder] = {}
         self.trade_history: List[TradeOrder] = []
         self._order_counter: int = 0
+        # Prevent duplicate orders after any ambiguous broker response.
+        self.execution_halted: bool = False
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -111,6 +113,8 @@ class ExecutionEngine:
         If current market price is already at/past entry level, it executes immediately.
         Otherwise, it stays in PENDING state until price reaches the entry level.
         """
+        if self.execution_halted:
+            raise RuntimeError("Execution halted after uncertain broker state; reconcile positions before re-enabling.")
         symbol = sig["symbol"].upper()
         direction = sig["direction"].name if hasattr(sig["direction"], "name") else str(sig["direction"]).upper()
         entry = float(sig["entry"])
@@ -230,52 +234,57 @@ class ExecutionEngine:
                         exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
 
                 if should_execute:
-                    # Promote from PENDING to OPEN active position
-                    setup.status = OrderStatus.OPEN
-                    setup.executed_at = datetime.now(timezone.utc).isoformat()
-                    setup.executed_price = exec_price
-                    setup.highest_price = exec_price
-                    setup.lowest_price = exec_price
-                    setup.remaining_size = setup.size
-                    setup.remaining_lots = setup.lots
-
-                    self.active_positions[sym] = setup
-                    del self.pending_setups[sym]
-                    just_executed = True
-
-                    if getattr(self, "broker", None):
-                        try:
-                            side = "buy" if setup.direction == "LONG" else "sell"
-                            self.broker.place_order(
-                                symbol=setup.symbol,
-                                side=side,
-                                qty=setup.lots,
-                                price=exec_price,
-                                stop_loss=setup.stop_loss,
-                                take_profit=setup.tp1,
-                            )
-                        except Exception as ex:
-                            print(f"[ExecutionEngine] Broker place_order: {ex}")
-
-                    ev = {
-                        "event": "TRADE_EXECUTED",
-                        "order": setup,
-                        "price": exec_price,
-                        "message": (
-                            f"🚀 **TRADE AUTOMATICALLY EXECUTED**\n"
-                            f"Symbol: `{setup.symbol}` | **{setup.direction}**\n"
-                            f"• Entry: `${exec_price:,.2f}` | Lots: `{setup.lots}`\n"
-                            f"• Leverage: `{setup.leverage:.0f}x` | Margin: `${setup.margin_required:,.2f}`\n"
-                            f"• Stop Loss: `${setup.stop_loss:,.2f}`\n"
-                            f"• Target 1: `${setup.tp1:,.2f}` | Target 2: `${setup.tp2:,.2f}`\n"
-                            f"• Est. Liquidation: `${setup.liquidation_price:,.2f}`"
-                            if setup.liquidation_price
-                            else ""
-                        ),
-                    }
-                    events.append(ev)
-                    self._dispatch_event(ev["event"], setup, ev["message"])
-
+                    # Never create a local OPEN position until the broker confirms a full fill.
+                    try:
+                        if getattr(self, "broker", None) is None:
+                            raise RuntimeError("No broker is configured; refusing local-only execution.")
+                        import config
+                        if getattr(config, "BROKER_MODE", "paper").lower() == "live":
+                            raise RuntimeError("Live entries are blocked until exchange-side SL/TP placement and verification are implemented.")
+                        side = "buy" if setup.direction == "LONG" else "sell"
+                        broker_order = self.broker.place_order(
+                            symbol=setup.symbol, side=side, qty=setup.lots, price=exec_price,
+                            stop_loss=setup.stop_loss, take_profit=setup.tp1,
+                        )
+                        broker_status = str(getattr(broker_order, "status", "")).lower()
+                        filled_qty = float(getattr(broker_order, "filled_qty", 0.0) or 0.0)
+                        actual_price = getattr(broker_order, "filled_price", None)
+                        if broker_status != "filled" or filled_qty + 1e-12 < setup.lots or actual_price is None or float(actual_price) <= 0:
+                            raise RuntimeError(f"Broker fill not confirmed (status={broker_status!r}, filled_qty={filled_qty}).")
+                        exec_price = float(actual_price)
+                    except Exception as ex:
+                        self.execution_halted = True
+                        setup.status = OrderStatus.CANCELLED
+                        setup.close_reason = f"Execution halted; broker state requires reconciliation: {ex}"
+                        setup.closed_at = datetime.now(timezone.utc).isoformat()
+                        self.trade_history.append(setup)
+                        self.pending_setups.pop(sym, None)
+                        ev = {
+                            "event": "BROKER_EXECUTION_FAILED", "order": setup, "price": curr_price,
+                            "message": ("EXECUTION HALTED: broker fill/protection was not confirmed. "
+                                        "No local OPEN position was created. Reconcile exchange orders and positions before restarting. "
+                                        f"Reason: {type(ex).__name__}: {ex}"),
+                        }
+                        events.append(ev)
+                        self._dispatch_event(ev["event"], setup, ev["message"])
+                    else:
+                        setup.status = OrderStatus.OPEN
+                        setup.executed_at = datetime.now(timezone.utc).isoformat()
+                        setup.executed_price = exec_price
+                        setup.highest_price = exec_price
+                        setup.lowest_price = exec_price
+                        setup.remaining_size = setup.size
+                        setup.remaining_lots = setup.lots
+                        self.active_positions[sym] = setup
+                        del self.pending_setups[sym]
+                        just_executed = True
+                        ev = {
+                            "event": "TRADE_EXECUTED", "order": setup, "price": exec_price,
+                            "message": (f"PAPER TRADE CONFIRMED: {setup.symbol} {setup.direction} at {exec_price:.4f}. "
+                                        "Live execution is blocked until exchange-side protection can be verified."),
+                        }
+                        events.append(ev)
+                        self._dispatch_event(ev["event"], setup, ev["message"])
         # ----------------------------------------------------
         # 2. Manage Open Positions
         # ----------------------------------------------------
