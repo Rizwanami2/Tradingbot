@@ -135,6 +135,7 @@ class PaperBroker(Broker):
         self.commission_pct = float(commission_pct)
         self.state_file = Path(state_file) if state_file else None
         self.journal_file = Path(journal_file) if journal_file else None
+        self._initial_balance = float(initial_balance)
         self.balance = float(initial_balance)
         self.equity = float(initial_balance)
         self.positions: Dict[str, Position] = {}
@@ -201,6 +202,7 @@ class PaperBroker(Broker):
             new_qty = current.qty + qty
             current.entry_price = ((current.entry_price * current.qty) + (fill_price * qty)) / new_qty
             current.qty = new_qty
+            self.mark_prices[symbol] = fill_price
             if stop_loss is not None:
                 current.stop_loss = stop_loss
             if take_profit is not None:
@@ -219,6 +221,7 @@ class PaperBroker(Broker):
                 self.mark_prices.pop(symbol, None)
             else:
                 current.qty = remaining
+                self.mark_prices[symbol] = fill_price
 
         self.orders.append(order)
         self._refresh_equity()
@@ -283,7 +286,11 @@ class PaperBroker(Broker):
                 if pos.side == "buy"
                 else (pos.entry_price - mark) * pos.qty
             )
-            pos.unrealized_pnl = unrealized
+            pos.unrealized_pnl = (
+                (mark - pos.entry_price) * pos.qty
+                if pos.side == "buy"
+                else (pos.entry_price - mark) * pos.qty
+            )
         self.equity = self.balance + unrealized
 
     def _persist_state(self) -> None:
@@ -292,6 +299,7 @@ class PaperBroker(Broker):
         import os
         payload = {
             "version": 1,
+            "initial_balance": self._initial_balance,
             "balance": self.balance,
             "equity": self.equity,
             "commission_pct": self.commission_pct,
@@ -327,6 +335,7 @@ class PaperBroker(Broker):
                 payload = json.load(handle)
             if payload.get("version") != 1:
                 raise ValueError("Unsupported paper state version")
+            self._initial_balance = float(payload.get("initial_balance", initial_balance))
             self.balance = float(payload["balance"])
             self.equity = float(payload.get("equity", self.balance))
             self.commission_pct = float(payload.get("commission_pct", self.commission_pct))
