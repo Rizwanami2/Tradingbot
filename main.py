@@ -160,12 +160,12 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Welcome! I am an automated trading and technical analysis bot combining:\n"
         "• **5 Specialized Analysis Agents:** Trend, SMC Liquidity, 10 Indicators, AI-Learner, and Global News.\n"
         "• **Automated Execution Engine:** Limit setup triggers, auto break-even, partials & trailing stops.\n"
-        "• **Dynamic Leverage System (1x - 500x):** Manually adjustable margin management and liquidation protection.\n"
+        "• **Configured leverage cap (1x - 20x):** Manually adjustable margin management and liquidation protection.\n"
         "• **Gemini AI:** Technical analysis, trade planning, and conversational assistance.\n\n"
         "⚡ **Quick Commands:**\n"
         "• `/price [SYMBOL]` — Live ticker (e.g., `/price XAUTUSD`, `/price BTCUSD`)\n"
         "• `/signal [SYMBOL]` — Run 5-agent consensus analysis\n"
-        "• `/leverage [1-500]` — View or manually adjust account leverage\n"
+        "• `/leverage [1-20]` — View or manually adjust account leverage\n"
         "• `/positions` — View active positions & pending setup triggers\n"
         "• `/close [SYMBOL]` — Manually close an active position immediately\n"
         "• `/cancel [SYMBOL]` — Cancel a pending setup order before it executes\n"
@@ -190,7 +190,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• `/news` — Displays upcoming high-impact economic calendar events (FOMC, CPI, NFP) and crypto headlines.\n\n"
         "**Leverage & Trade Execution:**\n"
         "• `/leverage` — View current leverage (1x-500x), margin requirement rate, and lot capacities.\n"
-        "• `/leverage [1-500]` — Manually set leverage (e.g., `/leverage 50`, `/leverage 200`, `/leverage 500`).\n"
+        "• `/leverage [1-20]` — Manually set leverage (e.g., `/leverage 50`, `/leverage 200`, `/leverage 500`).\n"
         "• `/positions` — View active live trades and pending setups waiting for level trigger.\n"
         "• `/close [SYMBOL]` — Manually exit an active trade immediately at current market price.\n"
         "• `/cancel [SYMBOL]` — Cancel a pending setup order before it executes.\n\n"
@@ -313,7 +313,7 @@ async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """View or adjust account leverage (1x to 500x)."""
+    """View or adjust configured leverage (1x to 20x)."""
     if ctx.args:
         try:
             val = float(ctx.args[0])
@@ -352,7 +352,7 @@ async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **XAUUSD (0.01 lot / 1 oz):** `~${gold_margin:,.2f}`\n"
             f"• **BTCUSDT (0.001 BTC):** `~${btc_margin:,.2f}`\n\n"
             f"💡 **To adjust leverage manually:**\n"
-            f"Send `/leverage [1-500]`\n"
+            f"Send `/leverage [1-20]`\n"
             f"Examples: `/leverage 20` | `/leverage 100` | `/leverage 200` | `/leverage 500`"
         )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -642,7 +642,7 @@ def run_cli_interactive():
     print("  TRADING BOT - INTERACTIVE TERMINAL MODE")
     print(f"  Symbol: {config.DEFAULT_SYMBOL} | Equity: ${risk_mgr.state.equity:,.2f}")
     print(f"  Leverage: {risk_mgr.get_leverage():.0f}x (1x-500x) | Autotrade: {'ON' if autotrade_active else 'OFF'}")
-    print("  Commands: /price, /signal, /leverage [1-500], /positions, /close, /autotrade, /status, /risk, /news, /help")
+    print("  Commands: /price, /signal, /leverage [1-20], /positions, /close, /autotrade, /status, /risk, /news, /help")
     print("  Type 'exit' to quit.")
     print(f"{'='*64}\n")
 
@@ -664,7 +664,7 @@ def run_cli_interactive():
                 print("\nAvailable commands:")
                 print("  /price [SYM]      - Live ticker from TradingView")
                 print("  /signal [SYM]     - Multi-agent consensus analysis")
-                print("  /leverage [1-500] - View or adjust leverage (1x to 500x)")
+                print("  /leverage [1-20] - View or adjust leverage (1x to 500x)")
                 print("  /positions        - View open positions and pending level triggers")
                 print("  /close [SYM]      - Manually exit an open trade")
                 print("  /cancel [SYM]     - Cancel a pending setup order")
