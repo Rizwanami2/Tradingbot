@@ -123,8 +123,10 @@ class DataFeed:
         except Exception as e:
             print(f"[DataFeed] yfinance error: {e}")
 
-        # 3. Fallback synthetic (last resort)
-        return self._demo(limit)
+        # Synthetic candles are permitted only when explicitly requested.
+        if self.source == "demo":
+            return self._demo(limit)
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
     def _demo(self, limit: int = 600, base: float = 2650.0) -> pd.DataFrame:
         dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq="1min")
