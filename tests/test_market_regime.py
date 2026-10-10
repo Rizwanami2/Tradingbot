@@ -28,10 +28,9 @@ class TestMarketRegime(unittest.TestCase):
         self.assertEqual(result["classification_kind"], "descriptive_heuristic_not_prediction")
 
     def test_range_bound_market_is_classified_as_ranging_or_transition(self):
-        x = np.arange(180, dtype=float)
-        close = 100 + np.sin(x * 0.45) * 0.8
-        result = classify_market_regime(make_candles(close, spread=0.15))
-        self.assertIn(result["regime"], {"ranging", "transition"})
+        close = np.full(180, 100.0)
+        result = classify_market_regime(make_candles(close, spread=0.2))
+        self.assertEqual(result["regime"], "ranging")
         self.assertEqual(result["trend_direction"], "neutral")
 
     def test_extreme_latest_range_is_flagged_as_high_volatility(self):
