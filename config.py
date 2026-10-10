@@ -5,7 +5,7 @@ Loads configuration from environment variables and an optional .env file.
 
 import os
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 
 
 def load_dotenv(env_path: str = ".env"):
@@ -46,26 +46,12 @@ def _safe_float(val: Optional[str], default: float) -> float:
         return default
 
 
-def _parse_user_ids(val: Optional[str]) -> Set[int]:
-    """Parse a comma-separated Telegram user ID allowlist; malformed IDs are ignored."""
-    result: Set[int] = set()
-    for item in (val or "").split(","):
-        try:
-            parsed = int(item.strip())
-            if parsed > 0:
-                result.add(parsed)
-        except (ValueError, TypeError):
-            continue
-    return result
-
-
 # Load .env file if present in workspace root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # Telegram settings
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or ""
-TELEGRAM_ALLOWED_USER_IDS = _parse_user_ids(os.getenv("TELEGRAM_ALLOWED_USER_IDS"))
 
 # Gemini AI settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
