@@ -1,8 +1,7 @@
 """
 Best-tier Telegram command pack
 ===============================
-Drop-in handlers for advanced features. Register with:
-
+Register:
     from telegram_advanced import register_all_advanced
     register_all_advanced(app)
 
@@ -10,14 +9,13 @@ Commands:
   /performance
   /kill [on|off]
   /profile [name]
-  /asignal [SYMBOL]     — full AdvancedEngine evaluation
-  /abacktest [bars] [mode] [symbol]
-        modes: single | walkforward | montecarlo | multiagent | sweep
+  /asignal [SYMBOL] [profile]
+  /abacktest [bars] [SYMBOL]     ← AUTO full suite (default)
+  /abacktest [bars] [mode] [SYMBOL]  optional single mode override
 """
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
@@ -25,6 +23,8 @@ from telegram.ext import ContextTypes, CommandHandler
 import config
 
 logger = logging.getLogger("TelegramAdvanced")
+
+_MODES = {"single", "walkforward", "montecarlo", "multiagent", "sweep", "wf", "mc", "auto", "full", "all"}
 
 
 async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -78,10 +78,9 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Full AdvancedEngine evaluation."""
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     profile = ctx.args[1].lower() if len(ctx.args) > 1 else "balanced"
-    await update.message.reply_text(f"⏳ Advanced eval **{sym}** (profile `{profile}`)...", parse_mode="Markdown")
+    await update.message.reply_text(f"⏳ Advanced eval **{sym}** (`{profile}`)...", parse_mode="Markdown")
     try:
         from advanced_integration import AdvancedEngine
         eng = AdvancedEngine(symbol=sym, profile=profile)
@@ -114,48 +113,76 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"\n🎯 **SETUP {dname}**\n"
             f"• Entry `${sig.get('entry', 0):,.2f}` | SL `${sig.get('stop', 0):,.2f}`\n"
             f"• TP1 `${sig.get('tp1', 0):,.2f}` | TP2 `${sig.get('tp2', 0):,.2f}`\n"
-            f"• Lots `{sig.get('lots')}` | Lev `{sig.get('leverage', 1):.0f}x` | Margin `${sig.get('margin_required', 0):,.2f}`\n"
-            f"• R:R `1:{sig.get('rr', 0):.1f}` | Profile `{sig.get('profile')}` | Regime `{sig.get('regime')}`\n"
+            f"• Lots `{sig.get('lots')}` | Lev `{sig.get('leverage', 1):.0f}x`\n"
+            f"• R:R `1:{sig.get('rr', 0):.1f}` | `{sig.get('profile')}` / `{sig.get('regime')}`\n"
         )
     else:
         box = "\n🛡️ **No trade** — blocked or no consensus.\n"
 
     msg = (
-        f"📊 **Advanced Signal — {sym}**\n"
-        f"Mark `${price:,.2f}`\n"
+        f"📊 **Advanced Signal — {sym}**\nMark `${price:,.2f}`\n"
         + (" | ".join(meta) + "\n" if meta else "")
         + "\n**Votes:**\n" + "\n".join(lines)
-        + f"\n\n⚡ `{res.get('status')}`\n"
-        + box
+        + f"\n\n⚡ `{res.get('status')}`\n" + box
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    /abacktest [bars] [mode] [symbol]
-    modes: single | walkforward | montecarlo | multiagent | sweep
+    Default: full AUTO suite (all modes in one report).
+
+    /abacktest
+    /abacktest 2000
+    /abacktest 2000 XAUUSD
+    /abacktest 2000 walkforward XAUUSD   ← optional single-mode override
     """
-    bars = 1500
-    mode = "single"
+    bars = 2000
+    mode = "auto"
     symbol = config.DEFAULT_SYMBOL
     args = list(ctx.args or [])
+
     if args and args[0].isdigit():
         bars = int(args.pop(0))
-    if args and args[0].lower() in ("single", "walkforward", "montecarlo", "multiagent", "sweep", "wf", "mc"):
+    if args and args[0].lower() in _MODES:
         mode = args.pop(0).lower()
-        if mode == "wf":
+        if mode in ("wf",):
             mode = "walkforward"
-        if mode == "mc":
+        if mode in ("mc",):
             mode = "montecarlo"
+        if mode in ("full", "all"):
+            mode = "auto"
     if args:
         symbol = args[0].upper()
 
-    await update.message.reply_text(
-        f"⏳ Advanced backtest `{mode}` — {symbol} — {bars} bars...\n_This may take a moment._",
-        parse_mode="Markdown",
-    )
+    if mode == "auto":
+        await update.message.reply_text(
+            f"⏳ **Auto backtest suite** — `{symbol}` — {bars} bars\n"
+            f"Running: single + multiagent + walk-forward + Monte Carlo + sweep…",
+            parse_mode="Markdown",
+        )
+        try:
+            from auto_backtest import run_auto_backtest
+            report = run_auto_backtest(
+                symbol=symbol,
+                bars=bars,
+                source=getattr(config, "DEFAULT_DATA_SOURCE", "demo"),
+                equity=getattr(config, "INITIAL_EQUITY", 10000.0),
+                risk=max(0.001, getattr(config, "DEFAULT_RISK_PCT", 0.18) / 100.0),
+                mc_runs=300,
+                wf_windows=4,
+                do_sweep=True,
+            )
+            text = report.text(max_len=3800)
+            await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
+        except Exception as e:
+            logger.exception("auto backtest failed")
+            await update.message.reply_text(f"Auto backtest error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
+        return
 
+    # Single-mode override (legacy)
+    await update.message.reply_text(
+        f"⏳ Backtest `{mode}` — {symbol} — {bars} bars…", parse_mode="Markdown")
     try:
         from advanced_backtest import (
             load_data, SimConfig, AdvancedSimulator, ema_cross_signal,
@@ -169,27 +196,20 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sim = AdvancedSimulator(cfg)
 
         if mode == "walkforward":
-            wf = walk_forward(df, ema_cross_signal, n_windows=4, cfg=cfg, symbol=symbol)
-            text = wf.summary()
+            text = walk_forward(df, ema_cross_signal, n_windows=4, cfg=cfg, symbol=symbol).summary()
         elif mode == "montecarlo":
             m, trades, _ = sim.run(df, ema_cross_signal, symbol)
             mc = monte_carlo_from_trades(trades, initial_equity=cfg.initial_equity, n_runs=400)
             text = m.summary() + mc.summary()
         elif mode == "multiagent":
-            m, trades, _ = sim.run(df, multiagent_proxy_signal, symbol)
-            text = m.summary()
+            text = sim.run(df, multiagent_proxy_signal, symbol)[0].summary()
         elif mode == "sweep":
             table = parameter_sweep(df, cfg=cfg, symbol=symbol)
-            text = "Parameter sweep (top 10 by Sharpe):\n```\n" + table.head(10).to_string(index=False) + "\n```"
+            text = "Sweep top 10:\n" + table.head(10).to_string(index=False)
         else:
             m, trades, _ = sim.run(df, ema_cross_signal, symbol)
             text = m.summary()
-            if trades:
-                text += "\nRecent trades:\n"
-                for t in trades[-5:]:
-                    text += f"• {t.direction} R={t.r_multiple:+.2f} PnL={t.pnl:+.2f} ({t.reason})\n"
 
-        # Telegram message limit ~4096
         if len(text) > 4000:
             text = text[:3900] + "\n…(truncated)"
         await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
@@ -204,4 +224,6 @@ def register_all_advanced(application) -> None:
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("asignal", asignal_command))
     application.add_handler(CommandHandler("abacktest", abacktest_command))
-    logger.info("Registered: /performance /kill /profile /asignal /abacktest")
+    # Alias: /backtest advanced path if user prefers one name
+    application.add_handler(CommandHandler("backtestall", abacktest_command))
+    logger.info("Registered: /performance /kill /profile /asignal /abacktest /backtestall")
