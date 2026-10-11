@@ -4,17 +4,11 @@ Best-tier Telegram command pack
 Register:
     from telegram_advanced import register_all_advanced
     register_all_advanced(app)
-    from telegram_feature_pack import register_feature_pack
-    register_feature_pack(app)
 
 Commands:
-  /performance
-  /kill [on|off]
-  /profile [name]
-  /asignal [SYMBOL] [profile]
-  /abacktest [bars] [SYMBOL]     ← AUTO full suite (default)
-  /abacktest [bars] [mode] [SYMBOL]  optional single mode override
-  (+ Feature Pack: /board /journal /agents /tiers)
+  /performance /kill /profile /asignal /abacktest
+  (+ FP3: /board /journal /agents /tiers)
+  (+ FP4: /digest /replay /export /setups /abooks /quality /heal)
 """
 from __future__ import annotations
 
@@ -134,11 +128,6 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Default: full AUTO suite (all modes in one report).
-
-    /abacktest
-    /abacktest 2000
-    /abacktest 2000 XAUUSD
-    /abacktest 2000 walkforward XAUUSD   ← optional single-mode override
     """
     bars = 2000
     mode = "auto"
@@ -183,7 +172,6 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Auto backtest error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
         return
 
-    # Single-mode override (legacy)
     await update.message.reply_text(
         f"⏳ Backtest `{mode}` — {symbol} — {bars} bars…", parse_mode="Markdown")
     try:
@@ -228,10 +216,17 @@ def register_all_advanced(application) -> None:
     application.add_handler(CommandHandler("asignal", asignal_command))
     application.add_handler(CommandHandler("abacktest", abacktest_command))
     application.add_handler(CommandHandler("backtestall", abacktest_command))
-    # Also try to register Feature Pack if available
     try:
         from telegram_feature_pack import register_feature_pack
         register_feature_pack(application)
     except Exception as e:
-        logger.debug("Feature Pack not registered here: %s", e)
-    logger.info("Registered: /performance /kill /profile /asignal /abacktest /backtestall (+ feature pack if present)")
+        logger.debug("Feature Pack v3 not registered: %s", e)
+    try:
+        from telegram_feature_pack_v4 import register_feature_pack_v4
+        register_feature_pack_v4(application)
+    except Exception as e:
+        logger.debug("Feature Pack v4 not registered: %s", e)
+    logger.info(
+        "Registered: /performance /kill /profile /asignal /abacktest "
+        "+ FP3 (/board /journal /agents /tiers) + FP4 (/digest /replay /export /setups /abooks /quality /heal)"
+    )
