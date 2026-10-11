@@ -3,8 +3,8 @@
 MULTI-AGENT TRADING BOT
 =======================
 Institutional multi-agent algorithmic trading engine.
-Integrates improved modules (data_feed, ai_learner, news_agent) when available,
-with graceful fallback to embedded implementations.
+Integrates improved modules (data_feed, ai_learner, news_agent, smc_liquidity,
+session_filter, market_regime) when available, with graceful fallback.
 
 Compatible with Python 3.8+.
 """
@@ -45,6 +45,25 @@ try:
     from news_agent import NewsAgent as _ImprovedNewsAgent
 except ImportError:
     _ImprovedNewsAgent = None
+
+try:
+    from smc_liquidity import best_smc_vote, StructureDir as SMCDir
+    _HAS_SMC = True
+except ImportError:
+    _HAS_SMC = False
+    SMCDir = None
+
+try:
+    from session_filter import is_tradeable_session
+    _HAS_SESSION = True
+except ImportError:
+    _HAS_SESSION = False
+
+try:
+    from market_regime import classify_market_regime
+    _HAS_REGIME = True
+except ImportError:
+    _HAS_REGIME = False
 
 MEMORY_FILE = "multi_agent_memory.json"
 
@@ -230,10 +249,28 @@ class TrendAgent:
 
 
 class LiquidityAgent:
+    """Advanced SMC Liquidity Agent – uses smc_liquidity when available."""
     name = "LIQUIDITY"
+
     def vote(self, df: pd.DataFrame, daily: pd.DataFrame) -> Vote:
-        if len(df) < 14 or len(daily) < 2:
+        if len(df) < 14:
             return Vote(self.name, Dir.FLAT, 0.0, "Insufficient data")
+
+        # Prefer full SMC engine
+        if _HAS_SMC:
+            try:
+                direction, strength, reason = best_smc_vote(df, daily if daily is not None and not daily.empty else None)
+                if direction == SMCDir.BULLISH:
+                    return Vote(self.name, Dir.LONG, float(strength), reason)
+                if direction == SMCDir.BEARISH:
+                    return Vote(self.name, Dir.SHORT, float(strength), reason)
+                return Vote(self.name, Dir.FLAT, 0.0, reason or "No SMC setup")
+            except Exception as e:
+                print(f"[Liquidity] SMC engine notice: {e}")
+
+        # Fallback: original PDH/PDL + simple BOS
+        if daily is None or len(daily) < 2:
+            return Vote(self.name, Dir.FLAT, 0.0, "Insufficient daily data")
         pdh = float(daily.iloc[-2]["high"])
         pdl = float(daily.iloc[-2]["low"])
         prev, curr = df.iloc[-2], df.iloc[-1]
@@ -291,8 +328,7 @@ class AILearnerAgent:
     def predict(self, df: pd.DataFrame, horizon: int = 22):
         if len(df) < 60:
             return Dir.FLAT, 0.5, 0.0
-        c = df["close"].values
-        return Dir.FLAT, 0.5, 0.0  # simplified fallback
+        return Dir.FLAT, 0.5, 0.0
     def vote(self, df: pd.DataFrame) -> Vote:
         d, conf, _ = self.predict(df)
         if d == Dir.FLAT or conf < self.memory["min_conf"]:
@@ -317,14 +353,26 @@ class NewsAgent:
 
 
 class Arbiter:
+    """Weighted, regime-aware, session-aware consensus engine."""
     MIN_AGREEMENT = 3
     MIN_SCORE = 1.8
     MIN_RR = 1.9
 
-    def __init__(self):
+    # Base weights – Liquidity & Trend are more important than pure indicators
+    WEIGHTS = {
+        "TREND": 1.25,
+        "LIQUIDITY": 1.40,
+        "INDICATORS": 1.00,
+        "AI-LEARNER": 0.90,
+        "NEWS": 0.70,
+    }
+
+    def __init__(self, require_killzone: bool = False, allow_asian: bool = False):
         self.trend = TrendAgent()
         self.liq = LiquidityAgent()
         self.ind = IndicatorAgent()
+        self.require_killzone = require_killzone
+        self.allow_asian = allow_asian
         if _ImprovedAILearner is not None:
             self.ai = _ImprovedAILearner()
             print("[MultiAgent] Using improved ai_learner.AILearnerAgent")
@@ -337,9 +385,40 @@ class Arbiter:
         else:
             self.news = NewsAgent(enabled=getattr(config, "NEWS_ENABLED", True),
                                  window_min=getattr(config, "NEWS_WINDOW_MIN", 30))
+        if _HAS_SMC:
+            print("[MultiAgent] Advanced SMC Liquidity engine active")
+        if _HAS_SESSION:
+            print("[MultiAgent] Session/Killzone filter active")
+        if _HAS_REGIME:
+            print("[MultiAgent] Market regime classifier active")
 
     def decide(self, df1, df5, df15, df1h, daily, risk, news=None, symbol="XAUUSD"):
-        ts = df1.index[-1]
+        ts = df1.index[-1] if hasattr(df1.index[-1], "to_pydatetime") else datetime.now(timezone.utc)
+
+        # 1. Session filter
+        if _HAS_SESSION:
+            ok, session_reason = is_tradeable_session(ts, require_killzone=self.require_killzone, allow_asian=self.allow_asian)
+            if not ok:
+                return None, f"SESSION VETO: {session_reason}", []
+
+        # 2. Regime adjustment
+        min_score = self.MIN_SCORE
+        min_agree = self.MIN_AGREEMENT
+        regime_name = "unknown"
+        if _HAS_REGIME:
+            try:
+                regime = classify_market_regime(df1)
+                regime_name = regime.get("regime", "unknown")
+                if regime_name == "ranging":
+                    min_score = 2.4          # stricter in ranges
+                    min_agree = 4
+                elif regime_name == "high_volatility":
+                    min_score = 2.1
+                elif regime_name == "trending":
+                    min_score = 1.6          # slightly more permissive in trends
+            except Exception as e:
+                print(f"[Arbiter] Regime notice: {e}")
+
         active_news = news or self.news
         votes = [
             self.trend.vote(df1, df5, df15, df1h),
@@ -352,15 +431,25 @@ class Arbiter:
             if black:
                 return None, f"VETO: {msg}", votes
             votes.append(active_news.vote())
+
         can_trade, why = risk.can_trade()
         if not can_trade:
             return None, f"RISK VETO: {why}", votes
+
+        # Weighted scoring
         for d in (Dir.LONG, Dir.SHORT):
             aligned = [v for v in votes if v.direction == d]
-            score = sum(v.strength for v in aligned)
-            if len(aligned) >= self.MIN_AGREEMENT and score >= self.MIN_SCORE:
-                return {"direction": d, "score": score, "symbol": symbol}, "TRADE TRIGGERED", votes
-        return None, "No consensus", votes
+            weighted_score = sum(v.strength * self.WEIGHTS.get(v.agent, 1.0) for v in aligned)
+            if len(aligned) >= min_agree and weighted_score >= min_score:
+                return {
+                    "direction": d,
+                    "score": round(weighted_score, 3),
+                    "symbol": symbol,
+                    "regime": regime_name,
+                    "agreement": len(aligned),
+                }, f"TRADE TRIGGERED (regime={regime_name})", votes
+
+        return None, f"No consensus (regime={regime_name})", votes
 
 
 def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance"):
@@ -382,4 +471,7 @@ if __name__ == "__main__":
     print("Multi-Agent Trading Bot loaded.")
     print("Improved modules:", "data_feed" if _ImprovedDataFeed else "embedded",
           "| ai_learner" if _ImprovedAILearner else "| embedded AI",
-          "| news_agent" if _ImprovedNewsAgent else "| embedded News")
+          "| news_agent" if _ImprovedNewsAgent else "| embedded News",
+          "| SMC" if _HAS_SMC else "",
+          "| Session" if _HAS_SESSION else "",
+          "| Regime" if _HAS_REGIME else "")
