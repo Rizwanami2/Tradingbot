@@ -1,87 +1,76 @@
-# Tradingbot — Fully Coded & Complete Feature Set
+# Tradingbot — FULLY CODED & COMPLETE
 
-All advanced modules are implemented **and wired** through `advanced_integration.py`.
+Every advanced feature is implemented as a module **and** wired through a single integration layer.
 
-## Architecture
+## Quick start (complete stack)
 
-```
-AdvancedEngine (advanced_integration.py)
- ├── KillSwitch
- ├── Session filter
- ├── MarketDataFeed
- ├── HTF bias filter
- ├── Arbiter (weighted + regime + SMC Liquidity)
- ├── CVD proxy confirmation
- ├── Volatility-adjusted risk sizing
- ├── Instrument leverage caps
- ├── RiskManager (lots, BE, circuit breakers)
- ├── Portfolio risk (multi-symbol / sector)
- ├── Structure trailing helper
- ├── Strategy profiles
- └── PerformanceTracker
+```bash
+git pull origin main
+pip install -r requirements.txt
+python wire_main.py          # registers /performance /kill /profile + upgrades /signal
+python main.py --cli         # or with TELEGRAM_TOKEN set
 ```
 
-## Modules (all on main)
+## One entry point for everything
 
-| Module | Status |
-|--------|--------|
-| `smc_liquidity.py` | Complete |
-| `session_filter.py` | Complete |
-| `performance_analytics.py` | Complete |
-| `volatility_sizing.py` | Complete |
-| `instrument_limits.py` | Complete |
-| `structure_trailing.py` | Complete |
-| `htf_bias.py` | Complete |
-| `strategy_profiles.py` | Complete |
-| `cvd_proxy.py` | Complete |
-| `portfolio_risk.py` | Complete |
-| `kill_switch.py` | Complete |
-| `advanced_integration.py` | **Full wiring layer** |
-| `multi_agent_trading_bot.py` | SMC + regime Arbiter integrated |
-
-## How to use
-
-### CLI / script
 ```python
 from advanced_integration import AdvancedEngine
 
-eng = AdvancedEngine(equity=10000, symbol="XAUUSD", profile="swing")
+eng = AdvancedEngine(equity=10000, symbol="XAUUSD", profile="gold_only")
 result = eng.evaluate()
+# Applies: kill-switch → session → HTF bias → weighted Arbiter (SMC) → CVD
+#          → vol sizing → instrument leverage cap → portfolio risk → full plan
+
 print(result["status"])
 if result.get("signal"):
     print(result["signal"])
 
 print(eng.performance_report())
+print(eng.kill_status())
+new_stop, why = eng.trail_stop("LONG", entry=2650, current_stop=2640, df=df1)
 ```
 
-### Telegram — register extra commands in main.py
+## Complete module list (all on `main`)
 
-Add near the bottom where handlers are registered:
+| Module | Role | Wired |
+|--------|------|-------|
+| `smc_liquidity.py` | FVG, Order Blocks, equal H/L, PDH/PDL, BOS | LiquidityAgent |
+| `session_filter.py` | London/NY killzones | Arbiter + AdvancedEngine |
+| `market_regime.py` | Trending/ranging/HV | Arbiter thresholds |
+| `performance_analytics.py` | Expectancy, agent stats | `/performance` |
+| `volatility_sizing.py` | ATR-percentile risk scale | AdvancedEngine |
+| `instrument_limits.py` | Gold 50×, Crypto 15–25×, FX 30× | AdvancedEngine |
+| `structure_trailing.py` | Swing-based trail | `eng.trail_stop()` |
+| `htf_bias.py` | Daily/1H alignment gate | AdvancedEngine |
+| `strategy_profiles.py` | balanced/scalp/swing/gold_only/crypto | AdvancedEngine |
+| `cvd_proxy.py` | Volume-delta confirmation | AdvancedEngine votes |
+| `portfolio_risk.py` | Multi-symbol / sector caps | AdvancedEngine |
+| `kill_switch.py` | Manual/DD/loss/file kill | AdvancedEngine + `/kill` |
+| `advanced_integration.py` | **Full facade** | All of the above |
+| `wire_main.py` | Auto-patch Telegram handlers | Run once |
 
-```python
-from advanced_integration import register_advanced_commands
-# after ApplicationBuilder and other handlers:
-register_advanced_commands(application)
-```
+## Telegram commands (after `python wire_main.py`)
 
-New commands:
-- `/performance` — expectancy, win rate, agent contribution
-- `/kill on|off` — activate/deactivate kill switch
-- `/profile [name]` — show strategy profile (balanced/scalp/swing/gold_only/crypto)
+| Command | Action |
+|---------|--------|
+| `/signal [SYM]` | Full advanced evaluation |
+| `/performance` | Win rate, expectancy, agent contribution |
+| `/kill on\|off` | Kill switch |
+| `/profile [name]` | Show profile settings |
 
-### Live evaluate with all filters
-```python
-from advanced_integration import AdvancedEngine
-eng = AdvancedEngine(profile="gold_only")
-print(eng.evaluate("XAUUSD"))
-```
+## Safety stack (always on in AdvancedEngine)
 
-## Safety defaults
-- Instrument leverage caps enforced (Gold 50×, Crypto 15–25×, FX 30×)
-- Kill switch on drawdown / loss streak / file flag
-- Session + killzone gating
-- HTF bias must align (strict mode)
-- Portfolio sector + total risk limits
-- Volatility shrinks size in high ATR regimes
+1. Kill switch (drawdown / consecutive losses / `.kill_switch` file)
+2. Session / killzone filter
+3. Higher-timeframe bias must align (strict profiles)
+4. Weighted multi-agent consensus + SMC liquidity
+5. CVD confirmation (informational vote)
+6. Volatility shrinks size in high ATR
+7. Instrument max leverage enforced
+8. Portfolio total + sector risk limits
+
+## Not exchange-live yet
+
+Live exchange order placement with verified SL/TP remains intentionally restricted until reconciliation is finished. Paper / monitoring modes are fully supported.
 
 Educational use only. Trading involves substantial risk of loss.
