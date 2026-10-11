@@ -4,6 +4,8 @@ Best-tier Telegram command pack
 Register:
     from telegram_advanced import register_all_advanced
     register_all_advanced(app)
+    from telegram_feature_pack import register_feature_pack
+    register_feature_pack(app)
 
 Commands:
   /performance
@@ -12,6 +14,7 @@ Commands:
   /asignal [SYMBOL] [profile]
   /abacktest [bars] [SYMBOL]     ← AUTO full suite (default)
   /abacktest [bars] [mode] [SYMBOL]  optional single mode override
+  (+ Feature Pack: /board /journal /agents /tiers)
 """
 from __future__ import annotations
 
@@ -224,6 +227,11 @@ def register_all_advanced(application) -> None:
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("asignal", asignal_command))
     application.add_handler(CommandHandler("abacktest", abacktest_command))
-    # Alias: /backtest advanced path if user prefers one name
     application.add_handler(CommandHandler("backtestall", abacktest_command))
-    logger.info("Registered: /performance /kill /profile /asignal /abacktest /backtestall")
+    # Also try to register Feature Pack if available
+    try:
+        from telegram_feature_pack import register_feature_pack
+        register_feature_pack(application)
+    except Exception as e:
+        logger.debug("Feature Pack not registered here: %s", e)
+    logger.info("Registered: /performance /kill /profile /asignal /abacktest /backtestall (+ feature pack if present)")

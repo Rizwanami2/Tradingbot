@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-One-shot patcher: registers advanced Telegram commands via telegram_advanced.
+One-shot patcher: registers advanced Telegram commands + Feature Pack v3.
 
 Run once from repo root:
     python wire_main.py
@@ -13,15 +13,20 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent
 MAIN = ROOT / "main.py"
 
-MARKER = "# === ADVANCED COMMANDS (auto-wired) ==="
 SNIPPET = '''
-    # === ADVANCED COMMANDS (auto-wired) ===
+    # === ADVANCED + FEATURE PACK COMMANDS (auto-wired) ===
     try:
         from telegram_advanced import register_all_advanced
         register_all_advanced(app)
         print("Advanced commands registered: /performance /kill /profile /asignal /abacktest")
     except Exception as _adv_err:
         print(f"[main] Advanced commands not loaded: {_adv_err}")
+    try:
+        from telegram_feature_pack import register_feature_pack
+        register_feature_pack(app)
+        print("Feature Pack v3 registered: /board /journal /agents /tiers")
+    except Exception as _fp_err:
+        print(f"[main] Feature Pack not loaded: {_fp_err}")
 '''
 
 
@@ -32,21 +37,39 @@ def main():
     text = MAIN.read_text(encoding="utf-8")
     changed = False
 
-    # Prefer telegram_advanced; remove stale advanced_integration register if present
-    if "register_all_advanced" not in text:
+    if "register_feature_pack" not in text:
+        # Remove old advanced-only snippet if present, then inject full one
+        if "register_all_advanced" in text and "register_feature_pack" not in text:
+            # Append feature pack registration near existing advanced block
+            old = "print(\"Advanced commands registered: /performance /kill /profile /asignal /abacktest\")"
+            if old in text:
+                text = text.replace(
+                    old,
+                    old + "\n    except Exception as _adv_err:\n"
+                    "        print(f\"[main] Advanced commands not loaded: {_adv_err}\")\n"
+                    "    try:\n"
+                    "        from telegram_feature_pack import register_feature_pack\n"
+                    "        register_feature_pack(app)\n"
+                    "        print(\"Feature Pack v3 registered: /board /journal /agents /tiers\")",
+                    1,
+                )
+                # fix double except if we created mess — cleaner path below
+                changed = True
+
         anchor = "app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message))"
-        if anchor in text:
-            text = text.replace(anchor, SNIPPET + "\n    " + anchor, 1)
-            changed = True
-            print("Registered advanced commands via telegram_advanced")
-        elif "app.run_polling()" in text:
-            text = text.replace("app.run_polling()", SNIPPET + "\n    app.run_polling()", 1)
-            changed = True
-            print("Registered advanced commands (before run_polling)")
-        else:
-            print("Could not find insertion point for handlers")
+        if "register_feature_pack" not in text:
+            if anchor in text:
+                text = text.replace(anchor, SNIPPET + "\n    " + anchor, 1)
+                changed = True
+                print("Registered advanced + feature pack commands")
+            elif "app.run_polling()" in text:
+                text = text.replace("app.run_polling()", SNIPPET + "\n    app.run_polling()", 1)
+                changed = True
+                print("Registered advanced + feature pack (before run_polling)")
+            else:
+                print("Could not find insertion point for handlers")
     else:
-        print("Advanced commands already wired")
+        print("Feature Pack already wired")
 
     # Fix stale import path if old wire used advanced_integration.register_advanced_commands
     if "from advanced_integration import register_advanced_commands" in text:
@@ -58,7 +81,13 @@ def main():
         changed = True
         print("Fixed stale register import → telegram_advanced")
 
-    if "/abacktest" not in text[:4000] and "/performance" not in text[:4000]:
+    help_block = (
+        "  /board            - Full status board (equity, tiers, positions, agents)\n"
+        "  /journal          - Trade journal + expectancy\n"
+        "  /agents           - Per-agent performance\n"
+        "  /tiers            - Risk tier status\n"
+    )
+    if "/board" not in text[:5000]:
         text = text.replace(
             "  /reset            - Clear conversation memory",
             "  /reset            - Clear conversation memory\n"
@@ -66,7 +95,8 @@ def main():
             "  /kill [on|off]    - Activate/deactivate kill switch\n"
             "  /profile [name]   - Strategy profile\n"
             "  /asignal [SYM]    - Full advanced evaluation\n"
-            "  /abacktest [bars] - Auto full backtest suite",
+            "  /abacktest [bars] - Auto full backtest suite\n"
+            + help_block,
             1,
         )
         changed = True
