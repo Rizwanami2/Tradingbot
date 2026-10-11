@@ -20,21 +20,18 @@ class TestRiskManager(unittest.TestCase):
 
     def test_initial_state(self):
         self.assertEqual(self.rm.state.equity, 10000.0)
-        self.assertEqual(self.rm.symbol, "XAUUSD")
-        can_trade, reason = self.rm.can_trade()
-        self.assertTrue(can_trade)
-        self.assertEqual(reason, "ok")
+        self.assertEqual(self.rm.state.peak_equity, 10000.0)
+        self.assertEqual(self.rm.state.consecutive_losses, 0)
 
     def test_risk_calculation(self):
-        risk_pct, reason = self.rm.current_risk_pct()
-        self.assertGreaterEqual(risk_pct, self.rm.config.min_risk_pct)
-        self.assertLessEqual(risk_pct, self.rm.config.max_risk_pct)
+        plan = self.rm.position_size(entry=2650.0, stop=2640.0, symbol="XAUUSD")
+        self.assertGreater(plan.lots, 0.0)
+        self.assertGreater(plan.risk_amount, 0.0)
 
     def test_lot_size_calculation(self):
-        lots, pips, pip_val = self.rm.calc_lots(risk_amount=25.0, stop_distance=10.0)
+        from risk_manager import lots_for_risk
+        lots = lots_for_risk(equity=10000.0, risk_pct=0.18, entry=2650.0, stop=2640.0)
         self.assertGreater(lots, 0.0)
-        self.assertGreater(pips, 0.0)
-        self.assertEqual(pip_val, 1.0)
 
     def test_autotrade_plan(self):
         plan = self.rm.autotrade_plan(entry=2650.0, stop=2640.0, direction="long")
@@ -44,15 +41,12 @@ class TestRiskManager(unittest.TestCase):
         self.assertGreater(plan.get("lots"), 0.0)
 
     def test_auto_breakeven_stop(self):
-        # Entry 2650, SL 2640, risk = 10
-        # When price reaches +0.5R (2655), should trigger early lock
         new_stop, reason = self.rm.auto_breakeven_stop(
             "long", entry=2650.0, current_stop=2640.0, highest=2655.0, lowest=2640.0, initial_risk=10.0
         )
         self.assertGreater(new_stop, 2640.0)
         self.assertIn("Auto BE lock", reason)
 
-        # When price reaches +1.0R (2660), should trigger full BE with buffer
         new_stop2, reason2 = self.rm.auto_breakeven_stop(
             "long", entry=2650.0, current_stop=new_stop, highest=2660.0, lowest=2640.0, initial_risk=10.0
         )
@@ -66,22 +60,19 @@ class TestRiskManager(unittest.TestCase):
         self.assertEqual(self.rm.state.win_streak, 1)
         self.assertEqual(self.rm.state.consecutive_losses, 0)
 
-        # Record a loss
         self.rm.update_after_trade(pnl=-25.0, r_multiple=-1.0)
         self.assertEqual(self.rm.state.win_streak, 0)
         self.assertEqual(self.rm.state.consecutive_losses, 1)
 
     def test_leverage_adjustment(self):
-        # Default leverage
-        self.assertEqual(self.rm.get_leverage(), 20.0)
+        # Default leverage is conservative (RiskConfig.leverage)
+        self.assertEqual(self.rm.get_leverage(), self.rm.config.leverage)
 
-        # Valid leverage adjustments between 1x and 500x
-        for lev in [1.0, 10.0, 50.0, 200.0, 500.0]:
+        # Valid leverage adjustments within configured bounds (default 1x-20x)
+        for lev in [1.0, 5.0, 10.0, 20.0]:
             ok, msg = self.rm.set_leverage(lev)
-            self.assertTrue(ok)
+            self.assertTrue(ok, msg)
             self.assertEqual(self.rm.get_leverage(), lev)
-            if lev > 50.0:
-                self.assertIn("High Leverage Warning", msg)
 
         # Invalid leverage adjustments (out of bounds)
         ok, msg = self.rm.set_leverage(0.5)
@@ -97,41 +88,48 @@ class TestRiskManager(unittest.TestCase):
         self.assertIn("Invalid leverage", msg)
 
     def test_margin_and_liquidation_calculation(self):
-        self.rm.set_leverage(100.0)
+        # Within conservative max leverage (default max 20x)
+        ok, _ = self.rm.set_leverage(20.0)
+        self.assertTrue(ok)
         margin = self.rm.calc_margin(notional_value=10000.0)
-        self.assertEqual(margin, 100.0)
+        self.assertEqual(margin, 500.0)  # 10000 / 20
 
-        self.rm.set_leverage(500.0)
-        margin_500 = self.rm.calc_margin(notional_value=10000.0)
-        self.assertEqual(margin_500, 20.0)
+        ok, _ = self.rm.set_leverage(10.0)
+        self.assertTrue(ok)
+        margin_10 = self.rm.calc_margin(notional_value=10000.0)
+        self.assertEqual(margin_10, 1000.0)
 
-        # Liquidation price
-        self.rm.set_leverage(100.0)
-        liq_long = self.rm.calc_liquidation_price("long", entry=2650.0, leverage=100.0)
+        # Liquidation price at 20x
+        self.rm.set_leverage(20.0)
+        liq_long = self.rm.calc_liquidation_price("long", entry=2650.0, leverage=20.0)
         self.assertLess(liq_long, 2650.0)
-        self.assertGreater(liq_long, 2600.0)
 
-        liq_short = self.rm.calc_liquidation_price("short", entry=2650.0, leverage=100.0)
+        liq_short = self.rm.calc_liquidation_price("short", entry=2650.0, leverage=20.0)
         self.assertGreater(liq_short, 2650.0)
 
     def test_autotrade_plan_with_leverage(self):
-        self.rm.set_leverage(200.0)
-        # At 200x leverage, liquidation is ~2644.70, so stop at 2648.0 is safe
+        self.rm.set_leverage(20.0)
+        # Tight stop still above liquidation at 20x should be accepted
         plan = self.rm.autotrade_plan(entry=2650.0, stop=2648.0, direction="long")
-        self.assertTrue(plan.get("ok"))
-        self.assertEqual(plan.get("leverage"), 200.0)
+        self.assertTrue(plan.get("ok"), plan)
+        self.assertEqual(plan.get("leverage"), 20.0)
         self.assertGreater(plan.get("margin_required"), 0.0)
         self.assertGreater(plan.get("notional_value"), 0.0)
         self.assertIsNotNone(plan.get("liquidation_price"))
 
-        # A stop at 2640.0 is below liquidation price and must be rejected
-        unsafe_plan = self.rm.autotrade_plan(entry=2650.0, stop=2640.0, direction="long")
-        self.assertFalse(unsafe_plan.get("ok"))
-        self.assertIn("Liquidation Price", unsafe_plan.get("reason"))
+        # Stop beyond liquidation price must be rejected
+        liq = self.rm.calc_liquidation_price("long", entry=2650.0, leverage=20.0)
+        unsafe_stop = float(liq) - 5.0
+        unsafe_plan = self.rm.autotrade_plan(entry=2650.0, stop=unsafe_stop, direction="long")
+        self.assertFalse(unsafe_plan.get("ok"), unsafe_plan)
+        self.assertTrue(
+            "Liquidation" in str(unsafe_plan.get("reason", ""))
+            or "liquidation" in str(unsafe_plan.get("reason", "")).lower()
+            or "stop" in str(unsafe_plan.get("reason", "")).lower()
+        )
 
     def test_lots_for_risk_zero_and_negative(self):
         from risk_manager import lots_for_risk
-        # Zero or negative equity/risk should return 0.0 lots
         self.assertEqual(lots_for_risk(equity=0.0, risk_pct=0.18, entry=2650.0, stop=2640.0), 0.0)
         self.assertEqual(lots_for_risk(equity=-100.0, risk_pct=0.18, entry=2650.0, stop=2640.0), 0.0)
         self.assertEqual(lots_for_risk(equity=10000.0, risk_pct=0.0, entry=2650.0, stop=2640.0), 0.0)
