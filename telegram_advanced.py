@@ -5,10 +5,7 @@ Register:
     from telegram_advanced import register_all_advanced
     register_all_advanced(app)
 
-Commands:
-  /performance /kill /profile /asignal /abacktest
-  (+ FP3: /board /journal /agents /tiers)
-  (+ FP4: /digest /replay /export /setups /abooks /quality /heal)
+Also starts AutonomousLearner (5y history self-correction) automatically.
 """
 from __future__ import annotations
 
@@ -82,6 +79,34 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         from advanced_integration import AdvancedEngine
         eng = AdvancedEngine(symbol=sym, profile=profile)
         res = eng.evaluate(sym)
+        # Autonomous learned filter (automatic)
+        try:
+            from autonomous_learner import get_brain
+            brain = get_brain(auto_bootstrap=False)
+            sig = res.get("signal") or {}
+            direction = sig.get("direction")
+            dname = direction.name if hasattr(direction, "name") else str(direction or "")
+            ok, reason, mult = brain.advise_signal(
+                direction=dname,
+                score=float(sig.get("score") or 0),
+                rr=float(sig.get("rr") or 0),
+                agreement=len([v for v in (res.get("votes") or []) if str(v.get("direction", "")).upper() in ("LONG", "SHORT")]),
+                conviction=float((sig.get("conviction") or {}).get("score") or 0) if isinstance(sig.get("conviction"), dict) else 0.0,
+                regime=str(sig.get("regime") or ""),
+                setup=f"{dname}|{sig.get('regime')}|{res.get('session')}",
+            )
+            if not ok:
+                res["blocked"] = True
+                res["status"] = reason
+                res["signal"] = None
+            elif sig and mult != 1.0 and sig.get("lots") is not None:
+                try:
+                    sig["lots"] = float(sig["lots"]) * mult
+                    sig["auto_size_mult"] = mult
+                except Exception:
+                    pass
+        except Exception:
+            pass
     except Exception as e:
         await update.message.reply_text(f"Eval failed: `{e}`", parse_mode="Markdown")
         return
@@ -126,9 +151,6 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Default: full AUTO suite (all modes in one report).
-    """
     bars = 2000
     mode = "auto"
     symbol = config.DEFAULT_SYMBOL
@@ -210,6 +232,14 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def register_all_advanced(application) -> None:
+    # Start autonomous brain (5y learn + auto-correct) — no user command needed
+    try:
+        from autonomous_learner import auto_start
+        auto_start()
+        logger.info("Autonomous learner auto-started")
+    except Exception as e:
+        logger.debug("Autonomous learner start skip: %s", e)
+
     application.add_handler(CommandHandler("performance", performance_command))
     application.add_handler(CommandHandler("kill", kill_command))
     application.add_handler(CommandHandler("profile", profile_command))
@@ -226,7 +256,11 @@ def register_all_advanced(application) -> None:
         register_feature_pack_v4(application)
     except Exception as e:
         logger.debug("Feature Pack v4 not registered: %s", e)
+    try:
+        from telegram_brain import register_brain
+        register_brain(application)
+    except Exception as e:
+        logger.debug("Brain commands not registered: %s", e)
     logger.info(
-        "Registered: /performance /kill /profile /asignal /abacktest "
-        "+ FP3 (/board /journal /agents /tiers) + FP4 (/digest /replay /export /setups /abooks /quality /heal)"
+        "Registered advanced + FP3 + FP4 + /brain /relearn; autonomous learner active"
     )
