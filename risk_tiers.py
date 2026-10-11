@@ -31,20 +31,20 @@ class DayBucket:
 
 @dataclass
 class RiskTierConfig:
-    daily_soft_r: float = -1.5      # start reducing size
-    daily_hard_r: float = -2.5      # block new entries for the day
+    daily_soft_r: float = -1.5
+    daily_hard_r: float = -2.5
     weekly_soft_r: float = -4.0
     weekly_hard_r: float = -6.0
-    max_concurrent_r: float = 2.0   # total open risk across all positions
+    max_concurrent_r: float = 2.0
     size_mult_yellow: float = 0.5
 
 
 class RiskTiers:
-    def __init__(self, cfg: Optional[RiskTiersConfig] = None, path: str = STATE_FILE):
-        self.cfg = cfg or RiskTiersConfig()
+    def __init__(self, cfg: Optional[RiskTierConfig] = None, path: str = STATE_FILE):
+        self.cfg = cfg or RiskTierConfig()
         self.path = path
         self.history: Dict[str, DayBucket] = {}
-        self.open_risk_r: Dict[str, float] = {}  # trade_id → risk in R (usually 1.0)
+        self.open_risk_r: Dict[str, float] = {}
         self._load()
 
     def _today(self) -> str:
@@ -110,10 +110,6 @@ class RiskTiers:
         return sum(self.open_risk_r.values())
 
     def status(self) -> Tuple[str, str, float]:
-        """
-        Returns (tier, reason, size_multiplier)
-        tier: GREEN | YELLOW | ORANGE | RED
-        """
         daily = self.daily_pnl_r()
         weekly = self.weekly_pnl_r()
         conc = self.concurrent_r()

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from trade_journal import TradeJournal
 from position_manager import PositionManager
-from risk_tiers import RiskTiers, RiskTiersConfig
+from risk_tiers import RiskTiers, RiskTierConfig
 from agent_stats import AgentStats
 from state_persistence import StateStore
 
@@ -120,7 +120,6 @@ class FeaturePack:
                 r_multiple=float(rec.get("r_multiple") or 0),
                 won=bool(rec.get("won")),
             )
-            # update equity if paper
             if self.paper_mode and rec.get("pnl") is not None:
                 self.equity += float(rec["pnl"])
                 self.state.set_equity(self.equity)
@@ -146,9 +145,7 @@ class FeaturePack:
             })
         self.state.set_open_positions(opens)
 
-    # ---------- reporting ----------
     def board(self) -> str:
-        """One-command status board for Telegram /board"""
         exp = self.journal.expectancy()
         tier_line = self.risk_tiers.telegram_line()
         agent_line = self.agent_stats.telegram_report()
