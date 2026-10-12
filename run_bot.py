@@ -40,6 +40,12 @@ def main() -> None:
     except Exception as e:
         print("[run_bot] multitrade:", e)
 
+    try:
+        import wire_gautam
+        wire_gautam.main()
+    except Exception as e:
+        print("[run_bot] gautam:", e)
+
     main_py = ROOT / "main.py"
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")
