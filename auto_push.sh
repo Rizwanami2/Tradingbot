@@ -21,6 +21,7 @@ msg="${1:-Auto commit after task completion}"
 git add .
 
 # Commit if there are changes
+export GIT_AUTO_PUSHING=1
 if git diff-index --quiet HEAD -- 2>/dev/null; then
     echo "[AutoPush] Working tree clean, no new changes to commit."
 else
@@ -29,5 +30,9 @@ fi
 
 # Push to origin
 echo "[AutoPush] Pushing branch '$branch' to GitHub..."
-GIT_TERMINAL_PROMPT=0 git push origin "$branch"
-echo "[AutoPush] Successfully pushed to origin/$branch!"
+if GIT_TERMINAL_PROMPT=0 git push origin "$branch"; then
+    echo "[AutoPush] Successfully pushed to origin/$branch!"
+else
+    echo "[AutoPush] Push failed. Make sure GITHUB_TOKEN is set in .env or your environment."
+    exit 1
+fi
