@@ -90,3 +90,14 @@ NEWS_WINDOW_MIN = _safe_int(os.getenv("BOT_NEWS_WINDOW"), 30)
 DELTA_API = os.getenv("DELTA_API", "https://api.india.delta.exchange/v2/tickers")
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
+
+# Concurrent autotrade limits
+MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 5)
+# Comma-separated symbols to autotrade (max concurrent still MAX_OPEN_TRADES)
+_AUTOTRADE_SYMBOLS_RAW = os.getenv(
+    "BOT_AUTOTRADE_SYMBOLS",
+    "BTCUSDT,ETHUSDT,XAUUSD,SOLUSDT,BNBUSDT",
+)
+AUTOTRADE_SYMBOLS = [
+    s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip()
+] or [DEFAULT_SYMBOL]
