@@ -166,24 +166,15 @@ def fetch_tradingview_quote(symbol: str = "XAUUSD") -> Dict:
     except Exception:
         pass
 
-    # 3. Fallback quote
-    base = 4194.50 if "XAU" in symbol.upper() else (82800.0 if "BTC" in symbol.upper() else 100.0)
+    # Fail closed: do not expose a placeholder price as a quote.
     return {
         "ok": False,
         "symbol": symbol.upper(),
         "tv_symbol": f"{exchange}:{tv_symbol}",
         "exchange": exchange,
         "screener": screener,
-        "mark": base,
-        "close": base,
-        "open": base,
-        "high": base * 1.002,
-        "low": base * 0.998,
-        "volume": 0.0,
-        "change_pct": 0.0,
-        "recommendation": "NEUTRAL",
-        "rsi": 50.0,
-        "source": "TradingView (Offline Cache)",
+        "error": "TradingView quote unavailable",
+        "source": "unavailable",
     }
 
 
@@ -251,43 +242,12 @@ def _fetch_real_ohlcv(symbol: str, limit: int = 600) -> Optional[pd.DataFrame]:
 
 
 def fetch_tradingview_bars(symbol: str = "XAUUSD", limit: int = 600) -> pd.DataFrame:
-    """
-    Fetches real live multi-timeframe candles when available, anchored to
-    the live ticker quote. Falls back to realistic anchored generator if offline.
-    """
-    quote = fetch_tradingview_quote(symbol)
-    base_price = float(quote.get("mark", 2650.0))
+    """Fetch real 1-minute OHLCV bars or return an empty frame when unavailable.
 
-    # 1. Try real live market candles from public exchange
+    This provider intentionally does not synthesize historical candles. Callers
+    must treat an empty result as unavailable market data.
+    """
     real_df = _fetch_real_ohlcv(symbol, limit=limit)
-    if real_df is not None and len(real_df) >= 10:
-        # Align most recent candle close to live mark if quote is verified
-        if quote.get("ok"):
-            real_df.iloc[-1, real_df.columns.get_loc("close")] = base_price
-            real_df.iloc[-1, real_df.columns.get_loc("high")] = max(real_df.iloc[-1]["high"], base_price)
-            real_df.iloc[-1, real_df.columns.get_loc("low")] = min(real_df.iloc[-1]["low"], base_price)
-        return real_df.tail(limit)
-
-    # 2. Fallback: realistic anchored synthetic candles
-    dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq="1min")
-    noise = np.random.randn(limit) * (base_price * 0.0003)
-    p = base_price + np.cumsum(noise)
-    highs = p + np.random.uniform(0.1, base_price * 0.0005, limit)
-    lows = p - np.random.uniform(0.1, base_price * 0.0005, limit)
-    closes = p + np.random.randn(limit) * (base_price * 0.0001)
-    volumes = np.random.randint(50, 1500, limit)
-
-    # Ensure valid candlestick geometry across all bars
-    highs = np.maximum(highs, np.maximum(p, closes))
-    lows = np.minimum(lows, np.minimum(p, closes))
-
-    # Ensure the most recent candle matches the live TradingView mark price
-    closes[-1] = base_price
-    highs[-1] = max(highs[-1], base_price)
-    lows[-1] = min(lows[-1], base_price)
-
-    return pd.DataFrame(
-        {"open": p, "high": highs, "low": lows, "close": closes, "volume": volumes},
-        index=dates,
-    )
-
+    if real_df is None or real_df.empty:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    return real_df.tail(limit).copy()
