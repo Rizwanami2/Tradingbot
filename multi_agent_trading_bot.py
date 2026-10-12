@@ -143,26 +143,32 @@ class MarketDataFeed:
             return {"ok": False, "mark": 0.0, "error": "no price"}
 
     def fetch(self, limit: int = 600, timeframe: Optional[str] = None) -> pd.DataFrame:
-        if self._improved is not None:
-            try:
-                df = self._improved.fetch(limit=limit, timeframe=timeframe or "1m")
-                if df is not None and not df.empty:
-                    return df
-            except Exception:
-                pass
+        tf = timeframe or "1m"
+        empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        # Synthetic candles are allowed only when demo mode is explicitly selected.
         if self.source == "demo":
             return self._demo(limit)
-        try:
-            from tradingview_feed import fetch_tradingview_bars
-            raw = fetch_tradingview_bars(self.symbol, timeframe or "1", limit)
-            if raw:
-                df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-                df = df.set_index("timestamp")
-                return df
-        except Exception:
-            pass
-        return self._demo(limit)
+
+        if self._improved is not None:
+            try:
+                df = self._improved.fetch(limit=limit, timeframe=tf)
+                if df is not None and not df.empty:
+                    return df.sort_index().loc[lambda x: ~x.index.duplicated(keep="last")]
+            except Exception as exc:
+                print(f"[MultiAgent] DataFeed {tf} fetch failed: {exc}")
+
+        # The TradingView fallback provides real 1m bars only. Never pass a
+        # timeframe as a positional argument (the provider does not accept it),
+        # and never reuse 1m bars as if they were native higher-timeframe data.
+        if tf == "1m":
+            try:
+                from tradingview_feed import fetch_tradingview_bars
+                df = fetch_tradingview_bars(self.symbol, limit=limit)
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    return df.sort_index().loc[lambda x: ~x.index.duplicated(keep="last")]
+            except Exception as exc:
+                print(f"[MultiAgent] TradingView 1m fetch failed: {exc}")
+        return empty
 
     def _demo(self, limit: int = 600, base_price: float = 2650.0) -> pd.DataFrame:
         dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq="1min")
@@ -176,17 +182,45 @@ class MarketDataFeed:
         return pd.DataFrame({"open": p, "high": highs, "low": lows, "close": closes, "volume": volumes}, index=dates)
 
     def multi_tf(self, limit_1m: int = 700) -> Dict[str, pd.DataFrame]:
-        df1 = self.fetch(limit=limit_1m, timeframe="1m")
-        out = {"1m": df1}
-        for tf, rule in [("5m", "5min"), ("15m", "15min"), ("1h", "1h")]:
+        """Load native timeframes; only explicit demo mode resamples synthetic candles."""
+        if self.source == "demo":
+            df1 = self.fetch(limit=limit_1m, timeframe="1m")
+            out = {"1m": df1}
+            for tf, rule in [("5m", "5min"), ("15m", "15min"), ("1h", "1h"), ("4h", "4h")]:
+                try:
+                    out[tf] = df1.resample(rule).agg(
+                        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+                    ).dropna()
+                except Exception:
+                    out[tf] = pd.DataFrame()
+            out["daily"] = df1.resample("1D").agg(
+                {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+            ).dropna()
+            return out
+
+        limits = {
+            "1m": max(1, int(limit_1m)),
+            "5m": min(max(1, int(limit_1m)), 1000),
+            "15m": min(max(1, int(limit_1m)), 1000),
+            "1h": min(max(1, int(limit_1m)), 1000),
+            "4h": min(max(1, int(limit_1m)), 1000),
+            "1d": min(max(1, int(limit_1m)), 500),
+        }
+        out: Dict[str, pd.DataFrame] = {}
+        for tf, limit in limits.items():
             try:
-                out[tf] = df1.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
-            except Exception:
-                out[tf] = pd.DataFrame()
-        try:
-            out["daily"] = df1.resample("1D").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
-        except Exception:
-            out["daily"] = pd.DataFrame()
+                frame = self.fetch(limit=limit, timeframe=tf)
+                if frame is None or frame.empty:
+                    frame = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+                else:
+                    frame = frame.sort_index()
+                    frame = frame.loc[~frame.index.duplicated(keep="last")]
+                out["daily" if tf == "1d" else tf] = frame
+            except Exception as exc:
+                print(f"[MultiAgent] {tf} timeframe unavailable: {exc}")
+                out["daily" if tf == "1d" else tf] = pd.DataFrame(
+                    columns=["open", "high", "low", "close", "volume"]
+                )
         return out
 
 

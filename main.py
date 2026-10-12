@@ -37,6 +37,7 @@ import pandas as pd
 import requests
 from telegram import Update
 from telegram.ext import (
+    ApplicationHandlerStop,
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
@@ -45,6 +46,7 @@ from telegram.ext import (
 )
 
 import config
+from telegram_auth import is_authorized_user
 from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
 from gemini_client import GeminiClient
 from multi_agent_trading_bot import (
@@ -196,6 +198,31 @@ def format_price_string(info: Dict) -> str:
         f"• **24h Open:** `${info['open']:,.2f}`"
         f"{extra_str}"
     )
+
+
+async def command_authorization_guard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Fail closed for Telegram commands unless the sender is allowlisted.
+
+    /start and /help remain public so a new user can discover the bot, but every
+    other command (including commands registered by optional modules) requires
+    TELEGRAM_ALLOWED_USER_IDS. Plain-text AI chat is not a command.
+    """
+    message = update.effective_message
+    if message is None or not getattr(message, "text", None):
+        return
+    command = message.text.split(maxsplit=1)[0].split("@", 1)[0].lower()
+    if command in {"/start", "/help"}:
+        return
+    user = update.effective_user
+    user_id = getattr(user, "id", None)
+    if is_authorized_user(user_id, config.TELEGRAM_ALLOWED_USER_IDS):
+        return
+    logger.warning("Blocked Telegram command %s from unauthorized user_id=%s", command, user_id)
+    await message.reply_text(
+        "⛔ This command is restricted. Ask the bot owner to add your numeric Telegram "
+        "user ID to TELEGRAM_ALLOWED_USER_IDS."
+    )
+    raise ApplicationHandlerStop
 
 
 async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -788,6 +815,8 @@ def main():
             print(f"Advanced commands not loaded: {adv_err}")
 
     app = ApplicationBuilder().token(token).post_init(on_post_init).build()
+    # Run before every command handler, including optional advanced modules.
+    app.add_handler(MessageHandler(filters.COMMAND, command_authorization_guard), group=-1)
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("levels", levels_command))

@@ -148,21 +148,38 @@ class DataFeed:
         }, index=dates)
 
     def multi_tf(self, limit_1m: int = 1500) -> Dict[str, pd.DataFrame]:
-        df1 = self.fetch(limit=limit_1m, timeframe="1m")
-        if df1.empty:
-            return {}
-        out = {"1m": df1}
-        for tf, rule in [("5m", "5min"), ("15m", "15min"), ("1h", "1h"), ("4h", "4h")]:
+        """Fetch each timeframe independently instead of resampling a short 1m window.
+
+        Resampling 1,500 one-minute candles yields only about one day of history,
+        which is insufficient for meaningful 4h/daily structure. Providers may
+        support different limits per timeframe, so cap non-minute requests.
+        Missing timeframes remain empty rather than being fabricated.
+        """
+        limits = {
+            "1m": max(1, int(limit_1m)),
+            "5m": min(max(1, int(limit_1m)), 1000),
+            "15m": min(max(1, int(limit_1m)), 1000),
+            "1h": min(max(1, int(limit_1m)), 1000),
+            "4h": min(max(1, int(limit_1m)), 1000),
+            "1d": min(max(1, int(limit_1m)), 500),
+        }
+        out: Dict[str, pd.DataFrame] = {}
+        for tf, limit in limits.items():
             try:
-                out[tf] = df1.resample(rule).agg({
-                    "open": "first", "high": "max", "low": "min",
-                    "close": "last", "volume": "sum"
-                }).dropna()
-            except Exception:
-                out[tf] = pd.DataFrame()
-        out["daily"] = df1.resample("1D").agg({
-            "open": "first", "high": "max", "low": "min", "close": "last"
-        }).dropna()
+                frame = self.fetch(limit=limit, timeframe=tf)
+                if frame is None or frame.empty:
+                    frame = pd.DataFrame(
+                        columns=["open", "high", "low", "close", "volume"]
+                    )
+                else:
+                    frame = frame.sort_index()
+                    frame = frame.loc[~frame.index.duplicated(keep="last")]
+                out["daily" if tf == "1d" else tf] = frame
+            except Exception as exc:
+                print(f"[DataFeed] {tf} timeframe unavailable: {exc}")
+                out["daily" if tf == "1d" else tf] = pd.DataFrame(
+                    columns=["open", "high", "low", "close", "volume"]
+                )
         return out
 
     def get_latest_price(self) -> Dict:
