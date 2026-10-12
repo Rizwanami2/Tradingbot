@@ -146,8 +146,10 @@ class AutonomousLearner:
                 "trade_log": self._trade_log[-2000:],
                 "updated": datetime.now(timezone.utc).isoformat(),
             }
-            with open(self.memory_path, "w", encoding="utf-8") as f:
+            tmp = f"{self.memory_path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
+            os.replace(tmp, self.memory_path)
         except Exception as e:
             logger.warning("memory save: %s", e)
 

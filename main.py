@@ -150,7 +150,17 @@ def get_price_info(symbol: str = "XAUTUSD") -> Dict:
     except Exception as e:
         logger.warning(f"Delta API fallback notice for {sym}: {e}")
 
-    logger.error("Live quote unavailable for %s from TradingView and Delta Exchange", sym)
+    # Fallback 3: CCXT / DataFeed (e.g. Binance / Bybit / Yahoo Finance)
+    try:
+        from data_feed import DataFeed
+        feed = DataFeed(symbol=symbol, source=getattr(config, "DEFAULT_DATA_SOURCE", "ccxt"))
+        latest = feed.get_latest_price()
+        if latest.get("ok"):
+            return latest
+    except Exception as e:
+        logger.warning(f"DataFeed fallback notice for {symbol}: {e}")
+
+    logger.error("Live quote unavailable for %s from TradingView, Delta Exchange, and DataFeed", sym)
     return {"ok": False, "symbol": sym, "error": "Live market data unavailable; no synthetic price was substituted.", "source": "unavailable"}
 
 
@@ -191,11 +201,27 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "📖 **Command Guide**\n"
-        "• `/price [SYMBOL]` `/signal [SYMBOL]` `/news`\n"
-        "• `/leverage [1-20]` `/positions` `/close` `/cancel`\n"
-        "• `/status` `/health` `/risk` `/autotrade on|off` `/backtest`\n"
-        "• `/reset` — clear AI memory\n"
+        "📖 **Institutional Trading Assistant Guide**\n\n"
+        "⚡ **Market & Signals:**\n"
+        "• `/price [SYM]` — Live mark price & quote\n"
+        "• `/signal [SYM]` or `/single [SYM]` — 5-Agent confluence setup\n"
+        "• `/asignal [SYM] [profile]` — Advanced SMC + CVD setup\n"
+        "• `/news` — Market sentiment & shock detection\n\n"
+        "📊 **Risk & Position Management:**\n"
+        "• `/status` — Portfolio health & autotrade state\n"
+        "• `/positions` — Active open trades\n"
+        "• `/risk` — Risk tier & exposure summary\n"
+        "• `/leverage [1-20]` — Set maximum leverage\n"
+        "• `/close [ID]` & `/cancel [ID]` — Manage trades\n"
+        "• `/kill [on|off]` — Emergency execution stop\n\n"
+        "🔬 **Backtesting & Research:**\n"
+        "• `/backtest [single|auto] [bars] [SYM]` — Fast backtest\n"
+        "• `/abacktest [mode] [bars] [SYM]` — Advanced backtest suite\n"
+        "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
+        "• `/performance` — Detailed trade metrics & Sharpe\n"
+        "• `/brain` & `/relearn` — Autonomous self-learning memory\n"
+        "• `/autotrade on|off` — Toggle setup monitoring & trade tracking\n"
+        "• `/reset` — Clear conversation context\n"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 

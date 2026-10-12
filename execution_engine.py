@@ -96,7 +96,11 @@ class ExecutionEngine:
                     initial_balance=self.risk_manager.state.equity,
                 )
             except Exception:
-                self.broker = None
+                try:
+                    from execution import PaperBroker
+                    self.broker = PaperBroker(initial_balance=self.risk_manager.state.equity)
+                except Exception:
+                    self.broker = None
         self.pending_setups: Dict[str, TradeOrder] = {}
         self.active_positions: Dict[str, TradeOrder] = {}
         self.trade_history: List[TradeOrder] = []

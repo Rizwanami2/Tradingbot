@@ -162,12 +162,19 @@ class DataFeed:
         df = self.fetch(limit=5)
         if not df.empty:
             c = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) > 1 else c
+            open_p = float(prev["close"]) if float(prev["close"]) > 0 else float(c["open"])
+            chg = ((float(c["close"]) - open_p) / open_p * 100) if open_p > 0 else 0.0
             return {
+                "ok": True,
+                "symbol": self.symbol,
                 "mark": float(c["close"]),
                 "close": float(c["close"]),
                 "high": float(c["high"]),
                 "low": float(c["low"]),
                 "open": float(c["open"]),
+                "change_pct": round(chg, 2),
+                "recommendation": "NEUTRAL",
                 "source": self.source,
             }
         return {

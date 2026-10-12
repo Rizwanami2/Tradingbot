@@ -37,6 +37,9 @@ INSTRUMENTS = {
     "XAUUSD": {"contract_size": 100, "pip_size": 0.01, "pip_value_per_lot": 1.0, "min_lot": 0.01, "lot_step": 0.01},
     "GOLD":   {"contract_size": 100, "pip_size": 0.01, "pip_value_per_lot": 1.0, "min_lot": 0.01, "lot_step": 0.01},
     "GC=F":   {"contract_size": 100, "pip_size": 0.01, "pip_value_per_lot": 1.0, "min_lot": 0.01, "lot_step": 0.01},
+    "XAUTUSD": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
+    "PAXGUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.001, "lot_step": 0.001},
+    "PAXG/USDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.001, "lot_step": 0.001},
     "EURUSD": {"contract_size": 100000, "pip_size": 0.0001, "pip_value_per_lot": 10.0, "min_lot": 0.01, "lot_step": 0.01},
     "GBPUSD": {"contract_size": 100000, "pip_size": 0.0001, "pip_value_per_lot": 10.0, "min_lot": 0.01, "lot_step": 0.01},
     "USDJPY": {"contract_size": 100000, "pip_size": 0.01,   "pip_value_per_lot": 9.0,  "min_lot": 0.01, "lot_step": 0.01},
@@ -45,6 +48,7 @@ INSTRUMENTS = {
     "USDCHF": {"contract_size": 100000, "pip_size": 0.0001, "pip_value_per_lot": 10.0, "min_lot": 0.01, "lot_step": 0.01},
     "BTCUSDT": {"contract_size": 1, "pip_size": 0.1, "pip_value_per_lot": 0.1, "min_lot": 0.001, "lot_step": 0.001},
     "ETHUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
+    "SOLUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "XAUUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "DEFAULT": {"contract_size": 100000, "pip_size": 0.0001, "pip_value_per_lot": 10.0, "min_lot": 0.01, "lot_step": 0.01},
 }
@@ -388,6 +392,15 @@ class RiskManager:
             affordable_lots = affordable_notional / (contract_size * entry)
             step = self.profile["lot_step"]
             min_lot = self.config.min_lot_override or self.profile["min_lot"]
+            if affordable_lots < min_lot:
+                return TradeRiskResult(
+                    size=0.0, lots=0.0, risk_amount=0.0, risk_pct_used=0.0,
+                    stop_distance=round(stop_dist, 6), stop_pips=stop_pips,
+                    tp1=tps["tp1"], tp2=tps["tp2"], tp3=tps.get("tp3"),
+                    mode=self.state.mode, reason=f"blocked: required margin exceeds capacity (min {min_lot} lots)",
+                    symbol=self.symbol, pip_value=pip_value, leverage=lev,
+                    margin_required=margin_required, notional_value=notional_value,
+                )
             lots = max(min_lot, math.floor(affordable_lots / step) * step)
             lots = round(lots, 4)
             notional_value = round(lots * contract_size * entry, 2)

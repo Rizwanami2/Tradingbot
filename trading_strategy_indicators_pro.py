@@ -170,10 +170,10 @@ class IndicatorEngine:
     @staticmethod
     def adx(df: pd.DataFrame, period: int = 14):
         high, low, close = df["high"], df["low"], df["close"]
-        plus_dm = high.diff()
-        minus_dm = low.diff().abs() * -1
-        plus_dm = np.where((plus_dm > minus_dm.abs()) & (plus_dm > 0), plus_dm, 0.0)
-        minus_dm = np.where((minus_dm.abs() > plus_dm) & (minus_dm < 0), minus_dm.abs(), 0.0)
+        up_move = high.diff()
+        down_move = -low.diff()
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
         tr = pd.concat([high-low, (high-close.shift()).abs(), (low-close.shift()).abs()], axis=1).max(axis=1)
         atr = tr.ewm(alpha=1/period, min_periods=period).mean()
         plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/period, min_periods=period).mean() / (atr + 1e-10)
