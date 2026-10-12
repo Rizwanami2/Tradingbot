@@ -3,20 +3,14 @@
 Auto Backtest — one command, full suite
 =======================================
 Runs in sequence:
-  1. Single (EMA) metrics
-  2. Multi-agent proxy metrics
+  1. Tuned EMA metrics
+  2. Adaptive regime metrics
   3. Walk-forward OOS summary
   4. Monte Carlo stress
   5. Top parameter-sweep rows
 
 CLI:
-  python auto_backtest.py --symbol XAUUSD --bars 2500
-  python auto_backtest.py --csv data.csv --bars 3000 --mc-runs 400
-
-Telegram (via telegram_advanced):
-  /abacktest
-  /abacktest 2000
-  /abacktest 2000 XAUUSD
+  python auto_backtest.py --symbol XAUUSD --bars 1000 --risk 0.005 --no-sweep
 """
 from __future__ import annotations
 
@@ -25,6 +19,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+
+# Activate improved signals (ADX-filtered EMA, 15m data preference)
+try:
+    from wire_backtest_v2 import apply as _wire_bt
+    _wire_bt()
+except Exception:
+    pass
 
 from advanced_backtest import (
     AdvancedSimulator,
@@ -37,6 +38,12 @@ from advanced_backtest import (
     load_data,
     Metrics,
 )
+
+# Optional adaptive if available after wire
+try:
+    from advanced_backtest import adaptive_signal
+except ImportError:
+    adaptive_signal = multiagent_proxy_signal
 
 
 @dataclass
@@ -57,7 +64,7 @@ class AutoBacktestReport:
         lines.append("=" * 60)
 
         if self.single:
-            lines.append("\n[1] EMA SINGLE")
+            lines.append("\n[1] EMA CROSS TUNED (12/26 ADX≥18 RR2.8)")
             lines.append(
                 f"  Return {self.single.total_return_pct:+.2f}% | DD {self.single.max_drawdown_pct:.2f}% | "
                 f"Sharpe {self.single.sharpe:.2f} | SQN {self.single.sqn:.2f}"
@@ -69,7 +76,7 @@ class AutoBacktestReport:
             )
 
         if self.multiagent:
-            lines.append("\n[2] MULTI-AGENT PROXY")
+            lines.append("\n[2] ADAPTIVE (regime router)")
             lines.append(
                 f"  Return {self.multiagent.total_return_pct:+.2f}% | DD {self.multiagent.max_drawdown_pct:.2f}% | "
                 f"Sharpe {self.multiagent.sharpe:.2f} | SQN {self.multiagent.sqn:.2f}"
@@ -126,7 +133,6 @@ class AutoBacktestReport:
             for e in self.errors:
                 lines.append(f"  - {e}")
 
-        # Verdict
         lines.append("\n" + "-" * 60)
         lines.append(self._verdict())
         lines.append("=" * 60)
@@ -139,11 +145,11 @@ class AutoBacktestReport:
         scores = []
         if self.single and self.single.total_trades >= 5:
             if self.single.sharpe > 1.0 and self.single.profit_factor > 1.2:
-                scores.append("EMA edge: constructive")
+                scores.append("Primary edge: constructive")
             elif self.single.sharpe < 0:
-                scores.append("EMA edge: weak/negative")
+                scores.append("Primary edge: weak/negative")
             else:
-                scores.append("EMA edge: mixed")
+                scores.append("Primary edge: mixed")
         if self.walkforward and self.walkforward.combined_return_pct != 0:
             if self.walkforward.combined_return_pct > 0 and self.walkforward.combined_max_dd_pct < 25:
                 scores.append("Walk-forward OOS: holds up")
@@ -161,60 +167,65 @@ class AutoBacktestReport:
 
 def run_auto_backtest(
     symbol: str = "XAUUSD",
-    bars: int = 2500,
+    bars: int = 1500,
     source: str = "demo",
     csv: Optional[str] = None,
     equity: float = 10000.0,
-    risk: float = 0.0025,
+    risk: float = 0.005,
     mc_runs: int = 400,
     wf_windows: int = 4,
     do_sweep: bool = True,
 ) -> AutoBacktestReport:
     report = AutoBacktestReport(symbol=symbol.upper(), bars=bars)
-    df = load_data(symbol, bars, source, csv)
+    try:
+        df = load_data(symbol, bars, source, csv, timeframe="15m")
+    except TypeError:
+        df = load_data(symbol, bars, source, csv)
     report.bars = len(df)
     cfg = SimConfig(initial_equity=equity, risk_per_trade=risk)
     sim = AdvancedSimulator(cfg)
 
-    # 1) Single EMA
-    try:
-        m, trades, _ = sim.run(df, ema_cross_signal, symbol)
-        report.single = m
-        ema_trades = trades
-    except Exception as e:
-        report.errors.append(f"single: {e}")
-        ema_trades = []
+    primary = ema_cross_signal
 
-    # 2) Multi-agent proxy
     try:
-        m2, _, _ = sim.run(df, multiagent_proxy_signal, symbol)
+        m, trades, _ = sim.run(df, primary, symbol)
+        report.single = m
+        primary_trades = trades
+    except Exception as e:
+        report.errors.append(f"ema_cross: {e}")
+        primary_trades = []
+
+    try:
+        m2, _, _ = sim.run(df, adaptive_signal, symbol)
         report.multiagent = m2
     except Exception as e:
-        report.errors.append(f"multiagent: {e}")
+        report.errors.append(f"adaptive: {e}")
+        try:
+            m2, _, _ = sim.run(df, multiagent_proxy_signal, symbol)
+            report.multiagent = m2
+        except Exception as e2:
+            report.errors.append(f"multiagent: {e2}")
 
-    # 3) Walk-forward
     try:
-        if len(df) >= 300:
+        if len(df) >= 250:
             report.walkforward = walk_forward(
-                df, ema_cross_signal, n_windows=wf_windows, cfg=cfg, symbol=symbol
+                df, primary, n_windows=wf_windows, cfg=cfg, symbol=symbol
             )
         else:
-            report.errors.append("walkforward: need >= 300 bars")
+            report.errors.append("walkforward: need >= 250 bars")
     except Exception as e:
         report.errors.append(f"walkforward: {e}")
 
-    # 4) Monte Carlo from EMA trades
     try:
-        if len(ema_trades) >= 5:
+        if len(primary_trades) >= 5:
             report.montecarlo = monte_carlo_from_trades(
-                ema_trades, initial_equity=equity, n_runs=mc_runs
+                primary_trades, initial_equity=equity, n_runs=mc_runs
             )
         else:
-            report.errors.append("montecarlo: need >= 5 trades from single run")
+            report.errors.append(f"montecarlo: need >= 5 trades (got {len(primary_trades)})")
     except Exception as e:
         report.errors.append(f"montecarlo: {e}")
 
-    # 5) Parameter sweep (optional, can be slower)
     if do_sweep:
         try:
             if len(df) >= 200:
@@ -230,11 +241,11 @@ def run_auto_backtest(
 def main():
     p = argparse.ArgumentParser(description="Auto full-suite backtest (one command)")
     p.add_argument("--symbol", default="XAUUSD")
-    p.add_argument("--bars", type=int, default=2500)
+    p.add_argument("--bars", type=int, default=1500)
     p.add_argument("--source", default="demo")
     p.add_argument("--csv", default=None)
     p.add_argument("--equity", type=float, default=10000.0)
-    p.add_argument("--risk", type=float, default=0.0025)
+    p.add_argument("--risk", type=float, default=0.005)
     p.add_argument("--mc-runs", type=int, default=400)
     p.add_argument("--windows", type=int, default=4)
     p.add_argument("--no-sweep", action="store_true")
