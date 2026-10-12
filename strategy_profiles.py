@@ -21,8 +21,8 @@ class StrategyProfile:
         "TREND": 1.25, "LIQUIDITY": 1.40, "INDICATORS": 1.00,
         "AI-LEARNER": 0.90, "NEWS": 0.70,
     })
-    min_agreement: int = 3
-    min_score: float = 1.8
+    min_agreement: int = 2
+    min_score: float = 1.2
     min_rr: float = 1.9
     require_killzone: bool = False
     allow_asian: bool = False
@@ -73,7 +73,8 @@ DEFAULT_PROFILES = {
         name="crypto",
         description="Crypto-focused, lower leverage",
         weights={"TREND": 1.3, "LIQUIDITY": 1.2, "INDICATORS": 1.1, "AI-LEARNER": 1.0, "NEWS": 1.1},
-        min_score=2.0,
+        min_agreement=2,
+        min_score=1.2,
         min_rr=2.0,
         base_risk_pct=0.18,
         max_leverage=15.0,
