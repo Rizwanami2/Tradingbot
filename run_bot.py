@@ -52,6 +52,12 @@ def main() -> None:
     except Exception as e:
         print("[run_bot] micro_equity:", e)
 
+    try:
+        import wire_signal_fix
+        wire_signal_fix.main()
+    except Exception as e:
+        print("[run_bot] signal_fix:", e)
+
     main_py = ROOT / "main.py"
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")
