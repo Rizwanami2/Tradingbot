@@ -56,13 +56,15 @@ class DataFeed:
     def _symbol_map(self) -> str:
         """Map internal symbol to exchange format."""
         s = self.symbol
+        if "/" in s:
+            return s
         if s in ("XAUUSD", "XAUTUSD", "GOLD"):
-            return "XAU/USDT" if self.exchange_id in ("binance", "bybit") else "XAUUSD"
-        if s.endswith("USD") and not s.endswith("USDT"):
-            return s.replace("USD", "/USDT")
-        if "/" not in s:
-            return f"{s}/USDT"
-        return s
+            return "PAXG/USDT" if self.exchange_id == "binance" else ("XAU/USDT" if self.exchange_id == "bybit" else "XAUUSD")
+        if s.endswith("USDT"):
+            return f"{s[:-4]}/USDT"
+        if s.endswith("USD"):
+            return f"{s[:-3]}/USDT"
+        return f"{s}/USDT"
 
     def _cache_path(self, tf: str, limit: int) -> Path:
         safe_sym = self.symbol.replace("/", "_")
@@ -111,6 +113,7 @@ class DataFeed:
             yf_map = {
                 "XAUUSD": "GC=F", "XAUTUSD": "GC=F", "GOLD": "GC=F",
                 "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD",
+                "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD",
             }
             yf_sym = yf_map.get(self.symbol, self.symbol)
             period = "7d" if tf in ("1m", "5m") else "60d"

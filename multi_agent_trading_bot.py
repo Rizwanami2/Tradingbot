@@ -90,14 +90,26 @@ class MarketDataFeed:
         try:
             import ccxt
             exchange = getattr(ccxt, self.exchange_id)()
-            ticker = exchange.fetch_ticker(self.symbol if "/" in self.symbol else self.symbol.replace("USDT", "/USDT"))
+            sym = self.symbol
+            if sym in ("XAUUSD", "XAUTUSD", "GOLD"):
+                sym = "PAXG/USDT" if self.exchange_id == "binance" else "XAU/USDT"
+            elif "/" not in sym:
+                sym = f"{sym[:-4]}/USDT" if sym.endswith("USDT") else (f"{sym[:-3]}/USDT" if sym.endswith("USD") else f"{sym}/USDT")
+            ticker = exchange.fetch_ticker(sym)
             last = float(ticker.get("last") or ticker.get("close") or 0)
             return {"ok": True, "mark": last, "close": last, "source": self.exchange_id}
         except Exception:
             pass
         try:
             import yfinance as yf
-            t = yf.Ticker(self.symbol)
+            yf_sym = self.symbol
+            if yf_sym in ("XAUUSD", "XAUTUSD", "GOLD"):
+                yf_sym = "GC=F"
+            elif yf_sym.endswith("USDT"):
+                yf_sym = f"{yf_sym[:-4]}-USD"
+            elif yf_sym.endswith("USD") and not yf_sym.endswith("=X"):
+                yf_sym = f"{yf_sym[:-3]}-USD"
+            t = yf.Ticker(yf_sym)
             hist = t.history(period="1d")
             if not hist.empty:
                 last = float(hist["Close"].iloc[-1])
@@ -399,7 +411,7 @@ class Arbiter:
         self.ai = AILearnerAgent()
         self.news = NewsAgent()
 
-    def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD"):
+    def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
             self.trend.vote(df1),
             self.liq.vote(df1, daily if daily is not None else pd.DataFrame()),
@@ -408,13 +420,16 @@ class Arbiter:
             self.news.vote(),
         ]
 
+        session_warn = None
         if is_tradeable_session is not None:
             try:
                 ok, reason = is_tradeable_session(
                     require_killzone=self.require_killzone, allow_asian=self.allow_asian
                 )
                 if not ok:
-                    return None, f"SESSION: {reason}", votes
+                    if not on_demand:
+                        return None, f"SESSION: {reason}", votes
+                    session_warn = f"Session note: {reason}"
             except Exception:
                 pass
 
@@ -439,7 +454,10 @@ class Arbiter:
             score = short_score
 
         if direction == Dir.FLAT:
-            return None, f"No consensus (L:{long_score:.2f}/{long_n} S:{short_score:.2f}/{short_n})", votes
+            msg = f"No consensus (L:{long_score:.2f}/{long_n} S:{short_score:.2f}/{short_n})"
+            if session_warn:
+                msg += f" | {session_warn}"
+            return None, msg, votes
 
         entry = float(df1["close"].iloc[-1])
         atr_val = atr(df1) or entry * 0.002
@@ -477,10 +495,13 @@ class Arbiter:
             "reason": f"Consensus {direction.name} score={score:.2f}",
             "symbol": symbol,
         }
-        return sig, f"SETUP {direction.name} score={score:.2f}", votes
+        status_msg = f"SETUP {direction.name} score={score:.2f}"
+        if session_warn:
+            status_msg += f" ({session_warn})"
+        return sig, status_msg, votes
 
 
-def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", leverage=None):
+def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", leverage=None, on_demand: bool = True):
     feed = MarketDataFeed(symbol=symbol, source=source, exchange_id=exchange_id)
     data = feed.multi_tf(limit_1m=700)
     if not data or data["1m"].empty:
@@ -490,7 +511,7 @@ def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", lever
         risk.set_leverage(leverage)
     arb = Arbiter()
     sig, why, votes = arb.decide(
-        data["1m"], data.get("5m"), data.get("15m"), data.get("1h"), data.get("daily"), risk, symbol=symbol
+        data["1m"], data.get("5m"), data.get("15m"), data.get("1h"), data.get("daily"), risk, symbol=symbol, on_demand=on_demand
     )
     quote = feed.get_latest_price()
     votes_out = [

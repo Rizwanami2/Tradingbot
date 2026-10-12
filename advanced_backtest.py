@@ -164,6 +164,7 @@ class SimConfig:
     tp_r: float = 1.8
     min_bars: int = 80
     allow_short: bool = True
+    max_leverage: float = 20.0
 
 
 class AdvancedSimulator:
@@ -178,8 +179,9 @@ class AdvancedSimulator:
         signal_func: SignalFunc,
         symbol: str = "XAUUSD",
     ) -> Tuple[Metrics, List[TradeRecord], List[float]]:
-        if df is None or len(df) < self.cfg.min_bars + 20:
-            raise ValueError(f"Need at least {self.cfg.min_bars + 20} bars")
+        min_required = max(35, min(self.cfg.min_bars, 50))
+        if df is None or len(df) < min_required:
+            raise ValueError(f"Need at least {min_required} bars")
 
         if _validated_frame is not None:
             try:
@@ -196,7 +198,8 @@ class AdvancedSimulator:
         trades: List[TradeRecord] = []
         position = None
 
-        for i in range(self.cfg.min_bars, len(df)):
+        start_bar = min(self.cfg.min_bars, max(30, len(df) - 10))
+        for i in range(start_bar, len(df)):
             window = df.iloc[: i + 1]
             candle = df.iloc[i]
             high, low, close = float(candle["high"]), float(candle["low"]), float(candle["close"])
@@ -222,20 +225,25 @@ class AdvancedSimulator:
 
                 exit_price = None
                 reason = ""
+                max_slip = risk * 0.15
                 # Stop-first if both touched
                 if direction == "long":
                     if low <= stop:
-                        exit_price = stop * (1 - self.cfg.slippage_pct)
+                        slip = min(stop * self.cfg.slippage_pct, max_slip)
+                        exit_price = stop - slip
                         reason = "SL"
                     elif high >= tp:
-                        exit_price = tp * (1 - self.cfg.slippage_pct)
+                        slip = min(tp * self.cfg.slippage_pct, max_slip)
+                        exit_price = tp - slip
                         reason = "TP"
                 else:
                     if high >= stop:
-                        exit_price = stop * (1 + self.cfg.slippage_pct)
+                        slip = min(stop * self.cfg.slippage_pct, max_slip)
+                        exit_price = stop + slip
                         reason = "SL"
                     elif low <= tp:
-                        exit_price = tp * (1 + self.cfg.slippage_pct)
+                        slip = min(tp * self.cfg.slippage_pct, max_slip)
+                        exit_price = tp + slip
                         reason = "TP"
 
                 if exit_price is not None:
@@ -273,20 +281,36 @@ class AdvancedSimulator:
                             direction = "long"
                         else:
                             direction = "short"
-                        entry = float(sig["entry"])
-                        stop = float(sig["stop"])
-                        tp = float(sig.get("tp1", entry + (entry - stop) * self.cfg.tp_r))
-                        if direction == "short" and tp > entry:
-                            tp = entry - abs(entry - stop) * self.cfg.tp_r
+                        raw_entry = float(sig["entry"])
+                        raw_stop = float(sig["stop"])
+                        raw_tp = float(sig.get("tp1", raw_entry + (raw_entry - raw_stop) * self.cfg.tp_r))
+                        if direction == "short" and raw_tp > raw_entry:
+                            raw_tp = raw_entry - abs(raw_entry - raw_stop) * self.cfg.tp_r
+
+                        stop_dist = abs(raw_entry - raw_stop)
+                        tp_dist = abs(raw_tp - raw_entry)
+                        min_stop = raw_entry * 0.0005
+                        if stop_dist < min_stop:
+                            stop_dist = min_stop
+                            tp_dist = stop_dist * self.cfg.tp_r
 
                         risk_amount = equity * self.cfg.risk_per_trade
-                        stop_dist = abs(entry - stop)
-                        if stop_dist > 0:
-                            size = risk_amount / stop_dist
+                        if stop_dist > 0 and raw_entry > 0:
+                            max_units = (equity * self.cfg.max_leverage) / raw_entry
+                            size = min(risk_amount / stop_dist, max_units)
+
+                            max_slip = stop_dist * 0.15
+                            slip = min(raw_entry * self.cfg.slippage_pct, max_slip)
+
                             if direction == "long":
-                                entry *= (1 + self.cfg.slippage_pct)
+                                entry = raw_entry + slip
+                                stop = entry - stop_dist
+                                tp = entry + tp_dist
                             else:
-                                entry *= (1 - self.cfg.slippage_pct)
+                                entry = raw_entry - slip
+                                stop = entry + stop_dist
+                                tp = entry - tp_dist
+
                             position = {
                                 "direction": direction,
                                 "entry": entry,
@@ -341,17 +365,21 @@ def ema_cross_signal(window: pd.DataFrame, fast: int = 12, slow: int = 26, atr_m
     if len(window) < slow + 5:
         return None
     c = window["close"].astype(float)
+    h = window["high"].astype(float)
+    l = window["low"].astype(float)
     ema_f = c.ewm(span=fast, adjust=False).mean()
     ema_s = c.ewm(span=slow, adjust=False).mean()
-    atr = (window["high"] - window["low"]).astype(float).rolling(14).mean().iloc[-1]
+    prev_c = c.shift(1)
+    tr = pd.concat([h - l, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().iloc[-1]
     if not math.isfinite(float(atr)) or atr <= 0:
         return None
+    entry = float(c.iloc[-1])
+    atr = max(float(atr), entry * 0.0008)
     if float(ema_f.iloc[-2]) <= float(ema_s.iloc[-2]) and float(ema_f.iloc[-1]) > float(ema_s.iloc[-1]):
-        entry = float(c.iloc[-1])
         return {"direction": "long", "entry": entry, "stop": entry - atr * atr_mult,
                 "tp1": entry + atr * atr_mult * 1.8}
     if float(ema_f.iloc[-2]) >= float(ema_s.iloc[-2]) and float(ema_f.iloc[-1]) < float(ema_s.iloc[-1]):
-        entry = float(c.iloc[-1])
         return {"direction": "short", "entry": entry, "stop": entry + atr * atr_mult,
                 "tp1": entry - atr * atr_mult * 1.8}
     return None
@@ -366,9 +394,13 @@ def multiagent_proxy_signal(window: pd.DataFrame) -> Optional[Dict]:
     ema9 = c.ewm(span=9, adjust=False).mean()
     ema21 = c.ewm(span=21, adjust=False).mean()
     ema50 = c.ewm(span=50, adjust=False).mean()
-    atr = (h - l).rolling(14).mean().iloc[-1]
+    prev_c = c.shift(1)
+    tr = pd.concat([h - l, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().iloc[-1]
     if not math.isfinite(float(atr)) or atr <= 0:
         return None
+    entry = float(c.iloc[-1])
+    atr = max(float(atr), entry * 0.0008)
 
     trend_long = float(ema9.iloc[-1]) > float(ema21.iloc[-1]) > float(ema50.iloc[-1])
     trend_short = float(ema9.iloc[-1]) < float(ema21.iloc[-1]) < float(ema50.iloc[-1])
@@ -383,7 +415,6 @@ def multiagent_proxy_signal(window: pd.DataFrame) -> Optional[Dict]:
     rsi_ok_long = 40 < rsi < 70
     rsi_ok_short = 30 < rsi < 60
 
-    entry = float(c.iloc[-1])
     if trend_long and bos_long and rsi_ok_long:
         return {"direction": "long", "entry": entry, "stop": entry - atr * 1.3,
                 "tp1": entry + atr * 1.3 * 2.0}
@@ -451,16 +482,19 @@ def walk_forward(
         start = w * window_size
         end = min(n, (w + 1) * window_size) if w < n_windows - 1 else n
         chunk = df.iloc[start:end]
-        if len(chunk) < 100:
+        if len(chunk) < 70:
             continue
         split = int(len(chunk) * is_ratio)
         is_df = chunk.iloc[:split]
         oos_df = chunk.iloc[split:]
-        if len(is_df) < 80 or len(oos_df) < 30:
+        if len(is_df) < 35 or len(oos_df) < 25:
             continue
 
-        is_m, _, _ = sim.run(is_df, signal_func, symbol)
-        oos_m, oos_trades, oos_curve = sim.run(oos_df, signal_func, symbol)
+        try:
+            is_m, _, _ = sim.run(is_df, signal_func, symbol)
+            oos_m, oos_trades, oos_curve = sim.run(oos_df, signal_func, symbol)
+        except Exception:
+            continue
 
         result.windows.append({
             "window": w + 1,

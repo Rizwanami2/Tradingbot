@@ -348,21 +348,53 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Full auto backtest suite (single + multiagent + walk-forward + Monte Carlo + sweep)."""
+    """Backtest suite or single mode: /backtest [single|auto] [bars] [SYMBOL]"""
     args = list(ctx.args or [])
     bars = 2000
     symbol = config.DEFAULT_SYMBOL.upper()
+    mode = "auto"
+
+    if args and args[0].lower() in ("single", "auto", "wf", "mc", "sweep", "multiagent"):
+        mode = args.pop(0).lower()
+
+    if args and args[0].isdigit():
+        bars = int(args.pop(0))
+
     if args:
-        try:
-            bars = int(args[0])
-        except (TypeError, ValueError):
-            await update.message.reply_text("Usage: /backtest [bars] [SYMBOL]")
-            return
-    if not 100 <= bars <= 10000:
-        await update.message.reply_text("Choose between 100 and 10,000 candles.")
+        symbol = args.pop(0).upper()
+
+    if not 50 <= bars <= 10000:
+        await update.message.reply_text("Choose between 50 and 10,000 candles.")
         return
-    if len(args) > 1:
-        symbol = args[1].upper()
+
+    if mode == "single":
+        await update.message.reply_text(
+            f"⏳ **Single EMA Backtest** — `{symbol}` — {bars} bars…",
+            parse_mode="Markdown",
+        )
+        def _run_single():
+            from advanced_backtest import load_data, SimConfig, AdvancedSimulator, ema_cross_signal
+            df = load_data(symbol, bars, getattr(config, "DEFAULT_DATA_SOURCE", "ccxt"), None)
+            cfg = SimConfig(
+                initial_equity=getattr(config, "INITIAL_EQUITY", 10000.0),
+                risk_per_trade=max(0.001, getattr(config, "DEFAULT_RISK_PCT", 0.18) / 100.0),
+            )
+            sim = AdvancedSimulator(cfg)
+            m, trades, _ = sim.run(df, ema_cross_signal, symbol)
+            out = m.summary()
+            if trades:
+                out += f"\nLast trades (up to 5):\n"
+                for t in trades[-5:]:
+                    out += f"  {t.direction.upper()} R={t.r_multiple:+.2f} PnL={t.pnl:+.2f} ({t.reason})\n"
+            return out
+
+        try:
+            text = await asyncio.to_thread(_run_single)
+            await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
+        except Exception as exc:
+            logger.warning("Single backtest failed for %s: %s", symbol, exc)
+            await update.message.reply_text(f"Single backtest failed: `{exc}`", parse_mode="Markdown")
+        return
 
     await update.message.reply_text(
         f"⏳ **Auto backtest suite** — `{symbol}` — {bars} bars\n"
@@ -507,7 +539,7 @@ async def live_monitoring_worker(app):
 
 def run_cli_interactive():
     global autotrade_active
-    print("TradingBot CLI — type /signal, /status, /price, exit")
+    print("TradingBot CLI — type /signal, /single, /backtest [single], /status, /price, exit")
     while True:
         try:
             cmd = input("TradingBot> ").strip()
@@ -519,17 +551,29 @@ def run_cli_interactive():
             break
         parts = cmd.split()
         name = parts[0].lower().lstrip("/")
-        if name == "signal":
+        if name in ("signal", "single"):
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE)
             print(res.get("status"), res.get("signal"))
+        elif name in ("backtest", "abacktest"):
+            from auto_backtest import run_auto_backtest
+            b_args = parts[1:]
+            b_sym = config.DEFAULT_SYMBOL
+            b_bars = 500
+            for a in b_args:
+                if a.isdigit():
+                    b_bars = int(a)
+                elif a.isalpha() and len(a) > 2:
+                    b_sym = a.upper()
+            report = run_auto_backtest(symbol=b_sym, bars=b_bars, source=config.DEFAULT_DATA_SOURCE)
+            print(report.text())
         elif name == "status":
             print(engine.get_portfolio_summary())
         elif name == "price":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             print(get_price_info(sym))
         else:
-            print("Commands: signal, status, price, exit")
+            print("Commands: signal, single, backtest [single], status, price, exit")
 
 
 def main():
@@ -562,6 +606,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("price", price_command))
     app.add_handler(CommandHandler("signal", signal_command))
+    app.add_handler(CommandHandler("single", signal_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("risk", risk_command))

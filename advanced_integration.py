@@ -94,7 +94,7 @@ class AdvancedEngine:
         self.conviction_mode = enabled
         self.conviction = HighConvictionFilter(STRICT_100_STYLE if strict else BALANCED_QUALITY)
 
-    def evaluate(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+    def evaluate(self, symbol: Optional[str] = None, on_demand: bool = True) -> Dict[str, Any]:
         sym = (symbol or self.symbol).upper()
         if sym != self.symbol:
             self.set_symbol(sym)
@@ -112,11 +112,6 @@ class AdvancedEngine:
             require_killzone=self.profile.require_killzone,
             allow_asian=self.profile.allow_asian,
         )
-        if not ok_sess:
-            return {
-                "symbol": sym, "signal": None, "status": f"SESSION VETO: {sess_reason}",
-                "votes": [], "session": sess.name, "blocked": True,
-            }
 
         data = self.feed.multi_tf(limit_1m=700)
         if not data or "1m" not in data or data["1m"].empty:
@@ -130,7 +125,7 @@ class AdvancedEngine:
         bias, bias_reason = htf_bias(htf_data)
 
         sig, why, votes = self.arbiter.decide(
-            df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, self.risk, symbol=sym
+            df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, self.risk, symbol=sym, on_demand=on_demand
         )
 
         cvd_dir, cvd_str, cvd_reason = cvd_signal(df1)
@@ -139,6 +134,14 @@ class AdvancedEngine:
             for v in votes
         ]
         votes_out.append({"agent": "CVD", "direction": cvd_dir, "strength": round(cvd_str, 2), "reason": cvd_reason})
+
+        if not ok_sess:
+            if not on_demand:
+                return {
+                    "symbol": sym, "signal": None, "status": f"SESSION VETO: {sess_reason}",
+                    "votes": votes_out, "session": sess.name, "price": quote.get("mark"), "blocked": True,
+                }
+            why = f"{why} (Session: {sess_reason})"
 
         if sig is None:
             return {
