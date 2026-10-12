@@ -76,7 +76,6 @@ def ema_cross_signal(window: pd.DataFrame, fast: int = 12, slow: int = 26, atr_m
 
 
 def trend_pullback_signal(window: pd.DataFrame) -> Optional[Dict]:
-    """EMA20/50 trend + pullback reclaim; secondary signal."""
     if len(window) < 60:
         return None
     c = window["close"].astype(float)
@@ -112,7 +111,6 @@ def trend_pullback_signal(window: pd.DataFrame) -> Optional[Dict]:
 
 
 def multiagent_proxy_signal(window: pd.DataFrame) -> Optional[Dict]:
-    """Stricter confluence: EMA stack + BOS + RSI + ADX."""
     if len(window) < 80:
         return None
     c = window["close"].astype(float)
@@ -172,4 +170,46 @@ def adaptive_signal(window: pd.DataFrame) -> Optional[Dict]:
     adx = _adx(h, l, c, 14)
     if adx >= 18:
         return ema_cross_signal(window)
+    return None
+
+
+def ema_growth_signal(window: pd.DataFrame, fast: int = 10, slow: int = 22, atr_mult: float = 2.0) -> Optional[Dict]:
+    """
+    Growth profile signal (targets higher annualized return):
+      EMA 10/22 cross + ADX≥14 + mild slope filter + RR 2.8
+    Tuned on daily XAU; use with risk_per_trade ≈ 0.04–0.06 and daily bars.
+    """
+    if len(window) < slow + 20:
+        return None
+    c = window["close"].astype(float)
+    h = window["high"].astype(float)
+    l = window["low"].astype(float)
+    ema_f = c.ewm(span=fast, adjust=False).mean()
+    ema_s = c.ewm(span=slow, adjust=False).mean()
+    atr = _atr(h, l, c, 14)
+    if atr <= 0:
+        return None
+    entry = float(c.iloc[-1])
+    atr = max(atr, entry * 0.002)
+    adx = _adx(h, l, c, 14)
+    if adx < 14:
+        return None
+    slope = float(ema_s.iloc[-1] - ema_s.iloc[-5])
+    cross_long = float(ema_f.iloc[-2]) <= float(ema_s.iloc[-2]) and float(ema_f.iloc[-1]) > float(ema_s.iloc[-1])
+    cross_short = float(ema_f.iloc[-2]) >= float(ema_s.iloc[-2]) and float(ema_f.iloc[-1]) < float(ema_s.iloc[-1])
+    rr = 2.8
+    if cross_long and slope >= -atr * 0.1:
+        return {
+            "direction": "long",
+            "entry": entry,
+            "stop": entry - atr * atr_mult,
+            "tp1": entry + atr * atr_mult * rr,
+        }
+    if cross_short and slope <= atr * 0.1:
+        return {
+            "direction": "short",
+            "entry": entry,
+            "stop": entry + atr * atr_mult,
+            "tp1": entry - atr * atr_mult * rr,
+        }
     return None
