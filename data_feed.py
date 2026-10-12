@@ -166,14 +166,6 @@ class DataFeed:
         return out
 
     def get_latest_price(self) -> Dict:
-        try:
-            from realtime_prices import fetch_spot_price
-            q = fetch_spot_price(self.symbol)
-            if q.get("ok") and float(q.get("mark") or 0) > 0:
-                return q
-        except Exception as e:
-            print(f"[DataFeed] realtime_prices: {e}")
-
         df = self.fetch(limit=5)
         if not df.empty:
             c = df.iloc[-1]
