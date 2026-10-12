@@ -106,6 +106,48 @@ class TestCliInteractive(unittest.TestCase):
         out = output_data.getvalue()
         self.assertTrue("News" in out or "Market Pulse" in out or "Macro" in out or "Score" in out)
 
+    def test_cli_health(self):
+        input_data = io.StringIO("health\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("Monitoring Health:", out)
+
+    def test_cli_leverage(self):
+        input_data = io.StringIO("leverage\nleverage 15\nleverage\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("Leverage set to 15x", out)
+
+    def test_cli_kill_switch(self):
+        input_data = io.StringIO("kill\nkill on\nkill off\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("KILL SWITCH ON", out)
+        self.assertIn("Kill switch OFF", out)
+
+    def test_cli_performance(self):
+        input_data = io.StringIO("performance\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("Performance", out)
+
+    def test_cli_profile(self):
+        input_data = io.StringIO("profile\nprofile swing\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("Available profiles:", out)
+        self.assertIn("Profile:", out)
+
     def test_cli_unknown_command(self):
         input_data = io.StringIO("unknown_cmd\nexit\n")
         output_data = io.StringIO()

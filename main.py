@@ -698,10 +698,68 @@ def run_cli_interactive():
                     print(f"No pending setup for {sym}")
             except Exception as e:
                 print(f"Cancel failed: {e}")
+        elif name == "health":
+            print(
+                f"Monitoring Health:\n"
+                f"• Active: {monitoring_health.get('active', False)}\n"
+                f"• Last poll: {monitoring_health.get('last_poll_at')}\n"
+                f"• Last success: {monitoring_health.get('last_success_at')}\n"
+                f"• Last error: {monitoring_health.get('last_error')}\n"
+                f"• Consecutive errors: {monitoring_health.get('consecutive_errors', 0)}"
+            )
+        elif name == "leverage":
+            if len(parts) > 1:
+                try:
+                    lev = float(parts[1])
+                    risk_mgr.set_leverage(lev)
+                    print(f"Leverage set to {risk_mgr.get_leverage():.0f}x")
+                except Exception as e:
+                    print(f"Invalid leverage: {e}")
+            else:
+                print(f"Current leverage: {risk_mgr.get_leverage():.0f}x")
+        elif name == "kill":
+            try:
+                from advanced_integration import AdvancedEngine
+                eng = AdvancedEngine()
+                arg = parts[1].lower() if len(parts) > 1 else "status"
+                if arg in ("on", "1", "true", "activate"):
+                    eng.activate_kill("Manual kill via CLI")
+                    print("🛑 KILL SWITCH ON — no new entries.")
+                elif arg in ("off", "0", "false", "deactivate"):
+                    eng.deactivate_kill()
+                    print("🟢 Kill switch OFF.")
+                else:
+                    print(f"Kill switch status: {eng.kill_status()}")
+            except Exception as e:
+                print(f"Kill error: {e}")
+        elif name in ("performance", "perf"):
+            try:
+                from advanced_integration import AdvancedEngine
+                eng = AdvancedEngine()
+                print(eng.performance_report())
+            except Exception as e:
+                print(f"Performance error: {e}")
+        elif name == "profile":
+            try:
+                from strategy_profiles import load_profiles
+                profiles = load_profiles()
+                if len(parts) > 1:
+                    pname = parts[1].lower()
+                    if pname in profiles:
+                        p = profiles[pname]
+                        print(f"Profile: {p.name} ({p.description})\n"
+                              f"• Score >= {p.min_score} | Agree >= {p.min_agreement} | RR >= {p.min_rr}\n"
+                              f"• Risk {p.base_risk_pct}% | Max lev {p.max_leverage}x")
+                    else:
+                        print(f"Unknown profile '{pname}'. Available: {', '.join(profiles.keys())}")
+                else:
+                    print(f"Available profiles: {', '.join(profiles.keys())}")
+            except Exception as e:
+                print(f"Profile error: {e}")
         elif name == "help":
-            print("Commands: signal [SYM], backtest [BARS] [SYM], status, levels [SYM], price [SYM], news [SYM], risk, positions, autotrade on|off, close [SYM], cancel [SYM], exit")
+            print("Commands: signal [SYM], backtest [BARS] [SYM], status, health, levels [SYM], price [SYM], news [SYM], risk, leverage [LEV], positions, performance, kill [on|off], profile [NAME], autotrade on|off, close [SYM], cancel [SYM], exit")
         else:
-            print("Commands: signal, single, backtest, status, levels, price, news, risk, positions, autotrade on|off, close, cancel, exit")
+            print("Commands: signal, single, backtest, status, health, levels, price, news, risk, leverage, positions, performance, kill, profile, autotrade on|off, close, cancel, exit")
 
 
 def main():
