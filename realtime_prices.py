@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+"""
+Reliable real-time price + levels for BTC and Gold
+==================================================
+Works even when api.binance.com is geo-blocked (451).
+
+Priority for crypto:
+  1) data-api.binance.vision (public, no geo block)
+  2) api.binance.us
+  3) Coinbase spot
+  4) TradingView scanner
+  5) CCXT / yfinance if installed
+
+Priority for gold:
+  1) TradingView OANDA:XAUUSD
+  2) Binance PAXGUSDT via vision/US
+  3) yfinance GC=F
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import requests
+
+UA = {"User-Agent": "Mozilla/5.0 (compatible; TradingBot/2.0)"}
+TIMEOUT = 8
+
+
+def _norm_symbol(symbol: str) -> str:
+    s = symbol.upper().replace("/", "").replace("-", "").replace(":", "").strip()
+    if s in ("BTC", "BTCUSD"):
+        return "BTCUSDT"
+    if s in ("ETH", "ETHUSD"):
+        return "ETHUSDT"
+    if s in ("XAU", "GOLD", "XAUTUSD", "XAUUSD", "PAXG", "PAXGUSD"):
+        return "XAUUSD"
+    if s.endswith("USD") and not s.endswith("USDT") and s not in ("XAUUSD",):
+        # BTCUSD -> BTCUSDT for crypto
+        if any(x in s for x in ("BTC", "ETH", "SOL", "BNB", "XRP")):
+            return s[:-3] + "USDT"
+    return s
+
+
+def _is_gold(sym: str) -> bool:
+    s = _norm_symbol(sym)
+    return s in ("XAUUSD", "XAUTUSD", "GOLD", "PAXGUSDT") or "XAU" in s or "PAXG" in s
+
+
+def _is_crypto(sym: str) -> bool:
+    s = _norm_symbol(sym)
+    return any(x in s for x in ("BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA")) or s.endswith("USDT")
+
+
+def _binance_symbol(sym: str) -> str:
+    s = _norm_symbol(sym)
+    if _is_gold(s):
+        return "PAXGUSDT"
+    if s.endswith("USDT"):
+        return s
+    if s.endswith("USD"):
+        return s[:-3] + "USDT"
+    return s + "USDT"
+
+
+def _get_json(url: str, params: Optional[dict] = None) -> Optional[Any]:
+    try:
+        r = requests.get(url, params=params, headers=UA, timeout=TIMEOUT)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+def fetch_spot_price(symbol: str = "BTCUSDT") -> Dict[str, Any]:
+    """Return unified live quote dict with ok/mark/source."""
+    sym = _norm_symbol(symbol)
+    errors: List[str] = []
+
+    # --- Gold first via TradingView (most accurate FX gold) ---
+    if _is_gold(sym):
+        q = _tv_quote("XAUUSD")
+        if q and q.get("ok"):
+            return q
+        # PAXG proxy
+        for base in (
+            "https://data-api.binance.vision",
+            "https://api.binance.us",
+        ):
+            data = _get_json(f"{base}/api/v3/ticker/price", {"symbol": "PAXGUSDT"})
+            if data and data.get("price"):
+                px = float(data["price"])
+                return _ok(sym, px, "Binance PAXG", extra={"proxy": "PAXGUSDT"})
+            errors.append(f"paxg@{base}")
+
+    # --- Crypto via Binance public mirrors ---
+    if _is_crypto(sym) or sym.endswith("USDT"):
+        bsym = _binance_symbol(sym)
+        for base in (
+            "https://data-api.binance.vision",
+            "https://api.binance.us",
+        ):
+            data = _get_json(f"{base}/api/v3/ticker/24hr", {"symbol": bsym})
+            if data and data.get("lastPrice"):
+                last = float(data["lastPrice"])
+                open_p = float(data.get("openPrice") or last)
+                high_p = float(data.get("highPrice") or last)
+                low_p = float(data.get("lowPrice") or last)
+                vol = float(data.get("volume") or 0)
+                chg = float(data.get("priceChangePercent") or 0)
+                return {
+                    "ok": True,
+                    "symbol": sym,
+                    "mark": last,
+                    "close": last,
+                    "open": open_p,
+                    "high": high_p,
+                    "low": low_p,
+                    "volume": vol,
+                    "change_pct": round(chg, 2),
+                    "recommendation": "NEUTRAL",
+                    "source": base.replace("https://", ""),
+                }
+            # simple price fallback
+            data = _get_json(f"{base}/api/v3/ticker/price", {"symbol": bsym})
+            if data and data.get("price"):
+                return _ok(sym, float(data["price"]), base.replace("https://", ""))
+            errors.append(base)
+
+        # Coinbase for BTC/ETH
+        cb_map = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD"}
+        cb = cb_map.get(bsym)
+        if cb:
+            data = _get_json(f"https://api.coinbase.com/v2/prices/{cb}/spot")
+            if data and data.get("data", {}).get("amount"):
+                return _ok(sym, float(data["data"]["amount"]), "Coinbase")
+
+    # --- TradingView generic ---
+    q = _tv_quote(sym if not _is_gold(sym) else "XAUUSD")
+    if q and q.get("ok"):
+        q["symbol"] = sym
+        return q
+
+    # --- yfinance last resort ---
+    try:
+        import yfinance as yf
+        yf_map = {
+            "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD",
+            "XAUUSD": "GC=F", "XAUTUSD": "GC=F",
+        }
+        t = yf.Ticker(yf_map.get(sym, sym))
+        hist = t.history(period="1d", interval="1m")
+        if hist is not None and not hist.empty:
+            last = float(hist["Close"].iloc[-1])
+            return _ok(sym, last, "yfinance")
+    except Exception as e:
+        errors.append(f"yf:{e}")
+
+    return {
+        "ok": False,
+        "symbol": sym,
+        "mark": 0.0,
+        "error": "All price sources failed: " + "; ".join(errors[:4]),
+        "source": "unavailable",
+    }
+
+
+def _ok(symbol: str, price: float, source: str, extra: Optional[dict] = None) -> Dict[str, Any]:
+    out = {
+        "ok": True,
+        "symbol": symbol,
+        "mark": float(price),
+        "close": float(price),
+        "open": float(price),
+        "high": float(price),
+        "low": float(price),
+        "volume": 0.0,
+        "change_pct": 0.0,
+        "recommendation": "NEUTRAL",
+        "source": source,
+    }
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _tv_quote(symbol: str) -> Optional[Dict[str, Any]]:
+    try:
+        from tradingview_feed import fetch_tradingview_quote
+        q = fetch_tradingview_quote(symbol)
+        if q and q.get("ok") and float(q.get("mark") or 0) > 0:
+            return q
+    except Exception:
+        pass
+    # direct scanner
+    try:
+        if _is_gold(symbol):
+            ticker, screener = "OANDA:XAUUSD", "cfd"
+        elif "BTC" in symbol.upper():
+            ticker, screener = "BINANCE:BTCUSDT", "crypto"
+        elif "ETH" in symbol.upper():
+            ticker, screener = "BINANCE:ETHUSDT", "crypto"
+        else:
+            ticker, screener = f"BINANCE:{_binance_symbol(symbol)}", "crypto"
+        url = f"https://scanner.tradingview.com/{screener}/scan"
+        payload = {
+            "symbols": {"tickers": [ticker]},
+            "columns": ["close", "open", "high", "low", "volume", "change", "Recommend.All", "RSI"],
+        }
+        r = requests.post(url, json=payload, headers=UA, timeout=TIMEOUT)
+        if r.status_code == 200:
+            data = r.json().get("data") or []
+            if data and "d" in data[0]:
+                vals = data[0]["d"]
+                close_p = float(vals[0] or 0)
+                if close_p > 0:
+                    return {
+                        "ok": True,
+                        "symbol": symbol.upper(),
+                        "mark": close_p,
+                        "close": close_p,
+                        "open": float(vals[1] or close_p),
+                        "high": float(vals[2] or close_p),
+                        "low": float(vals[3] or close_p),
+                        "volume": float(vals[4] or 0),
+                        "change_pct": round(float(vals[5] or 0), 2),
+                        "recommendation": "NEUTRAL",
+                        "rsi": float(vals[7] or 50) if len(vals) > 7 else 50.0,
+                        "source": "TradingView",
+                        "tv_symbol": ticker,
+                    }
+    except Exception:
+        pass
+    return None
+
+
+def fetch_ohlcv(symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataFrame:
+    """OHLCV with geo-safe Binance mirrors."""
+    bsym = _binance_symbol(symbol)
+    if _is_gold(symbol):
+        # Prefer TV-anchored path via tradingview_feed for gold when possible
+        try:
+            from tradingview_feed import fetch_tradingview_bars
+            df = fetch_tradingview_bars("XAUUSD", limit=limit)
+            if df is not None and len(df) >= 10:
+                return df.tail(limit)
+        except Exception:
+            pass
+        bsym = "PAXGUSDT"
+
+    for base in ("https://data-api.binance.vision", "https://api.binance.us"):
+        data = _get_json(
+            f"{base}/api/v3/klines",
+            {"symbol": bsym, "interval": interval, "limit": min(limit, 1000)},
+        )
+        if isinstance(data, list) and len(data) > 5:
+            rows = []
+            for k in data:
+                rows.append({
+                    "timestamp": pd.to_datetime(k[0], unit="ms", utc=True),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                })
+            df = pd.DataFrame(rows).set_index("timestamp")
+            return df.tail(limit)
+    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+
+def compute_levels(symbol: str = "BTCUSDT") -> Dict[str, Any]:
+    """
+    Real-time key levels for BTC or Gold:
+      - live mark
+      - PDH / PDL (prior day)
+      - session high/low (last 24h of 1h bars or daily)
+      - recent swing high/low
+      - simple pivots (classic)
+    """
+    sym = _norm_symbol(symbol)
+    quote = fetch_spot_price(sym)
+    mark = float(quote.get("mark") or 0)
+
+    # Prefer 1h bars for structure
+    df = fetch_ohlcv(sym, interval="1h", limit=120)
+    if df.empty:
+        df = fetch_ohlcv(sym, interval="15m", limit=200)
+    if df.empty:
+        return {
+            "ok": quote.get("ok", False),
+            "symbol": sym,
+            "mark": mark,
+            "source": quote.get("source"),
+            "error": quote.get("error") or "No OHLCV for levels",
+            "levels": {},
+        }
+
+    # Prior day high/low from daily resample
+    daily = df.resample("1D").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+    pdh = pdl = pivot = r1 = s1 = r2 = s2 = None
+    if len(daily) >= 2:
+        prev = daily.iloc[-2]
+        pdh = float(prev["high"])
+        pdl = float(prev["low"])
+        pc = float(prev["close"])
+        pivot = (pdh + pdl + pc) / 3.0
+        r1 = 2 * pivot - pdl
+        s1 = 2 * pivot - pdh
+        r2 = pivot + (pdh - pdl)
+        s2 = pivot - (pdh - pdl)
+
+    # Last 24 bars high/low as session proxy
+    window = df.tail(24)
+    sess_high = float(window["high"].max())
+    sess_low = float(window["low"].min())
+
+    # Swing points (last 30 bars, 3-bar fractal)
+    highs = df["high"].values
+    lows = df["low"].values
+    swing_highs = []
+    swing_lows = []
+    n = len(df)
+    for i in range(2, n - 2):
+        if highs[i] >= highs[i - 1] and highs[i] >= highs[i - 2] and highs[i] >= highs[i + 1] and highs[i] >= highs[i + 2]:
+            swing_highs.append(float(highs[i]))
+        if lows[i] <= lows[i - 1] and lows[i] <= lows[i - 2] and lows[i] <= lows[i + 1] and lows[i] <= lows[i + 2]:
+            swing_lows.append(float(lows[i]))
+    near_sh = swing_highs[-3:] if swing_highs else []
+    near_sl = swing_lows[-3:] if swing_lows else []
+
+    levels = {
+        "mark": mark,
+        "pdh": pdh,
+        "pdl": pdl,
+        "pivot": pivot,
+        "r1": r1,
+        "s1": s1,
+        "r2": r2,
+        "s2": s2,
+        "session_high": sess_high,
+        "session_low": sess_low,
+        "swing_highs": near_sh,
+        "swing_lows": near_sl,
+    }
+
+    return {
+        "ok": True,
+        "symbol": sym,
+        "mark": mark,
+        "change_pct": quote.get("change_pct", 0),
+        "source": quote.get("source"),
+        "levels": levels,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def format_levels_message(data: Dict[str, Any]) -> str:
+    if not data.get("ok"):
+        return (
+            f"❌ **Levels unavailable** for `{data.get('symbol')}`\n"
+            f"{data.get('error') or 'No data'}\n"
+            f"Source: `{data.get('source')}`"
+        )
+    L = data.get("levels") or {}
+    sym = data["symbol"]
+    mark = data["mark"]
+
+    def fmt(x):
+        if x is None:
+            return "—"
+        if mark >= 1000:
+            return f"${x:,.2f}"
+        return f"${x:,.4f}"
+
+    dist = lambda x: "" if x is None or not mark else f" ({(x - mark) / mark * 100:+.2f}%)"
+
+    lines = [
+        f"📐 **{sym} Key Levels** (live)",
+        f"Mark: **{fmt(mark)}** | Δ `{data.get('change_pct', 0):+.2f}%`",
+        f"Source: `{data.get('source')}`",
+        "",
+        "**Prior Day**",
+        f"• PDH {fmt(L.get('pdh'))}{dist(L.get('pdh'))}",
+        f"• PDL {fmt(L.get('pdl'))}{dist(L.get('pdl'))}",
+        "",
+        "**Classic Pivots**",
+        f"• R2 {fmt(L.get('r2'))}{dist(L.get('r2'))}",
+        f"• R1 {fmt(L.get('r1'))}{dist(L.get('r1'))}",
+        f"• P  {fmt(L.get('pivot'))}{dist(L.get('pivot'))}",
+        f"• S1 {fmt(L.get('s1'))}{dist(L.get('s1'))}",
+        f"• S2 {fmt(L.get('s2'))}{dist(L.get('s2'))}",
+        "",
+        "**Session (24h proxy)**",
+        f"• High {fmt(L.get('session_high'))}{dist(L.get('session_high'))}",
+        f"• Low  {fmt(L.get('session_low'))}{dist(L.get('session_low'))}",
+    ]
+    if L.get("swing_highs") or L.get("swing_lows"):
+        lines.append("")
+        lines.append("**Recent Swings**")
+        if L.get("swing_highs"):
+            lines.append("• SH " + ", ".join(fmt(x) for x in L["swing_highs"]))
+        if L.get("swing_lows"):
+            lines.append("• SL " + ", ".join(fmt(x) for x in L["swing_lows"]))
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    for s in ("BTCUSDT", "XAUUSD", "ETHUSDT"):
+        print("PRICE", s, fetch_spot_price(s))
+        print(format_levels_message(compute_levels(s)))
+        print("---")
