@@ -22,6 +22,12 @@ def main() -> None:
     except Exception as e:
         print("[run_bot] wire:", e)
 
+    try:
+        import wire_strategy_fixes
+        wire_strategy_fixes.main()
+    except Exception as e:
+        print("[run_bot] strategy wire:", e)
+
     main_py = ROOT / "main.py"
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")
