@@ -40,6 +40,30 @@ class TestDataFeed(unittest.TestCase):
         self.assertEqual(result["close"], 102.0)
         self.assertEqual(result["source"], "ccxt")
 
+    def test_multi_timeframe_fetches_each_timeframe_directly(self):
+        feed = self.make_feed(pd.DataFrame())
+        calls = []
+
+        def fetch(limit=5, timeframe=None):
+            calls.append(timeframe)
+            idx = pd.date_range("2026-01-01", periods=3, freq="h", tz="UTC")
+            return pd.DataFrame(
+                {
+                    "open": [100.0, 101.0, 102.0],
+                    "high": [101.0, 102.0, 103.0],
+                    "low": [99.0, 100.0, 101.0],
+                    "close": [100.5, 101.5, 102.5],
+                    "volume": [1.0, 2.0, 3.0],
+                },
+                index=idx,
+            )
+
+        feed.fetch = fetch
+        frames = feed.multi_tf(limit_1m=1500)
+        self.assertEqual(calls, ["1m", "5m", "15m", "1h", "4h", "1d"])
+        self.assertEqual(len(frames["daily"]), 3)
+        self.assertIn("4h", frames)
+
 
 if __name__ == "__main__":
     unittest.main()
