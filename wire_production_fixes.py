@@ -80,6 +80,10 @@ def main() -> None:
             "        highs = p + rng.uniform(tick * 0.3, tick * 2, limit)\n"
             "        lows = p - rng.uniform(tick * 0.3, tick * 2, limit)\n",
         ),
+        ("data = feed.multi_tf(limit_1m=700)", "data = feed.multi_tf(limit_1m=1500)"),
+        ("data = feed.multi_tf(limit_1m=500)", "data = feed.multi_tf(limit_1m=1500)"),
+        ("def multi_tf(self, limit_1m: int = 700)", "def multi_tf(self, limit_1m: int = 1500)"),
+        ("def fetch(self, limit: int = 600", "def fetch(self, limit: int = 1500"),
     ])
     logs += patch_file(ROOT / "config.py", [
         ('DEFAULT_SYMBOL = os.getenv("BOT_SYMBOL", "XAUTUSD").upper()',
