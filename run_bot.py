@@ -28,6 +28,12 @@ def main() -> None:
     except Exception as e:
         print("[run_bot] strategy wire:", e)
 
+    try:
+        from ai_historical_predictor import patch_into_indicators_module
+        patch_into_indicators_module()
+    except Exception as e:
+        print("[run_bot] ai_historical:", e)
+
     main_py = ROOT / "main.py"
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")
