@@ -46,18 +46,14 @@ def _safe_float(val: Optional[str], default: float) -> float:
         return default
 
 
-# Load .env file if present in workspace root
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-# Telegram settings
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or ""
 
-# Gemini AI settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Trading engine settings
 DEFAULT_SYMBOL = os.getenv("BOT_SYMBOL", "XAUUSD").upper()
 DEFAULT_DATA_SOURCE = os.getenv("BOT_DATA_SOURCE", "ccxt").lower()
 DEFAULT_EXCHANGE = os.getenv("BOT_EXCHANGE", "binance").lower()
@@ -65,15 +61,13 @@ TRADINGVIEW_EXCHANGE = os.getenv("TRADINGVIEW_EXCHANGE", "")
 TRADINGVIEW_SCREENER = os.getenv("TRADINGVIEW_SCREENER", "")
 POLL_INTERVAL = _safe_int(os.getenv("BOT_POLL"), 10)
 FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
-INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
+BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
+_equity_default = 100.0 if BROKER_MODE == "paper" else 10000.0
+INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), _equity_default)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.18)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
 AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
 
-# Broker settings ("paper" or "live")
-BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
-
-# Operations dashboard: local-only by default. A non-loopback bind requires a token.
 STATUS_FILE = os.getenv(
     "BOT_STATUS_FILE",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), ".runtime", "bot_status.json"),
@@ -82,18 +76,14 @@ DASHBOARD_HOST = os.getenv("BOT_DASHBOARD_HOST", "127.0.0.1")
 DASHBOARD_PORT = _safe_int(os.getenv("BOT_DASHBOARD_PORT"), 8765)
 DASHBOARD_TOKEN = os.getenv("BOT_DASHBOARD_TOKEN", "")
 
-# News settings
 NEWS_ENABLED = os.getenv("BOT_NEWS", "true").lower() in ("true", "1", "yes", "on")
 NEWS_WINDOW_MIN = _safe_int(os.getenv("BOT_NEWS_WINDOW"), 30)
 
-# Exchange APIs
 DELTA_API = os.getenv("DELTA_API", "https://api.india.delta.exchange/v2/tickers")
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
 
-# Concurrent autotrade limits
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 5)
-# Comma-separated symbols to autotrade (max concurrent still MAX_OPEN_TRADES)
 _AUTOTRADE_SYMBOLS_RAW = os.getenv(
     "BOT_AUTOTRADE_SYMBOLS",
     "BTCUSDT,ETHUSDT,XAUUSD,SOLUSDT,BNBUSDT",
