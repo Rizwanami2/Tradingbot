@@ -643,8 +643,53 @@ def run_cli_interactive():
         elif name == "price":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             print(get_price_info(sym))
+        elif name == "news":
+            sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+            try:
+                from news_agent import NewsAgent
+                agent = NewsAgent(symbol=sym)
+                if hasattr(agent, "report"):
+                    print(agent.report())
+                else:
+                    v = agent.vote()
+                    print(f"{v.direction.name}: {v.reason}")
+            except Exception as e:
+                print(f"News error: {e}")
+        elif name == "risk":
+            print(risk_mgr.summary())
+        elif name == "positions":
+            print(engine.get_portfolio_summary())
+        elif name == "autotrade":
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
+            if arg in ("on", "1", "true", "enable"):
+                autotrade_active = True
+                engine.reset_halt()
+                print(f"Autotrade ON ({broker_mode} mode)")
+            elif arg in ("off", "0", "false", "disable"):
+                autotrade_active = False
+                print("Autotrade OFF")
+            else:
+                st = "ON" if autotrade_active else "OFF"
+                print(f"Autotrade is {st} ({broker_mode}). Use: autotrade on|off")
+        elif name == "close":
+            sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+            try:
+                engine.close_position(sym)
+                print(f"Close requested for {sym}")
+            except Exception as e:
+                print(f"Close failed: {e}")
+        elif name == "cancel":
+            sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+            try:
+                engine.cancel_setup(sym, reason="Manual CLI cancel")
+                print(f"Cancelled pending setup for {sym}")
+            except Exception as e:
+                print(f"Cancel failed: {e}")
+        elif name == "help":
+            print("Commands: signal [SYM], backtest [BARS] [SYM], status, levels [SYM], price [SYM], news [SYM], risk, positions, autotrade on|off, close [SYM], cancel [SYM], exit")
         else:
-            print("Commands: signal, single, backtest [single], status, levels, price, exit")
+            print("Commands: signal, single, backtest, status, levels, price, news, risk, positions, autotrade on|off, close, cancel, exit")
 
 
 def main():
