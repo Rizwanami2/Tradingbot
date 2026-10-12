@@ -9,6 +9,7 @@ pytest>=7.0.0
 # Data
 tradingview-ta>=3.3.0
 yfinance>=0.2.28
+multitasking<0.0.12
 pyarrow>=14.0.0
 
 # Optional

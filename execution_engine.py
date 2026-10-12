@@ -416,7 +416,32 @@ class ExecutionEngine:
                 events.append(ev)
                 self._dispatch_event(ev["event"], pos, ev["message"])
 
-            # (D) Check TP2 (+2.5R)
+            
+            # (C2) Structure-based trailing after TP1
+            if pos.partials_done >= 1 and sym in self.active_positions:
+                try:
+                    from execution_enhancements import apply_structure_trail
+                    atr_proxy = abs((pos.executed_price or pos.entry_level) - pos.stop_loss) / 1.2
+                    # Build minimal OHLC window from recent highs/lows tracked on the position
+                    import pandas as _pd
+                    _df = _pd.DataFrame({
+                        "high": [pos.highest_price, high],
+                        "low": [pos.lowest_price, low],
+                        "close": [curr_price, curr_price],
+                        "open": [curr_price, curr_price],
+                    })
+                    # Prefer external candle history if caller attached it
+                    hist = candle.get("_history") if isinstance(candle, dict) else None
+                    if hist is not None and len(hist) >= 20:
+                        _df = hist
+                    trail_ev = apply_structure_trail(pos, _df, atr_value=float(atr_proxy or 0))
+                    if trail_ev:
+                        events.append(trail_ev)
+                        self._dispatch_event(trail_ev["event"], pos, trail_ev["message"])
+                except Exception as _trail_ex:
+                    pass
+
+# (D) Check TP2 (+2.5R)
             tp2_hit = (eval_high >= pos.tp2) if is_long else (eval_low <= pos.tp2)
             if pos.partials_done == 1 and pos.tp2 and tp2_hit:
                 close_fraction = self.risk_manager.config.tp2_close_pct  # 30%

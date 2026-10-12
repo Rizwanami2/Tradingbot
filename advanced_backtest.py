@@ -623,6 +623,8 @@ def parameter_sweep(
 # ---------------------------------------------------------------------------
 
 def load_data(symbol: str, bars: int, source: str, csv: Optional[str]) -> pd.DataFrame:
+    """REAL DATA FIRST — CSV → CCXT/data_feed → TradingView/multi-agent → synthetic last."""
+    # 1) Explicit CSV
     if csv:
         df = pd.read_csv(csv)
         df.columns = [c.lower() for c in df.columns]
@@ -637,23 +639,52 @@ def load_data(symbol: str, bars: int, source: str, csv: Optional[str]) -> pd.Dat
                     break
         return df.tail(bars)
 
+    errors = []
+
+    # 2) CCXT / data_feed (real exchange history)
     try:
         from data_feed import DataFeed
-        feed = DataFeed(symbol=symbol, source=source)
-        return feed.fetch(limit=bars)
-    except Exception:
-        pass
+        import config as _cfg
+        feed = DataFeed(
+            symbol=symbol,
+            source="ccxt",
+            exchange_id=getattr(_cfg, "DEFAULT_EXCHANGE", "binance"),
+            timeframe="1m",
+        )
+        df = feed.fetch(limit=bars, timeframe="1m")
+        if df is not None and not df.empty and len(df) >= min(100, bars // 2):
+            print(f"[AdvancedBacktest] Real data via data_feed/ccxt: {len(df)} bars")
+            return df.tail(bars)
+    except Exception as e:
+        errors.append(f"ccxt:{e}")
 
+    # 3) Requested source if not already ccxt
+    if source and source.lower() not in ("demo", "synthetic", "ccxt"):
+        try:
+            from data_feed import DataFeed
+            feed = DataFeed(symbol=symbol, source=source)
+            df = feed.fetch(limit=bars)
+            if df is not None and not df.empty:
+                print(f"[AdvancedBacktest] Real data via source={source}: {len(df)} bars")
+                return df.tail(bars)
+        except Exception as e:
+            errors.append(f"source:{e}")
+
+    # 4) Multi-agent / TradingView path
     try:
         from multi_agent_trading_bot import MarketDataFeed
-        feed = MarketDataFeed(symbol=symbol, source=source)
-        return feed.fetch(limit=bars)
-    except Exception:
-        pass
+        feed = MarketDataFeed(symbol=symbol, source=source if source not in ("demo", "synthetic") else "tradingview")
+        df = feed.fetch(limit=bars)
+        if df is not None and not getattr(df, "empty", True):
+            print(f"[AdvancedBacktest] Data via MarketDataFeed: {len(df)} bars")
+            return df.tail(bars)
+    except Exception as e:
+        errors.append(f"tv:{e}")
 
-    # Synthetic fallback for research only
-    print("[AdvancedBacktest] Using synthetic data (demo)")
+    # 5) Synthetic last resort (research only)
+    print(f"[AdvancedBacktest] WARNING: real data unavailable ({'; '.join(errors) or 'none'}); using synthetic")
     dates = pd.date_range(end=pd.Timestamp.now(tz="UTC"), periods=bars, freq="1min")
+    import numpy as np
     returns = np.random.randn(bars) * 0.3
     p = 2650 + np.cumsum(returns)
     return pd.DataFrame({
@@ -662,6 +693,8 @@ def load_data(symbol: str, bars: int, source: str, csv: Optional[str]) -> pd.Dat
         "close": p + np.random.randn(bars) * 0.1,
         "volume": np.random.randint(50, 1000, bars),
     }, index=dates)
+
+
 
 
 def main():

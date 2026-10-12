@@ -131,7 +131,7 @@ def patch_main() -> bool:
     if "Auto backtest suite" not in text:
         pattern = r"async def backtest_command\(update: Update, ctx: ContextTypes\.DEFAULT_TYPE\):.*?(?=\nasync def |\ndef main\()"
         new_fn = NEW_BACKTEST_COMMAND.strip() + "\n\n\n"
-        text2, n = re.subn(pattern, new_fn, text, count=1, flags=re.S)
+        text2, n = re.subn(pattern, lambda _: new_fn, text, count=1, flags=re.S)
         if n:
             text = text2
             changed = True

@@ -190,7 +190,7 @@ class Vote:
 class TrendAgent:
     name = "TREND"
 
-    def vote(self, df: pd.DataFrame) -> Vote:
+    def vote(self, df: pd.DataFrame, *args, **kwargs) -> Vote:
         d = detect_trend(df)
         if d == Dir.FLAT:
             return Vote(self.name, Dir.FLAT, 0.0, "No clear trend")
@@ -286,7 +286,15 @@ class AILearnerAgent:
     def vote(self, df: pd.DataFrame) -> Vote:
         if self._improved is not None:
             try:
-                return self._improved.vote(df)
+                v = self._improved.vote(df)
+                d = v.direction
+                if getattr(d, "name", None) == "LONG":
+                    direction = Dir.LONG
+                elif getattr(d, "name", None) == "SHORT":
+                    direction = Dir.SHORT
+                else:
+                    direction = Dir.FLAT
+                return Vote(self.name, direction, float(v.strength), v.reason)
             except Exception:
                 pass
         if len(df) < 60:
@@ -307,18 +315,65 @@ class AILearnerAgent:
 class NewsAgent:
     name = "NEWS"
 
-    def __init__(self):
+    def __init__(self, enabled: bool = True, window_min: int = 30, **kwargs):
+        self.enabled = bool(enabled)
+        self.window_min = int(window_min)
+        self._cal = None
         self._improved = None
-        if _ImprovedNewsAgent is not None:
+        if self.enabled and _ImprovedNewsAgent is not None:
             try:
-                self._improved = _ImprovedNewsAgent()
+                try:
+                    self._improved = _ImprovedNewsAgent(enabled=True, window_min=self.window_min)
+                except TypeError:
+                    self._improved = _ImprovedNewsAgent()
             except Exception:
                 pass
 
+    def blackout(self, ts=None):
+        if not self.enabled:
+            return False, "disabled"
+        if getattr(self, "_cal", None):
+            from datetime import datetime, timezone
+            if ts is None:
+                ts = datetime.now(timezone.utc)
+            if getattr(ts, "tzinfo", None) is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            window = getattr(self, "window_min", 30) * 60
+            for item in self._cal:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    evt_ts, title = item[0], item[1]
+                elif isinstance(item, dict):
+                    evt_ts, title = item.get("dt"), item.get("title", "")
+                else:
+                    continue
+                if evt_ts is None:
+                    continue
+                if getattr(evt_ts, "tzinfo", None) is None:
+                    evt_ts = evt_ts.replace(tzinfo=timezone.utc)
+                if abs((evt_ts - ts).total_seconds()) <= window:
+                    return True, f"High Impact Event: {title}"
+            return False, "ok"
+        if self._improved is not None and hasattr(self._improved, "blackout"):
+            try:
+                return self._improved.blackout(ts)
+            except Exception as e:
+                return False, str(e)
+        return False, "no calendar"
+
     def vote(self) -> Vote:
+        if not self.enabled:
+            return Vote(self.name, Dir.FLAT, 0.0, "News filter disabled")
         if self._improved is not None:
             try:
-                return self._improved.vote()
+                v = self._improved.vote()
+                d = v.direction
+                if getattr(d, "name", None) == "LONG":
+                    direction = Dir.LONG
+                elif getattr(d, "name", None) == "SHORT":
+                    direction = Dir.SHORT
+                else:
+                    direction = Dir.FLAT
+                return Vote(self.name, direction, float(getattr(v, "strength", 0.0)), getattr(v, "reason", ""))
             except Exception:
                 pass
         return Vote(self.name, Dir.FLAT, 0.0, "No high-impact news filter active")
@@ -345,16 +400,6 @@ class Arbiter:
         self.news = NewsAgent()
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD"):
-        if is_tradeable_session is not None:
-            try:
-                ok, reason = is_tradeable_session(
-                    require_killzone=self.require_killzone, allow_asian=self.allow_asian
-                )
-                if not ok:
-                    return None, f"SESSION: {reason}", []
-            except Exception:
-                pass
-
         votes = [
             self.trend.vote(df1),
             self.liq.vote(df1, daily if daily is not None else pd.DataFrame()),
@@ -362,6 +407,16 @@ class Arbiter:
             self.ai.vote(df1),
             self.news.vote(),
         ]
+
+        if is_tradeable_session is not None:
+            try:
+                ok, reason = is_tradeable_session(
+                    require_killzone=self.require_killzone, allow_asian=self.allow_asian
+                )
+                if not ok:
+                    return None, f"SESSION: {reason}", votes
+            except Exception:
+                pass
 
         long_score = short_score = 0.0
         long_n = short_n = 0

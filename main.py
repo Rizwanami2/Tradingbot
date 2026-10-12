@@ -19,7 +19,7 @@ Commands:
   /news             - Macroeconomic calendar events and crypto sentiment
   /positions        - Open positions and trailing stop status
   /autotrade [on|off] - Toggle setup monitoring and alerts
-  /backtest [bars]  - Run backtest on demand and return report
+  /backtest [bars] [SYMBOL] - Auto full suite (WF + MC + sweep)
   /reset            - Clear conversation memory
   any text          - Chat with Gemini AI trading assistant
 """
@@ -348,25 +348,53 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    bars = 1000
-    if ctx.args:
+    """Full auto backtest suite (single + multiagent + walk-forward + Monte Carlo + sweep)."""
+    args = list(ctx.args or [])
+    bars = 2000
+    symbol = config.DEFAULT_SYMBOL.upper()
+    if args:
         try:
-            bars = int(ctx.args[0])
-        except ValueError:
-            await update.message.reply_text("Usage: /backtest [bars]")
+            bars = int(args[0])
+        except (TypeError, ValueError):
+            await update.message.reply_text("Usage: /backtest [bars] [SYMBOL]")
             return
-    await update.message.reply_text(f"⏳ Backtest {bars} bars...")
+    if not 100 <= bars <= 10000:
+        await update.message.reply_text("Choose between 100 and 10,000 candles.")
+        return
+    if len(args) > 1:
+        symbol = args[1].upper()
+
+    await update.message.reply_text(
+        f"⏳ **Auto backtest suite** — `{symbol}` — {bars} bars\n"
+        f"single + multiagent + walk-forward + Monte Carlo + sweep…",
+        parse_mode="Markdown",
+    )
+
+    def _run():
+        from auto_backtest import run_auto_backtest
+        return run_auto_backtest(
+            symbol=symbol,
+            bars=bars,
+            source=getattr(config, "DEFAULT_DATA_SOURCE", "ccxt"),
+            equity=getattr(config, "INITIAL_EQUITY", 10000.0),
+            risk=max(0.001, getattr(config, "DEFAULT_RISK_PCT", 0.18) / 100.0),
+            mc_runs=300,
+            wf_windows=4,
+            do_sweep=True,
+        )
+
     try:
-        from data_feed import DataFeed
-        feed = DataFeed(symbol=config.DEFAULT_SYMBOL, source="ccxt", exchange_id=config.DEFAULT_EXCHANGE, timeframe="1h")
-        historical = feed.fetch(limit=bars, timeframe="1h")
-        if historical is None or historical.empty:
-            raise ValueError("No historical candles")
-        stats = run_backtest(historical.tail(bars), config=BacktestConfig(initial_equity=config.INITIAL_EQUITY), symbol=config.DEFAULT_SYMBOL, timeframe="1h")
-        await update.message.reply_text(f"```\n{stats}\n```", parse_mode="Markdown")
+        report = await asyncio.to_thread(_run)
+        text = report.text(max_len=3800)
+        await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
     except Exception as exc:
-        logger.warning("Backtest failed: %s", exc)
-        await update.message.reply_text(f"Backtest failed: `{type(exc).__name__}: {exc}`", parse_mode="Markdown")
+        logger.warning("Auto backtest failed for %s: %s", symbol, exc)
+        await update.message.reply_text(
+            f"Backtest failed: `{type(exc).__name__}: {exc}`\n"
+            f"Tip: set a real data source or provide CSV; synthetic data is last resort.",
+            parse_mode="Markdown",
+        )
+
 
 
 async def reset_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

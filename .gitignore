@@ -16,6 +16,17 @@ env/
 # State & Logs
 risk_state.json
 multi_agent_memory.json
+bot_state.json
+risk_advanced_state.json
+risk_tiers_state.json
+agent_stats.json
+trade_journal.json
+autonomous_memory.json
+autonomous_state.json
+ops_health.json
+ab_books.json
+learning_edge.json
+data_cache/
 *.jsonl
 *.log
 attachments/

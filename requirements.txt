@@ -6,5 +6,6 @@ ccxt>=4.0.0
 pytest>=7.0.0
 tradingview-ta>=3.3.0
 yfinance>=0.2.28
+multitasking<0.0.12
 pyarrow>=14.0.0
 python-dotenv>=1.0.0
