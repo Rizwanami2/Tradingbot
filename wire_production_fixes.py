@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply production fixes in-place (consensus, stops, realtime demo, autotrade). Safe to run every boot."""
+"""Apply production fixes in-place. Safe to run every boot."""
 from __future__ import annotations
 from pathlib import Path
 
@@ -90,6 +90,42 @@ def main() -> None:
          'DEFAULT_DATA_SOURCE = os.getenv("BOT_DATA_SOURCE", "ccxt").lower()'),
         ('AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false").lower() in ("true", "1", "yes", "on")',
          'AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")'),
+    ])
+    logs += patch_file(ROOT / "main.py", [
+        (
+            "engine = ExecutionEngine(risk_manager=risk_mgr)",
+            "try:\n"
+            "    from execution import create_broker\n"
+            "    _broker = create_broker(\n"
+            "        broker_mode=getattr(config, \"BROKER_MODE\", \"paper\"),\n"
+            "        exchange_id=getattr(config, \"DEFAULT_EXCHANGE\", \"binance\"),\n"
+            "        api_key=getattr(config, \"EXCHANGE_API_KEY\", \"\"),\n"
+            "        api_secret=getattr(config, \"EXCHANGE_API_SECRET\", \"\"),\n"
+            "        initial_balance=getattr(config, \"INITIAL_EQUITY\", 10000.0),\n"
+            "    )\n"
+            "except Exception as _broker_err:\n"
+            "    print(\"[boot] broker:\", _broker_err)\n"
+            "    _broker = None\n"
+            "engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)",
+        ),
+        (
+            "async def live_monitoring_worker(app):\n"
+            "    \"\"\"Background task that polls candles and tracks setups/positions.\"\"\"\n"
+            "    feed = MarketDataFeed(symbol=config.DEFAULT_SYMBOL, source=config.DEFAULT_DATA_SOURCE)\n"
+            "    symbol = config.DEFAULT_SYMBOL\n",
+            "async def live_monitoring_worker(app):\n"
+            "    \"\"\"Background task that polls candles and tracks setups/positions.\"\"\"\n"
+            "    try:\n"
+            "        from multi_agent_trading_bot import _norm_trade_symbol\n"
+            "        symbol = _norm_trade_symbol(getattr(config, \"DEFAULT_SYMBOL\", \"XAUUSD\"))\n"
+            "    except Exception:\n"
+            "        symbol = str(getattr(config, \"DEFAULT_SYMBOL\", \"XAUUSD\")).upper()\n"
+            "        if symbol in (\"XAUTUSD\", \"XAUT\", \"GOLD\", \"XAU\"):\n"
+            "            symbol = \"XAUUSD\"\n"
+            "        if symbol in (\"BTC\", \"BTCUSD\", \"XBT\"):\n"
+            "            symbol = \"BTCUSDT\"\n"
+            "    feed = MarketDataFeed(symbol=symbol, source=config.DEFAULT_DATA_SOURCE)\n",
+        ),
     ])
     print("[wire_production_fixes]", "; ".join(logs))
 
