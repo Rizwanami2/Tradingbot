@@ -67,7 +67,7 @@ logger = logging.getLogger("TradingBot")
 gemini = GeminiClient()
 risk_mgr = RiskManager(equity=config.INITIAL_EQUITY, symbol=config.DEFAULT_SYMBOL)
 risk_mgr.set_leverage(config.DEFAULT_LEVERAGE)
-arbiter = Arbiter()
+arbiter = Arbiter(allow_asian=True)
 engine = ExecutionEngine(risk_manager=risk_mgr)
 
 # Bot runtime state. Monitoring is off by default until explicitly enabled.
@@ -259,9 +259,16 @@ async def price_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
+    sym = (ctx.args[0] if ctx.args else config.DEFAULT_SYMBOL).upper()
+    if sym in ("BTC", "BITCOIN", "BTCUSD", "XBT"):
+        sym = "BTCUSDT"
+    elif sym in ("ETH", "ETHEREUM", "ETHUSD"):
+        sym = "ETHUSDT"
+    elif sym in ("GOLD", "XAU", "XAUT", "XAUTUSD"):
+        sym = "XAUUSD"
     await update.message.reply_text(f"⏳ Evaluating **{sym}** across all 5 agents...", parse_mode="Markdown")
-    res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE, leverage=risk_mgr.get_leverage())
+    risk_mgr.set_symbol(sym)
+    res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE, leverage=risk_mgr.get_leverage(), on_demand=True)
     price_val = res.get("price", 0.0) or 0.0
     sig = res.get("signal")
     votes = res.get("votes", [])
@@ -378,7 +385,11 @@ async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def news_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        agent = NewsAgent()
+        from news_agent import NewsAgent
+        agent = NewsAgent(symbol=getattr(config, "DEFAULT_SYMBOL", "XAUUSD"))
+        if hasattr(agent, "report"):
+            await update.message.reply_text(agent.report(), parse_mode="Markdown")
+            return
         v = agent.vote()
         await update.message.reply_text(f"📰 **News**\n{v.direction.name}: {v.reason}", parse_mode="Markdown")
     except Exception as e:
@@ -388,15 +399,17 @@ async def news_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global autotrade_active
     arg = (ctx.args[0].lower() if ctx.args else "")
+    broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
     if arg in ("on", "1", "true", "enable"):
         autotrade_active = True
-        await update.message.reply_text("🟢 Autotrade **ON** (setup monitoring)", parse_mode="Markdown")
+        engine.reset_halt()
+        await update.message.reply_text(f"🟢 Autotrade **ON** ({broker_mode} mode monitoring)", parse_mode="Markdown")
     elif arg in ("off", "0", "false", "disable"):
         autotrade_active = False
         await update.message.reply_text("⚪ Autotrade **OFF**", parse_mode="Markdown")
     else:
         st = "ON" if autotrade_active else "OFF"
-        await update.message.reply_text(f"Autotrade is **{st}**. Use `/autotrade on|off`", parse_mode="Markdown")
+        await update.message.reply_text(f"Autotrade is **{st}** ({broker_mode}). Use `/autotrade on|off`", parse_mode="Markdown")
 
 
 async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -549,8 +562,10 @@ async def live_monitoring_worker(app):
 
                 if autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups:
                     sig, why, votes = arbiter.decide(
-                        df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr, symbol=symbol
+                        df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr, symbol=symbol, on_demand=True
                     )
+                    if not sig:
+                        logger.info("Autotrade: no setup — %s", why)
                     if sig:
                         order = engine.register_setup(sig, reason=sig.get("reason", ""))
                         alert = (

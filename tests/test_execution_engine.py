@@ -289,6 +289,12 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertIsNotNone(closed)
         self.assertNotIn("XAUUSD", self.engine.broker.positions)
 
+    def test_reset_halt(self):
+        self.engine.execution_halted = True
+        self.assertTrue(self.engine.execution_halted)
+        self.engine.reset_halt()
+        self.assertFalse(self.engine.execution_halted)
+
 
 if __name__ == "__main__":
     unittest.main()

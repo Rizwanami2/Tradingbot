@@ -157,15 +157,27 @@ def patch_main(data: str) -> str:
 
 def restore() -> None:
     root = Path(__file__).resolve().parent
+    rm_path = root / "risk_manager.py"
+    ma_path = root / "multi_agent_trading_bot.py"
+    if (
+        rm_path.exists() and "class RiskManager" in rm_path.read_text(errors="ignore") and
+        ma_path.exists() and "class Arbiter" in ma_path.read_text(errors="ignore")
+    ):
+        print("[restore] Production files already present and verified.")
+        return
+
     mapping = {
         "risk_manager.py": patch_risk,
         "multi_agent_trading_bot.py": patch_ma,
         "main.py": patch_main,
     }
     for name, patcher in mapping.items():
-        data = patcher(fetch(name))
-        (root / name).write_text(data)
-        print(f"[restore] {name} {len(data)} bytes")
+        try:
+            data = patcher(fetch(name))
+            (root / name).write_text(data)
+            print(f"[restore] {name} {len(data)} bytes")
+        except Exception as e:
+            print(f"[restore] Failed to fetch {name}: {e}")
     print("[restore] DONE")
 
 

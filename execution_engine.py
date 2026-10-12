@@ -108,6 +108,10 @@ class ExecutionEngine:
         # Prevent duplicate orders after any ambiguous broker response.
         self.execution_halted: bool = False
 
+    def reset_halt(self) -> None:
+        """Clear execution halt state so setups can be registered again."""
+        self.execution_halted = False
+
     def _next_order_id(self) -> str:
         self._order_counter += 1
         return f"ORD-{int(time.time())}-{self._order_counter:03d}"

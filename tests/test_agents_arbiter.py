@@ -65,6 +65,12 @@ class TestAgentsAndArbiter(unittest.TestCase):
         self.assertIn("votes", res)
         self.assertEqual(len(res["votes"]), 5)
 
+    def test_evaluate_symbol_btc_normalization(self):
+        res = evaluate_symbol("BTC", source="demo", on_demand=True)
+        self.assertEqual(res["symbol"], "BTCUSDT")
+        self.assertGreater(res["price"], 0.0)
+        self.assertEqual(len(res["votes"]), 5)
+
 
 if __name__ == "__main__":
     unittest.main()
