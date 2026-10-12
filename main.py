@@ -368,8 +368,11 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = (ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL)
     try:
-        engine.close_position(sym)
-        await update.message.reply_text(f"Close requested for `{sym}`", parse_mode="Markdown")
+        closed = engine.close_position(sym)
+        if closed:
+            await update.message.reply_text(f"Close executed for `{sym}`", parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"No active position for `{sym}`", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"Close failed: {e}")
 
@@ -377,8 +380,11 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = (ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL)
     try:
-        engine.cancel_setup(sym, reason="Manual cancel")
-        await update.message.reply_text(f"Cancelled pending setup for `{sym}`", parse_mode="Markdown")
+        cancelled = engine.cancel_setup(sym, reason="Manual cancel")
+        if cancelled:
+            await update.message.reply_text(f"Cancelled pending setup for `{sym}`", parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"No pending setup for `{sym}`", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"Cancel failed: {e}")
 
@@ -606,7 +612,7 @@ async def live_monitoring_worker(app):
 
 def run_cli_interactive():
     global autotrade_active
-    print("TradingBot CLI — type /signal, /single, /backtest [single], /status, /price, exit")
+    print("TradingBot CLI — type help for commands, or signal, status, price, news, autotrade, exit")
     while True:
         try:
             cmd = input("TradingBot> ").strip()
@@ -675,15 +681,21 @@ def run_cli_interactive():
         elif name == "close":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             try:
-                engine.close_position(sym)
-                print(f"Close requested for {sym}")
+                closed = engine.close_position(sym)
+                if closed:
+                    print(f"Close executed for {sym}")
+                else:
+                    print(f"No active position for {sym}")
             except Exception as e:
                 print(f"Close failed: {e}")
         elif name == "cancel":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             try:
-                engine.cancel_setup(sym, reason="Manual CLI cancel")
-                print(f"Cancelled pending setup for {sym}")
+                cancelled = engine.cancel_setup(sym, reason="Manual CLI cancel")
+                if cancelled:
+                    print(f"Cancelled pending setup for {sym}")
+                else:
+                    print(f"No pending setup for {sym}")
             except Exception as e:
                 print(f"Cancel failed: {e}")
         elif name == "help":

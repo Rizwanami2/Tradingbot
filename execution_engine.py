@@ -582,6 +582,24 @@ class ExecutionEngine:
         self._dispatch_event("MANUAL_CLOSE", pos, msg)
         return pos
 
+    def close_position(self, symbol: str, current_price: Optional[float] = None, reason: str = "Manual close") -> Optional[TradeOrder]:
+        """Convenience method to close an active position immediately, resolving current price if omitted."""
+        sym = symbol.upper()
+        if sym not in self.active_positions:
+            return None
+        if current_price is None:
+            pos = self.active_positions[sym]
+            try:
+                from realtime_prices import fetch_spot_price
+                rt = fetch_spot_price(sym)
+                if rt.get("ok") and float(rt.get("mark") or 0) > 0:
+                    current_price = float(rt["mark"])
+            except Exception:
+                pass
+            if current_price is None or current_price <= 0:
+                current_price = pos.executed_price or pos.entry_level
+        return self.close_manually(sym, current_price, reason=reason)
+
     def get_portfolio_summary(self) -> Dict:
         """Returns account equity, margin utilization, and open positions stats."""
         total_used_margin = sum(p.margin_required for p in self.active_positions.values())
