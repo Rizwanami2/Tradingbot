@@ -58,8 +58,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Trading engine settings
-DEFAULT_SYMBOL = os.getenv("BOT_SYMBOL", "XAUTUSD").upper()
-DEFAULT_DATA_SOURCE = os.getenv("BOT_DATA_SOURCE", "tradingview").lower()
+DEFAULT_SYMBOL = os.getenv("BOT_SYMBOL", "XAUUSD").upper()
+DEFAULT_DATA_SOURCE = os.getenv("BOT_DATA_SOURCE", "ccxt").lower()
 DEFAULT_EXCHANGE = os.getenv("BOT_EXCHANGE", "binance").lower()
 TRADINGVIEW_EXCHANGE = os.getenv("TRADINGVIEW_EXCHANGE", "")
 TRADINGVIEW_SCREENER = os.getenv("TRADINGVIEW_SCREENER", "")
@@ -68,7 +68,7 @@ FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.18)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
-AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false").lower() in ("true", "1", "yes", "on")
+AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
 
 # Broker settings ("paper" or "live")
 BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
@@ -90,5 +90,3 @@ NEWS_WINDOW_MIN = _safe_int(os.getenv("BOT_NEWS_WINDOW"), 30)
 DELTA_API = os.getenv("DELTA_API", "https://api.india.delta.exchange/v2/tickers")
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
-
-
