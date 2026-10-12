@@ -2,7 +2,7 @@
 """
 Robust Multi-Source Market Data Feed with Caching
 =================================================
-Priority: CCXT (real) → yfinance → TradingView quote → Demo
+Priority: realtime_prices (geo-safe) → CCXT → yfinance → Demo
 Caches candles in Parquet for speed and reliability.
 """
 
@@ -22,7 +22,7 @@ class DataFeed:
     def __init__(
         self,
         symbol: str = "XAUUSD",
-        source: str = "ccxt",          # ccxt | yfinance | tradingview | demo
+        source: str = "ccxt",
         exchange_id: str = "binance",
         timeframe: str = "1m",
         api_key: str = "",
@@ -46,7 +46,7 @@ class DataFeed:
                     "apiKey": self.api_key,
                     "secret": self.api_secret,
                     "enableRateLimit": True,
-                    "options": {"defaultType": "future"},  # or "spot"
+                    "options": {"defaultType": "future"},
                 })
                 print(f"[DataFeed] Connected to {self.exchange_id}")
             except Exception as e:
@@ -54,7 +54,6 @@ class DataFeed:
                 self.source = "yfinance"
 
     def _symbol_map(self) -> str:
-        """Map internal symbol to exchange format."""
         s = self.symbol
         if "/" in s:
             return s
@@ -74,7 +73,6 @@ class DataFeed:
         tf = timeframe or self.timeframe
         cache_file = self._cache_path(tf, limit)
 
-        # Try cache first (valid for 2 minutes on 1m, longer on higher TF)
         if cache_file.exists():
             age = time.time() - cache_file.stat().st_mtime
             max_age = 120 if tf == "1m" else 900
@@ -95,6 +93,16 @@ class DataFeed:
         return df
 
     def _fetch_real(self, limit: int, tf: str) -> pd.DataFrame:
+        # 0. Geo-safe Binance mirrors / realtime_prices OHLCV
+        try:
+            from realtime_prices import fetch_ohlcv
+            iv = tf if tf in ("1m", "5m", "15m", "1h", "4h", "1d") else "1m"
+            df = fetch_ohlcv(self.symbol, interval=iv, limit=limit)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            print(f"[DataFeed] realtime ohlcv: {e}")
+
         # 1. CCXT
         if self._ex:
             try:
@@ -126,7 +134,6 @@ class DataFeed:
         except Exception as e:
             print(f"[DataFeed] yfinance error: {e}")
 
-        # Synthetic candles are permitted only when explicitly requested.
         if self.source == "demo":
             return self._demo(limit)
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -159,6 +166,14 @@ class DataFeed:
         return out
 
     def get_latest_price(self) -> Dict:
+        try:
+            from realtime_prices import fetch_spot_price
+            q = fetch_spot_price(self.symbol)
+            if q.get("ok") and float(q.get("mark") or 0) > 0:
+                return q
+        except Exception as e:
+            print(f"[DataFeed] realtime_prices: {e}")
+
         df = self.fetch(limit=5)
         if not df.empty:
             c = df.iloc[-1]
