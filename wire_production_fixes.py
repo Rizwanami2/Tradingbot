@@ -151,6 +151,48 @@ def main() -> None:
             "                self.state.peak_equity = float(equity)\n",
         ),
     ])
+    logs += patch_file(ROOT / "execution_engine.py", [
+        (
+            "            if tp1_just_hit or just_executed or stop_tightened_in_candle:\n"
+            "                # Check if original stop was hit, or if price subsequently fell back to the new tightened stop\n"
+            "                if is_long:\n"
+            "                    stop_hit = (low <= old_stop) or (curr_price <= pos.stop_loss)\n"
+            "                else:\n"
+            "                    stop_hit = (high >= old_stop) or (curr_price >= pos.stop_loss)\n",
+            "            if just_executed:\n"
+            "                # Entry candle range must not force an instant stop-out after paper fill\n"
+            "                stop_hit = (curr_price <= pos.stop_loss) if is_long else (curr_price >= pos.stop_loss)\n"
+            "            elif tp1_just_hit or stop_tightened_in_candle:\n"
+            "                if is_long:\n"
+            "                    stop_hit = (low <= old_stop) or (curr_price <= pos.stop_loss)\n"
+            "                else:\n"
+            "                    stop_hit = (high >= old_stop) or (curr_price >= pos.stop_loss)\n",
+        ),
+        (
+            'f"PAPER TRADE CONFIRMED: {setup.symbol} {setup.direction} at {exec_price:.4f}. "\n'
+            '                                        "Live execution is blocked until exchange-side protection can be verified."',
+            '(\n'
+            '                                f"✅ **PAPER TRADE CONFIRMED**\\n"\n'
+            '                                f"`{setup.symbol}` **{setup.direction}** @ `${exec_price:,.4f}`\\n"\n'
+            '                                f"SL `${setup.stop_loss:,.2f}` | TP1 `${setup.tp1:,.2f}` | Lots `{setup.lots}`\\n"\n'
+            '                                f"_Paper mode — no real funds risked._"\n'
+            '                            )',
+        ),
+        (
+            'self.execution_halted = True\n'
+            '                        setup.status = OrderStatus.CANCELLED\n'
+            '                        setup.close_reason = f"Execution halted; broker state requires reconciliation: {ex}"',
+            'try:\n'
+            '                            import config as _cfg_halt\n'
+            '                            _hm = str(getattr(_cfg_halt, "BROKER_MODE", "paper")).lower()\n'
+            '                        except Exception:\n'
+            '                            _hm = "paper"\n'
+            '                        if _hm == "live":\n'
+            '                            self.execution_halted = True\n'
+            '                        setup.status = OrderStatus.CANCELLED\n'
+            '                        setup.close_reason = f"Execution failed: {ex}"',
+        ),
+    ])
     print("[wire_production_fixes]", "; ".join(logs))
 
 
