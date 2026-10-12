@@ -1,15 +1,5 @@
-"""
-Advanced Smart Money Concepts (SMC / ICT) Liquidity Engine
-=========================================================
-Detects:
-- Fair Value Gaps (FVG) - 3-candle imbalance
-- Order Blocks (last opposing candle before impulsive move)
-- Equal Highs / Equal Lows (liquidity pools)
-- Previous Day High/Low sweeps with rejection
-- Break of Structure (BOS) / Change of Character (CHoCH)
-
-Designed to be called by LiquidityAgent or Arbiter for higher-accuracy setups.
-"""
+#!/usr/bin/env python3
+"""SMC / ICT Liquidity Structure helpers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,142 +21,127 @@ class SMCSetup:
     kind: str
     direction: StructureDir
     strength: float
-    price_level: float
-    top: float
-    bottom: float
     reason: str
     bars_ago: int = 0
+    price: float = 0.0
 
 
-def _atr(df: pd.DataFrame, period: int = 14) -> float:
-    if len(df) < period + 1:
-        return 0.0
-    h, l, c = df["high"].values, df["low"].values, df["close"].values
-    tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-    return float(np.mean(tr[-period:]))
-
-
-def detect_fair_value_gaps(df: pd.DataFrame, lookback: int = 40, min_gap_atr: float = 0.15) -> List[SMCSetup]:
-    setups: List[SMCSetup] = []
-    if len(df) < 5:
-        return setups
-    atr_val = _atr(df)
-    if atr_val <= 0:
-        return setups
-    min_gap = atr_val * min_gap_atr
-    highs = df["high"].values
-    lows = df["low"].values
-    closes = df["close"].values
-    n = len(df)
-    for i in range(max(2, n - lookback), n - 1):
-        if lows[i] - highs[i - 2] > min_gap and closes[i] > closes[i - 1]:
-            top = float(lows[i])
-            bottom = float(highs[i - 2])
-            mid = (top + bottom) / 2
-            strength = min(1.0, (top - bottom) / (atr_val * 1.5))
-            setups.append(SMCSetup("FVG", StructureDir.BULLISH, 0.55 + 0.35 * strength, mid, top, bottom, f"Bullish FVG ({top - bottom:.2f} gap)", n - 1 - i))
-        if lows[i - 2] - highs[i] > min_gap and closes[i] < closes[i - 1]:
-            top = float(lows[i - 2])
-            bottom = float(highs[i])
-            mid = (top + bottom) / 2
-            strength = min(1.0, (top - bottom) / (atr_val * 1.5))
-            setups.append(SMCSetup("FVG", StructureDir.BEARISH, 0.55 + 0.35 * strength, mid, top, bottom, f"Bearish FVG ({top - bottom:.2f} gap)", n - 1 - i))
-    return setups
-
-
-def detect_order_blocks(df: pd.DataFrame, lookback: int = 30, impulse_atr: float = 1.2) -> List[SMCSetup]:
-    setups: List[SMCSetup] = []
-    if len(df) < 10:
-        return setups
-    atr_val = _atr(df)
-    if atr_val <= 0:
-        return setups
-    highs = df["high"].values
-    lows = df["low"].values
-    opens = df["open"].values
-    closes = df["close"].values
-    n = len(df)
-    for i in range(max(3, n - lookback), n - 2):
-        move = closes[i + 1] - closes[i]
-        if move > atr_val * impulse_atr and closes[i] < opens[i]:
-            top = float(max(opens[i], closes[i]))
-            bottom = float(lows[i])
-            setups.append(SMCSetup("ORDER_BLOCK", StructureDir.BULLISH, 0.75, (top + bottom) / 2, top, bottom, "Bullish Order Block (last down candle before impulse)", n - 1 - i))
-        move = closes[i] - closes[i + 1]
-        if move > atr_val * impulse_atr and closes[i] > opens[i]:
-            top = float(highs[i])
-            bottom = float(min(opens[i], closes[i]))
-            setups.append(SMCSetup("ORDER_BLOCK", StructureDir.BEARISH, 0.75, (top + bottom) / 2, top, bottom, "Bearish Order Block (last up candle before impulse)", n - 1 - i))
-    return setups
-
-
-def detect_equal_highs_lows(df: pd.DataFrame, lookback: int = 40, tolerance_atr: float = 0.12) -> List[SMCSetup]:
-    setups: List[SMCSetup] = []
-    if len(df) < 15:
-        return setups
-    atr_val = _atr(df)
-    tol = atr_val * tolerance_atr if atr_val > 0 else 0.5
+def detect_equal_highs_lows(df: pd.DataFrame, lookback: int = 30, tol: float = 0.0008) -> List[SMCSetup]:
+    out: List[SMCSetup] = []
+    if df is None or len(df) < lookback:
+        return out
     window = df.iloc[-lookback:]
     highs = window["high"].values
     lows = window["low"].values
-    start_i = max(0, len(highs) - 12)
-    for i in range(start_i, len(highs) - 1):
-        for j in range(i + 3, len(highs)):
-            if abs(highs[i] - highs[j]) <= tol:
-                level = float((highs[i] + highs[j]) / 2)
-                setups.append(SMCSetup("EQUAL_HIGHS", StructureDir.BEARISH, 0.65, level, level + tol, level - tol, f"Equal Highs liquidity pool @ {level:.2f}", len(window) - 1 - j))
-                break
-    for i in range(start_i, len(lows) - 1):
-        for j in range(i + 3, len(lows)):
-            if abs(lows[i] - lows[j]) <= tol:
-                level = float((lows[i] + lows[j]) / 2)
-                setups.append(SMCSetup("EQUAL_LOWS", StructureDir.BULLISH, 0.65, level, level + tol, level - tol, f"Equal Lows liquidity pool @ {level:.2f}", len(window) - 1 - j))
-                break
-    return setups
+    last_h = float(highs[-1])
+    last_l = float(lows[-1])
+    # equal highs cluster
+    eq_h = np.where(np.abs(highs - last_h) / max(abs(last_h), 1e-9) < tol)[0]
+    if len(eq_h) >= 2:
+        out.append(SMCSetup("EQUAL_HIGHS", StructureDir.BEARISH, 0.65,
+                            f"Equal Highs liquidity pool @ {last_h:.2f}", bars_ago=0, price=last_h))
+    eq_l = np.where(np.abs(lows - last_l) / max(abs(last_l), 1e-9) < tol)[0]
+    if len(eq_l) >= 2:
+        out.append(SMCSetup("EQUAL_LOWS", StructureDir.BULLISH, 0.65,
+                            f"Equal Lows liquidity pool @ {last_l:.2f}", bars_ago=0, price=last_l))
+    return out
 
 
-def detect_pdh_pdl_sweep(df: pd.DataFrame, daily: pd.DataFrame) -> List[SMCSetup]:
-    setups: List[SMCSetup] = []
-    if len(df) < 5 or len(daily) < 2:
-        return setups
-    pdh = float(daily.iloc[-2]["high"])
-    pdl = float(daily.iloc[-2]["low"])
+def detect_fair_value_gaps(df: pd.DataFrame, lookback: int = 40) -> List[SMCSetup]:
+    out: List[SMCSetup] = []
+    if df is None or len(df) < 5:
+        return out
+    window = df.iloc[-lookback:] if len(df) > lookback else df
+    for i in range(2, len(window)):
+        c0, c1, c2 = window.iloc[i - 2], window.iloc[i - 1], window.iloc[i]
+        # bullish FVG: candle0 high < candle2 low
+        if float(c0["high"]) < float(c2["low"]):
+            gap = float(c2["low"]) - float(c0["high"])
+            if gap > 0:
+                out.append(SMCSetup("FVG_BULL", StructureDir.BULLISH, min(0.55 + gap / max(float(c1["close"]), 1e-9) * 50, 0.9),
+                                    f"Bullish FVG gap {gap:.4f}", bars_ago=len(window) - 1 - i, price=float(c2["low"])))
+        # bearish FVG
+        if float(c0["low"]) > float(c2["high"]):
+            gap = float(c0["low"]) - float(c2["high"])
+            if gap > 0:
+                out.append(SMCSetup("FVG_BEAR", StructureDir.BEARISH, min(0.55 + gap / max(float(c1["close"]), 1e-9) * 50, 0.9),
+                                    f"Bearish FVG gap {gap:.4f}", bars_ago=len(window) - 1 - i, price=float(c2["high"])))
+    return out[-5:]
+
+
+def detect_order_blocks(df: pd.DataFrame, lookback: int = 30) -> List[SMCSetup]:
+    out: List[SMCSetup] = []
+    if df is None or len(df) < 8:
+        return out
+    window = df.iloc[-lookback:]
+    for i in range(1, len(window) - 1):
+        prev, cur, nxt = window.iloc[i - 1], window.iloc[i], window.iloc[i + 1]
+        # bullish OB: down candle then strong up displacement
+        if float(cur["close"]) < float(cur["open"]) and float(nxt["close"]) > float(nxt["open"]):
+            if float(nxt["close"]) > float(cur["high"]):
+                out.append(SMCSetup("OB_BULL", StructureDir.BULLISH, 0.7,
+                                    f"Bullish Order Block @ {float(cur['low']):.2f}",
+                                    bars_ago=len(window) - 1 - i, price=float(cur["low"])))
+        if float(cur["close"]) > float(cur["open"]) and float(nxt["close"]) < float(nxt["open"]):
+            if float(nxt["close"]) < float(cur["low"]):
+                out.append(SMCSetup("OB_BEAR", StructureDir.BEARISH, 0.7,
+                                    f"Bearish Order Block @ {float(cur['high']):.2f}",
+                                    bars_ago=len(window) - 1 - i, price=float(cur["high"])))
+    return out[-4:]
+
+
+def detect_bos(df: pd.DataFrame, lookback: int = 20) -> List[SMCSetup]:
+    out: List[SMCSetup] = []
+    if df is None or len(df) < lookback:
+        return out
+    window = df.iloc[-lookback:]
+    swing_high = float(window["high"].iloc[:-1].max())
+    swing_low = float(window["low"].iloc[:-1].min())
+    last = window.iloc[-1]
+    if float(last["close"]) > swing_high:
+        out.append(SMCSetup("BOS_UP", StructureDir.BULLISH, 0.75,
+                            f"Break of Structure up through {swing_high:.2f}", 0, float(last["close"])))
+    if float(last["close"]) < swing_low:
+        out.append(SMCSetup("BOS_DOWN", StructureDir.BEARISH, 0.75,
+                            f"Break of Structure down through {swing_low:.2f}", 0, float(last["close"])))
+    return out
+
+
+def detect_pdh_pdl_sweep(df: pd.DataFrame, daily: Optional[pd.DataFrame] = None) -> List[SMCSetup]:
+    out: List[SMCSetup] = []
+    if daily is None or daily.empty or len(daily) < 2 or df is None or len(df) < 3:
+        return out
+    try:
+        pdh = float(daily.iloc[-2]["high"])
+        pdl = float(daily.iloc[-2]["low"])
+    except Exception:
+        return out
     prev, curr = df.iloc[-2], df.iloc[-1]
-    if float(prev["high"]) > pdh and float(curr["close"]) < pdh and curr["close"] < curr["open"]:
-        setups.append(SMCSetup("PDH_SWEEP", StructureDir.BEARISH, 0.88, pdh, float(prev["high"]), pdh, "PDH Liquidity Swept + Bearish Rejection", 0))
-    if float(prev["low"]) < pdl and float(curr["close"]) > pdl and curr["close"] > curr["open"]:
-        setups.append(SMCSetup("PDL_SWEEP", StructureDir.BULLISH, 0.88, pdl, pdl, float(prev["low"]), "PDL Liquidity Swept + Bullish Rejection", 0))
-    return setups
-
-
-def detect_bos(df: pd.DataFrame, lookback: int = 12) -> List[SMCSetup]:
-    setups: List[SMCSetup] = []
-    if len(df) < lookback + 2:
-        return setups
-    recent = df.iloc[-(lookback + 1):-1]
-    curr = df.iloc[-1]
-    swing_high = float(recent["high"].max())
-    swing_low = float(recent["low"].min())
-    if float(curr["close"]) > swing_high:
-        setups.append(SMCSetup("BOS", StructureDir.BULLISH, 0.72, swing_high, float(curr["high"]), swing_high, "Bullish Break of Structure", 0))
-    if float(curr["close"]) < swing_low:
-        setups.append(SMCSetup("BOS", StructureDir.BEARISH, 0.72, swing_low, swing_low, float(curr["low"]), "Bearish Break of Structure", 0))
-    return setups
+    if float(prev["high"]) > pdh and float(curr["close"]) < pdh and float(curr["close"]) < float(curr["open"]):
+        out.append(SMCSetup("PDH_SWEEP", StructureDir.BEARISH, 0.85,
+                            f"PDH Liquidity Sweep + Rejection @ {pdh:.2f}", 0, pdh))
+    if float(prev["low"]) < pdl and float(curr["close"]) > pdl and float(curr["close"]) > float(curr["open"]):
+        out.append(SMCSetup("PDL_SWEEP", StructureDir.BULLISH, 0.85,
+                            f"PDL Liquidity Sweep + Rejection @ {pdl:.2f}", 0, pdl))
+    return out
 
 
 def scan_smc(df: pd.DataFrame, daily: Optional[pd.DataFrame] = None) -> List[SMCSetup]:
+    if df is None or getattr(df, "empty", True) or len(df) < 10:
+        return []
     setups: List[SMCSetup] = []
-    setups.extend(detect_fair_value_gaps(df))
-    setups.extend(detect_order_blocks(df))
-    setups.extend(detect_equal_highs_lows(df))
+    setups.extend(detect_pdh_pdl_sweep(df, daily))
     setups.extend(detect_bos(df))
-    if daily is not None and not daily.empty:
-        setups.extend(detect_pdh_pdl_sweep(df, daily))
-    setups.sort(key=lambda s: s.strength, reverse=True)
+    setups.extend(detect_order_blocks(df))
+    setups.extend(detect_fair_value_gaps(df))
+    setups.extend(detect_equal_highs_lows(df))
+    setups.sort(key=lambda s: (-s.strength, s.bars_ago))
     return setups
 
 
 def best_smc_vote(df: pd.DataFrame, daily: Optional[pd.DataFrame] = None) -> Tuple[StructureDir, float, str]:
+    if df is None or getattr(df, "empty", True) or len(df) < 10:
+        return StructureDir.NEUTRAL, 0.0, "Insufficient bars for SMC"
     setups = scan_smc(df, daily)
     if not setups:
         return StructureDir.NEUTRAL, 0.0, "No SMC setup"
