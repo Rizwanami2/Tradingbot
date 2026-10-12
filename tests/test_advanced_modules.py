@@ -129,3 +129,49 @@ def test_monte_carlo_requires_trades():
     mc = monte_carlo_from_trades(trades, n_runs=50, seed=1)
     assert mc.n_runs == 50
     assert math.isfinite(mc.median_return_pct)
+
+
+def test_session_filter_crypto_weekend():
+    from session_filter import get_session_info, is_tradeable_session
+    sunday_ts = datetime(2026, 10, 11, 14, 0, tzinfo=timezone.utc)
+    ok_forex, _ = is_tradeable_session(sunday_ts, symbol="XAUUSD")
+    assert ok_forex is False
+    ok_crypto, _ = is_tradeable_session(sunday_ts, symbol="BTCUSDT")
+    assert ok_crypto is True
+    info_btc = get_session_info(sunday_ts, symbol="ETHUSDT")
+    assert info_btc.is_tradeable is True
+    assert info_btc.name == "CRYPTO_24_7"
+
+
+def test_smc_equal_highs_lows_bounds():
+    from smc_liquidity import detect_equal_highs_lows
+    df = pd.DataFrame({
+        "open": [100.0] * 20,
+        "high": [105.0] * 20,
+        "low": [95.0] * 20,
+        "close": [100.0] * 20,
+        "volume": [100] * 20,
+    })
+    setups = detect_equal_highs_lows(df, lookback=40)
+    assert len(setups) > 0
+    for s in setups:
+        assert 0 <= s.bars_ago < len(df)
+
+
+def test_signal_quality_zero_division():
+    from signal_quality import relative_strength_rank
+    s_zero = pd.Series([0.0] * 25)
+    s_nan = pd.Series([np.nan] * 25)
+    s_ok = pd.Series([float(i) for i in range(1, 26)])
+    ranks = relative_strength_rank({"Z": s_zero, "N": s_nan, "OK": s_ok})
+    assert len(ranks) == 3
+    assert ranks[0][0] == "OK"
+
+
+def test_multi_agent_bot_entrypoints():
+    import multi_agent_trading_bot
+    assert hasattr(multi_agent_trading_bot, "run_live")
+    assert hasattr(multi_agent_trading_bot, "run_backtest")
+    # Quick backtest invocation with small bars
+    report = multi_agent_trading_bot.run_backtest({"symbol": "XAUUSD", "bars": 100, "source": "demo"})
+    assert report is not None

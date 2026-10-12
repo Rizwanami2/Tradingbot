@@ -104,7 +104,11 @@ def relative_strength_rank(
         if s is None or len(s) < lookback + 1:
             ranks.append((sym, 0.0))
             continue
-        ret = float(s.iloc[-1] / s.iloc[-lookback - 1] - 1.0)
+        denom = float(s.iloc[-lookback - 1])
+        if denom == 0 or np.isnan(denom):
+            ranks.append((sym, 0.0))
+            continue
+        ret = float(s.iloc[-1] / denom - 1.0)
         ranks.append((sym, ret))
     ranks.sort(key=lambda x: x[1], reverse=True)
     return ranks

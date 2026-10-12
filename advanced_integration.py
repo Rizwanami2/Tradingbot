@@ -107,10 +107,11 @@ class AdvancedEngine:
         if active:
             return {"symbol": sym, "signal": None, "status": f"KILL SWITCH: {kill_msg}", "votes": [], "blocked": True}
 
-        sess = get_session_info(allow_asian=self.profile.allow_asian)
+        sess = get_session_info(allow_asian=self.profile.allow_asian, symbol=sym)
         ok_sess, sess_reason = is_tradeable_session(
             require_killzone=self.profile.require_killzone,
             allow_asian=self.profile.allow_asian,
+            symbol=sym,
         )
 
         data = self.feed.multi_tf(limit_1m=700)

@@ -109,17 +109,18 @@ def detect_equal_highs_lows(df: pd.DataFrame, lookback: int = 40, tolerance_atr:
     window = df.iloc[-lookback:]
     highs = window["high"].values
     lows = window["low"].values
-    for i in range(len(highs) - 8, len(highs) - 1):
+    start_i = max(0, len(highs) - 12)
+    for i in range(start_i, len(highs) - 1):
         for j in range(i + 3, len(highs)):
             if abs(highs[i] - highs[j]) <= tol:
                 level = float((highs[i] + highs[j]) / 2)
-                setups.append(SMCSetup("EQUAL_HIGHS", StructureDir.BEARISH, 0.65, level, level + tol, level - tol, f"Equal Highs liquidity pool @ {level:.2f}", len(df) - 1 - (len(df) - lookback + j)))
+                setups.append(SMCSetup("EQUAL_HIGHS", StructureDir.BEARISH, 0.65, level, level + tol, level - tol, f"Equal Highs liquidity pool @ {level:.2f}", len(window) - 1 - j))
                 break
-    for i in range(len(lows) - 8, len(lows) - 1):
+    for i in range(start_i, len(lows) - 1):
         for j in range(i + 3, len(lows)):
             if abs(lows[i] - lows[j]) <= tol:
                 level = float((lows[i] + lows[j]) / 2)
-                setups.append(SMCSetup("EQUAL_LOWS", StructureDir.BULLISH, 0.65, level, level + tol, level - tol, f"Equal Lows liquidity pool @ {level:.2f}", len(df) - 1 - (len(df) - lookback + j)))
+                setups.append(SMCSetup("EQUAL_LOWS", StructureDir.BULLISH, 0.65, level, level + tol, level - tol, f"Equal Lows liquidity pool @ {level:.2f}", len(window) - 1 - j))
                 break
     return setups
 

@@ -424,7 +424,9 @@ class Arbiter:
         if is_tradeable_session is not None:
             try:
                 ok, reason = is_tradeable_session(
-                    require_killzone=self.require_killzone, allow_asian=self.allow_asian
+                    require_killzone=self.require_killzone,
+                    allow_asian=self.allow_asian,
+                    symbol=symbol,
                 )
                 if not ok:
                     if not on_demand:
@@ -531,3 +533,151 @@ def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", lever
 def send_telegram(msg: str):
     """Optional helper; actual sends go through main.py bot instance."""
     print(f"[Telegram] {msg[:200]}")
+
+
+def run_backtest(args=None):
+    """
+    Run strategy backtest suite.
+    Delegates to auto_backtest.run_auto_backtest with fallback to AdvancedSimulator.
+    """
+    symbol = (getattr(args, "symbol", None) or (args.get("symbol") if isinstance(args, dict) else None) or config.DEFAULT_SYMBOL).upper()
+    bars = int(getattr(args, "bars", None) or (args.get("bars") if isinstance(args, dict) else None) or 2000)
+    source = getattr(args, "source", None) or (args.get("source") if isinstance(args, dict) else None) or config.DEFAULT_DATA_SOURCE
+    equity = float(getattr(args, "equity", None) or (args.get("equity") if isinstance(args, dict) else None) or config.INITIAL_EQUITY)
+    risk = float(getattr(args, "risk", None) or (args.get("risk") if isinstance(args, dict) else None) or config.DEFAULT_RISK_PCT)
+    if risk > 1.0:
+        risk = risk / 100.0
+
+    print(f"\n==================================================")
+    print(f" [Multi-Agent Backtest] Symbol: {symbol} | Bars: {bars}")
+    print(f" Source: {source} | Equity: ${equity:,.2f} | Risk: {risk:.2%}")
+    print(f"==================================================\n")
+
+    try:
+        from auto_backtest import run_auto_backtest
+        report = run_auto_backtest(
+            symbol=symbol,
+            bars=bars,
+            source=source,
+            equity=equity,
+            risk=risk,
+            mc_runs=getattr(args, "mc_runs", 300) if not isinstance(args, dict) else args.get("mc_runs", 300),
+            wf_windows=getattr(args, "wf_windows", 4) if not isinstance(args, dict) else args.get("wf_windows", 4),
+            do_sweep=True,
+        )
+        print(report.text(max_len=100000))
+        return report
+    except Exception as exc:
+        print(f"[Multi-Agent Backtest] auto_backtest fallback notice: {exc}")
+        from advanced_backtest import load_data, SimConfig, AdvancedSimulator, ema_cross_signal
+        df = load_data(symbol, bars, source, None)
+        cfg = SimConfig(initial_equity=equity, risk_per_trade=risk)
+        sim = AdvancedSimulator(cfg)
+        metrics, trades, _ = sim.run(df, ema_cross_signal, symbol)
+        print(metrics.summary())
+        return metrics
+
+
+def run_live(args=None):
+    """
+    Run live multi-agent trading loop.
+    Monitors market candles, tracks positions & setups via ExecutionEngine,
+    and queries Arbiter for consensus trading setups.
+    """
+    import time
+
+    symbol = (getattr(args, "symbol", None) or (args.get("symbol") if isinstance(args, dict) else None) or config.DEFAULT_SYMBOL).upper()
+    source = getattr(args, "source", None) or (args.get("source") if isinstance(args, dict) else None) or config.DEFAULT_DATA_SOURCE
+    exchange = getattr(args, "exchange", None) or (args.get("exchange") if isinstance(args, dict) else None) or config.DEFAULT_EXCHANGE
+    poll_sec = int(getattr(args, "poll", None) or (args.get("poll") if isinstance(args, dict) else None) or config.POLL_INTERVAL)
+    equity = float(getattr(args, "equity", None) or (args.get("equity") if isinstance(args, dict) else None) or config.INITIAL_EQUITY)
+    risk_pct = float(getattr(args, "risk", None) or (args.get("risk") if isinstance(args, dict) else None) or config.DEFAULT_RISK_PCT)
+    leverage = float(getattr(args, "leverage", None) or (args.get("leverage") if isinstance(args, dict) else None) or config.DEFAULT_LEVERAGE)
+
+    print(f"\n==================================================")
+    print(f" [Multi-Agent Live Trader] Initializing")
+    print(f" Symbol:   {symbol}")
+    print(f" Source:   {source} (Exchange: {exchange})")
+    print(f" Equity:   ${equity:,.2f} | Leverage: {leverage:.0f}x")
+    print(f" Risk Pct: {risk_pct}% | Poll Interval: {poll_sec}s")
+    print(f"==================================================\n")
+
+    risk_mgr = RiskManager(equity=equity, symbol=symbol)
+    if leverage:
+        risk_mgr.set_leverage(leverage)
+    engine = ExecutionEngine(risk_manager=risk_mgr)
+    feed = MarketDataFeed(symbol=symbol, source=source, exchange_id=exchange)
+    arb = Arbiter()
+
+    iteration = 0
+    try:
+        while True:
+            iteration += 1
+            try:
+                data = feed.multi_tf(limit_1m=500)
+                if not data or "1m" not in data or data["1m"].empty:
+                    print(f"[MultiAgent-Live] [{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Waiting for market data for {symbol}...")
+                    time.sleep(poll_sec)
+                    continue
+
+                df1 = data["1m"]
+                candle = df1.iloc[-1]
+                candle_dict = {
+                    "open": float(candle.get("open", candle["close"])),
+                    "high": float(candle["high"]),
+                    "low": float(candle["low"]),
+                    "close": float(candle["close"]),
+                }
+
+                # Update existing positions or pending setups with latest candle
+                events = engine.update_market_candle(symbol, candle_dict)
+                for ev in events:
+                    msg = ev.get("message", "")
+                    print(f"[ExecutionEngine] {ev.get('event')}: {msg}")
+                    send_telegram(msg)
+
+                # Check if we should evaluate for a new entry setup
+                if symbol not in engine.active_positions and symbol not in engine.pending_setups:
+                    daily = data.get("daily")
+                    if daily is None or getattr(daily, "empty", True):
+                        daily = pd.DataFrame()
+
+                    sig, why, votes = arb.decide(
+                        df1,
+                        data.get("5m"),
+                        data.get("15m"),
+                        data.get("1h"),
+                        daily,
+                        risk_mgr,
+                        symbol=symbol,
+                        on_demand=False,
+                    )
+
+                    if sig:
+                        order = engine.register_setup(sig, reason=sig.get("reason", ""))
+                        alert = (
+                            f"⚡ [SETUP] {symbol} {order.direction} @ {order.entry_level:.2f} | "
+                            f"SL: {order.stop_loss:.2f} | Lots: {order.lots} | Lev: {order.leverage:.0f}x | {order.setup_reason}"
+                        )
+                        print(f"\n{alert}\n")
+                        send_telegram(alert)
+
+                        trig_events = engine.update_market_candle(symbol, candle_dict)
+                        for ev in trig_events:
+                            print(f"[ExecutionEngine] {ev.get('event')}: {ev.get('message')}")
+                            send_telegram(ev.get("message", ""))
+                    else:
+                        if iteration % 12 == 1:
+                            current_px = candle_dict["close"]
+                            print(f"[MultiAgent-Live] [{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {symbol} @ {current_px:.2f} | Status: {why}")
+
+                sleep_interval = config.FAST_POLL_INTERVAL if (engine.active_positions or engine.pending_setups) else poll_sec
+                time.sleep(sleep_interval)
+
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                print(f"[MultiAgent-Live] Loop iteration error: {exc}")
+                time.sleep(poll_sec)
+    except KeyboardInterrupt:
+        print("\n[MultiAgent-Live] Live trader stopped by user.")
