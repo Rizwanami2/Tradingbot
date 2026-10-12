@@ -63,5 +63,17 @@ def apply_growth():
     ab.SimConfig.max_leverage = 15.0
     print("[wire_backtest_v2] GROWTH profile active (5% risk, daily preferred)")
 
+
+def apply_target25():
+    """~25% annual target: same growth EMA, moderate 3.2% risk, daily bars."""
+    apply()
+    import advanced_backtest as ab
+    from backtest_signals_v2 import ema_growth_signal
+    ab.ema_growth_signal = ema_growth_signal
+    ab.SimConfig.risk_per_trade = 0.032
+    ab.SimConfig.tp_r = 2.8
+    ab.SimConfig.max_leverage = 12.0
+    print("[wire_backtest_v2] TARGET25 profile active (3.2% risk, daily preferred)")
+
 if __name__ == "__main__":
     apply()
