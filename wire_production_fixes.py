@@ -127,6 +127,30 @@ def main() -> None:
             "    feed = MarketDataFeed(symbol=symbol, source=config.DEFAULT_DATA_SOURCE)\n",
         ),
     ])
+    logs += patch_file(ROOT / "risk_manager.py", [
+        (
+            "        if symbol:\n"
+            "            self.set_symbol(symbol)\n"
+            "        if equity is not None:\n"
+            "            self.state.equity = equity\n"
+            "            self.state.peak_equity = max(self.state.peak_equity, equity)\n",
+            "        if isinstance(equity, str) and symbol is None:\n"
+            "            symbol, equity = equity, None\n"
+            "        if symbol:\n"
+            "            self.set_symbol(symbol)\n"
+            "        if equity is not None:\n"
+            "            try:\n"
+            "                equity = float(equity)\n"
+            "            except (TypeError, ValueError):\n"
+            "                equity = None\n"
+            "        if equity is not None:\n"
+            "            self.state.equity = equity\n"
+            "            try:\n"
+            "                self.state.peak_equity = max(float(self.state.peak_equity or 0), float(equity))\n"
+            "            except (TypeError, ValueError):\n"
+            "                self.state.peak_equity = float(equity)\n",
+        ),
+    ])
     print("[wire_production_fixes]", "; ".join(logs))
 
 

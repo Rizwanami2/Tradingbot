@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Production entrypoint: restore modules, apply fixes, then start the Telegram bot."""
+"""Production entrypoint: restore modules, apply fixes, start Telegram bot."""
 from __future__ import annotations
 
 import runpy
@@ -10,21 +10,18 @@ ROOT = Path(__file__).resolve().parent
 
 
 def main() -> None:
-    # 1) Restore placeholder modules if needed
     try:
         import restore_production
         restore_production.restore()
     except Exception as e:
         print("[run_bot] restore:", e)
 
-    # 2) Apply consensus / price / stop / config fixes
     try:
         import wire_production_fixes
         wire_production_fixes.main()
     except Exception as e:
         print("[run_bot] wire:", e)
 
-    # 3) Start the real bot
     main_py = ROOT / "main.py"
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")
