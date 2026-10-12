@@ -34,6 +34,12 @@ def main() -> None:
     except Exception as e:
         print("[run_bot] ai_historical:", e)
 
+    try:
+        import wire_multitrade
+        wire_multitrade.main()
+    except Exception as e:
+        print("[run_bot] multitrade:", e)
+
     main_py = ROOT / "main.py"
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")
