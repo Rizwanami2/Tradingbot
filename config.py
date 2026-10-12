@@ -53,6 +53,13 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or ""
 
+from telegram_auth import parse_allowed_user_ids
+
+# Empty allowlist intentionally denies every command except /start and /help.
+TELEGRAM_ALLOWED_USER_IDS = parse_allowed_user_ids(
+    os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
+)
+
 # Gemini AI settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
