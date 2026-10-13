@@ -155,6 +155,20 @@ def run_signal(
     except Exception as _ep_err:
         res["entry_plan_error"] = str(_ep_err)
 
+    try:
+        from historical_2y import analyze_2y
+        h2 = analyze_2y(sym)
+        res["history_2y"] = h2.to_dict()
+        if res.get("signal") and h2.bars >= 60:
+            d = res["signal"].get("direction")
+            dname = d.name if hasattr(d, "name") else str(d)
+            if "LONG" in dname.upper() and h2.bias_score < -0.35:
+                res["status"] = str(res.get("status", "")) + " | 2Y bias caution (bearish structure)"
+            elif "SHORT" in dname.upper() and h2.bias_score > 0.35:
+                res["status"] = str(res.get("status", "")) + " | 2Y bias caution (bullish structure)"
+    except Exception as _h2_err:
+        res["history_2y_error"] = str(_h2_err)
+
     res["symbol"] = sym
     res["equity"] = eq
     res["leverage"] = risk.get_leverage()
@@ -224,6 +238,31 @@ def format_signal_message(res: Dict[str, Any]) -> str:
     except Exception:
         plan_txt = ""
 
+    hist_txt = ""
+    try:
+        from historical_2y import History2Y, format_history_2y
+        hraw = res.get("history_2y")
+        if hraw:
+            h2 = History2Y(
+                symbol=str(hraw.get("symbol", sym)),
+                bars=int(hraw.get("bars") or 0),
+                years_span=float(hraw.get("years_span") or 0),
+                mark=float(hraw.get("mark") or 0),
+                high_2y=float(hraw.get("high_2y") or 0),
+                low_2y=float(hraw.get("low_2y") or 0),
+                high_52w=float(hraw.get("high_52w") or 0),
+                low_52w=float(hraw.get("low_52w") or 0),
+                ema50=float(hraw.get("ema50") or 0),
+                ema200=float(hraw.get("ema200") or 0),
+                trend=str(hraw.get("trend") or "RANGE"),
+                support=list(hraw.get("support") or []),
+                resistance=list(hraw.get("resistance") or []),
+                bias_score=float(hraw.get("bias_score") or 0),
+                summary=str(hraw.get("summary") or ""),
+            )
+            hist_txt = format_history_2y(h2)
+    except Exception:
+        hist_txt = ""
     votes_txt = "\n".join(vote_lines) if vote_lines else "_No votes_"
     return (
         f"📊 **Multi-Agent Evaluation for {sym}**\n"
@@ -232,6 +271,7 @@ def format_signal_message(res: Dict[str, Any]) -> str:
         f"⚡ **Consensus:** `{status}`"
         f"{sig_box}"
         f"{plan_txt}"
+        f"{hist_txt}"
     )
 
 

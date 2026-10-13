@@ -160,6 +160,12 @@ def plan_best_entry(
     all_levels.update(daily)
     all_levels.update(swings)
     all_levels.update(emas)
+    try:
+        from historical_2y import analyze_2y, history_levels_for_planner
+        h2 = analyze_2y(symbol)
+        all_levels.update(history_levels_for_planner(h2))
+    except Exception:
+        pass
 
     for name, px in list(all_levels.items()):
         if name in ("mark", "atr") or px <= 0:

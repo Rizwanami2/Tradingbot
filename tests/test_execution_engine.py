@@ -295,6 +295,32 @@ class TestExecutionEngine(unittest.TestCase):
         self.engine.reset_halt()
         self.assertFalse(self.engine.execution_halted)
 
+    def test_scalp_auto_close(self):
+        self.engine.scalp_mode = True
+        sig = {
+            "symbol": "XAUUSD",
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop": 2640.0,
+            "tp1": 2665.0,
+            "tp2": 2675.0,
+            "lots": 0.02,
+            "size": 2.0,
+            "leverage": 20.0,
+            "margin_required": 53.0,
+            "liquidation_price": 2623.5,
+            "risk_amount": 20.0,
+            "rr": 1.5,
+        }
+        self.engine.register_setup(sig)
+        self.engine.update_market_candle("XAUUSD", {"open": 2650.0, "high": 2651.0, "low": 2649.0, "close": 2650.0})
+        self.assertIn("XAUUSD", self.engine.active_positions)
+        # Advance price by +$4 (PnL = +$8 >= $5)
+        candle_scalp = {"open": 2650.0, "high": 2655.0, "low": 2650.0, "close": 2654.0}
+        events = self.engine.update_market_candle("XAUUSD", candle_scalp)
+        self.assertTrue(any(ev["event"] == "SCALP_CLOSE" for ev in events))
+        self.assertNotIn("XAUUSD", self.engine.active_positions)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,12 @@ try:
 except ImportError:
     classify_market_regime = None
 
+try:
+    from gautam_jha_strategy import GautamJhaAgent, GJDir
+except ImportError:
+    GautamJhaAgent = None
+    GJDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -85,7 +91,7 @@ class MarketDataFeed:
         self.source = source
         self.exchange_id = exchange_id
         self._improved = None
-        if _ImprovedDataFeed is not None and source not in ("demo",):
+        if _ImprovedDataFeed is not None:
             try:
                 self._improved = _ImprovedDataFeed(
                     symbol=self.symbol, source=source, exchange_id=exchange_id, timeframe="1m"
@@ -142,7 +148,7 @@ class MarketDataFeed:
         except Exception:
             return {"ok": False, "mark": 0.0, "error": "no price"}
 
-    def fetch(self, limit: int = 600, timeframe: Optional[str] = None) -> pd.DataFrame:
+    def fetch(self, limit: int = 1500, timeframe: Optional[str] = None) -> pd.DataFrame:
         if self._improved is not None:
             try:
                 df = self._improved.fetch(limit=limit, timeframe=timeframe or "1m")
@@ -164,18 +170,34 @@ class MarketDataFeed:
             pass
         return self._demo(limit)
 
-    def _demo(self, limit: int = 600, base_price: float = 2650.0) -> pd.DataFrame:
+    def _demo(self, limit: int = 600, base_price: float = None) -> pd.DataFrame:
+        if base_price is None:
+            base_price = 2650.0
+            try:
+                from realtime_prices import fetch_spot_price
+                rt = fetch_spot_price(self.symbol)
+                if rt.get("ok") and float(rt.get("mark") or 0) > 0:
+                    base_price = float(rt["mark"])
+            except Exception:
+                sym = (self.symbol or "").upper()
+                if "BTC" in sym:
+                    base_price = 82000.0
+                elif "ETH" in sym:
+                    base_price = 3000.0
+                elif "XAU" in sym or "GOLD" in sym:
+                    base_price = 4100.0
         dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq="1min")
         rng = np.random.default_rng(42)
-        rets = rng.normal(0, 0.3, limit)
+        tick = max(base_price * 0.0002, 0.3)
+        rets = rng.normal(0, tick, limit)
         p = base_price + np.cumsum(rets)
-        highs = p + rng.uniform(0.1, 1.5, limit)
-        lows = p - rng.uniform(0.1, 1.5, limit)
+        highs = p + rng.uniform(tick * 0.3, tick * 2, limit)
+        lows = p - rng.uniform(tick * 0.3, tick * 2, limit)
         closes = p + rng.normal(0, 0.1, limit)
         volumes = rng.integers(50, 1000, limit)
         return pd.DataFrame({"open": p, "high": highs, "low": lows, "close": closes, "volume": volumes}, index=dates)
 
-    def multi_tf(self, limit_1m: int = 700) -> Dict[str, pd.DataFrame]:
+    def multi_tf(self, limit_1m: int = 1500) -> Dict[str, pd.DataFrame]:
         df1 = self.fetch(limit=limit_1m, timeframe="1m")
         out = {"1m": df1}
         for tf, rule in [("5m", "5min"), ("15m", "15min"), ("1h", "1h")]:
@@ -234,7 +256,7 @@ class LiquidityAgent:
     """Advanced SMC Liquidity Agent – uses smc_liquidity when available."""
     name = "LIQUIDITY"
 
-    def vote(self, df: pd.DataFrame, daily: pd.DataFrame) -> Vote:
+    def vote(self, df: pd.DataFrame, daily: Optional[pd.DataFrame] = None) -> Vote:
         if best_smc_vote is not None:
             try:
                 direction, strength, reason = best_smc_vote(df, daily if daily is not None and not daily.empty else None)
@@ -268,7 +290,7 @@ class LiquidityAgent:
 
 class IndicatorAgent:
     name = "INDICATORS"
-    MIN_SCORE = 1.8
+    MIN_SCORE = 1.2
 
     def __init__(self):
         self.engine = IndicatorEngine()
@@ -418,9 +440,10 @@ class Arbiter:
         "INDICATORS": 1.00,
         "AI-LEARNER": 0.90,
         "NEWS": 0.70,
+        "GAUTAM-JHA": 1.55,
     }
-    MIN_AGREEMENT = 3
-    MIN_SCORE = 1.8
+    MIN_AGREEMENT = 2
+    MIN_SCORE = 1.2
 
     def __init__(self, require_killzone: bool = False, allow_asian: bool = False):
         self.require_killzone = require_killzone
@@ -430,6 +453,7 @@ class Arbiter:
         self.ind = IndicatorAgent()
         self.ai = AILearnerAgent()
         self.news = NewsAgent()
+        self.gautam = GautamJhaAgent() if GautamJhaAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -439,6 +463,14 @@ class Arbiter:
             self.ai.vote(df1),
             self.news.vote(),
         ]
+        if getattr(self, "gautam", None) is not None:
+            try:
+                gv = self.gautam.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(gv.direction, "name", str(gv.direction))
+                direction = Dir.LONG if dname == "LONG" else (Dir.SHORT if dname == "SHORT" else Dir.FLAT)
+                votes.append(Vote(gv.agent, direction, float(gv.strength), gv.reason))
+            except Exception:
+                pass
 
         session_warn = None
         if is_tradeable_session is not None:
@@ -483,10 +515,12 @@ class Arbiter:
 
         entry = float(df1["close"].iloc[-1])
         atr_val = atr(df1) or entry * 0.002
+        min_stop_dist = entry * 0.003
+        stop_dist = max(atr_val * 1.5, min_stop_dist)
         if direction == Dir.LONG:
-            stop = entry - atr_val * 1.2
+            stop = entry - stop_dist
         else:
-            stop = entry + atr_val * 1.2
+            stop = entry + stop_dist
 
         plan = risk_mgr.position_size(entry=entry, stop=stop, symbol=symbol)
         if plan.lots <= 0:
@@ -526,7 +560,7 @@ class Arbiter:
 def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", leverage=None, on_demand: bool = True):
     symbol = _norm_trade_symbol(symbol)
     feed = MarketDataFeed(symbol=symbol, source=source, exchange_id=exchange_id)
-    data = feed.multi_tf(limit_1m=700)
+    data = feed.multi_tf(limit_1m=1500)
     if not data or data["1m"].empty:
         return {"symbol": symbol, "signal": None, "status": "No data", "votes": [], "price": 0.0}
     risk = RiskManager(equity=getattr(config, "INITIAL_EQUITY", 10000.0), symbol=symbol)
@@ -653,7 +687,7 @@ def run_live(args=None):
         while True:
             iteration += 1
             try:
-                data = feed.multi_tf(limit_1m=500)
+                data = feed.multi_tf(limit_1m=1500)
                 if not data or "1m" not in data or data["1m"].empty:
                     print(f"[MultiAgent-Live] [{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Waiting for market data for {symbol}...")
                     time.sleep(poll_sec)

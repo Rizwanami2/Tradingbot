@@ -63,6 +63,15 @@ class AIPrediction:
     summary: str
 
 
+def _safe_f(x, default=0.0):
+    try:
+        v = float(x)
+        if v != v or v in (float('inf'), float('-inf')):
+            return default
+        return v
+    except Exception:
+        return default
+
 @dataclass
 class IndicatorSnapshot:
     rsi: float = 50.0
@@ -314,7 +323,7 @@ class IndicatorEngine:
 
         # Volume Oscillator
         if "volume" in df_calc.columns:
-            snap.vol_osc = float(self.volume_oscillator(df_calc["volume"]).iloc[-1])
+            snap.vol_osc = _safe_f(self.volume_oscillator(df_calc["volume"]).iloc[-1])
 
         # Combined score (-5 to +5)
         score = 0.0
@@ -355,14 +364,19 @@ class IndicatorEngine:
 
 class AIPredictor:
     def predict(self, df: pd.DataFrame, horizon: int = 22) -> AIPrediction:
-        if len(df) < 60:
+        if df is None or len(df) < 60:
             return AIPrediction(Direction.FLAT, 0.0, 0.0, horizon, "No data")
-        c = df["close"].values
+        c = df["close"].values.astype(float)
+        if not np.isfinite(c[-1]) or abs(float(c[-1])) < 1e-12:
+            return AIPrediction(Direction.FLAT, 0.0, 0.0, horizon, "Invalid price")
         h, l, o = df["high"].values, df["low"].values, df["open"].values
-        def mom(n): return (c[-1]-c[-n-1])/c[-n-1] if len(c)>n else 0
+        def mom(n):
+            if len(c) <= n or abs(float(c[-n-1])) < 1e-12: return 0.0
+            return float((c[-1]-c[-n-1])/c[-n-1])
         tr = np.maximum(h[1:]-l[1:], np.maximum(np.abs(h[1:]-c[:-1]), np.abs(l[1:]-c[:-1])))
         atr = np.mean(tr[-14:])
-        slope = np.polyfit(np.arange(25), c[-25:], 1)[0]/c[-1]
+        slope = float(np.polyfit(np.arange(25), c[-25:], 1)[0] / c[-1]) if abs(float(c[-1])) > 1e-12 else 0.0
+        if slope != slope: slope = 0.0
         score = mom(5)*3.1 + mom(15)*2.2 + mom(30)*1.4 + slope*4.2
         raw = np.tanh(score*8.2)
         bull = 0.5 + raw*0.47
@@ -371,7 +385,9 @@ class AIPredictor:
         elif bear > 0.64: d, conf = Direction.SHORT, bear
         else: d, conf = Direction.FLAT, max(bull, bear)
         exp = atr * np.sqrt(horizon/14) * (0.55 + conf*0.8)
-        return AIPrediction(d, float(conf), float(exp), horizon, f"AI{horizon}c {d.name} {conf:.0%}")
+        conf = float(conf) if conf == conf else 0.0
+        exp = float(exp) if exp == exp else 0.0
+        return AIPrediction(d, conf, exp, horizon, f"AI{horizon}c {d.name} {conf:.0%}")
 
 
 # ============================================================

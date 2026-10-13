@@ -107,10 +107,22 @@ class ExecutionEngine:
         self._order_counter: int = 0
         # Prevent duplicate orders after any ambiguous broker response.
         self.execution_halted: bool = False
+        try:
+            import config as _cfg_max
+            self.max_open_trades = int(getattr(_cfg_max, "MAX_OPEN_TRADES", 5) or 5)
+        except Exception:
+            self.max_open_trades = 5
+        self.scalp_mode: bool = False
 
     def reset_halt(self) -> None:
         """Clear execution halt state so setups can be registered again."""
         self.execution_halted = False
+
+    def open_trade_count(self) -> int:
+        return len(self.active_positions) + len(self.pending_setups)
+
+    def slots_available(self) -> int:
+        return max(0, int(getattr(self, "max_open_trades", 5)) - self.open_trade_count())
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -125,6 +137,11 @@ class ExecutionEngine:
         if self.execution_halted:
             raise RuntimeError("Execution halted after uncertain broker state; reconcile positions before re-enabling.")
         symbol = sig["symbol"].upper()
+        already = symbol in self.active_positions or symbol in self.pending_setups
+        if not already and self.open_trade_count() >= int(getattr(self, "max_open_trades", 5)):
+            raise RuntimeError(
+                f"Max concurrent trades reached ({getattr(self, 'max_open_trades', 5)})."
+            )
         direction = sig["direction"].name if hasattr(sig["direction"], "name") else str(sig["direction"]).upper()
         entry = float(sig["entry"])
         stop = float(sig["stop"])
@@ -276,9 +293,15 @@ class ExecutionEngine:
                             raise RuntimeError(f"Broker fill not confirmed (status={broker_status!r}, filled_qty={filled_qty}).")
                         exec_price = float(actual_price)
                     except Exception as ex:
-                        self.execution_halted = True
+                        try:
+                            import config as _cfg_halt
+                            _hm = str(getattr(_cfg_halt, "BROKER_MODE", "paper")).lower()
+                        except Exception:
+                            _hm = "paper"
+                        if _hm == "live":
+                            self.execution_halted = True
                         setup.status = OrderStatus.CANCELLED
-                        setup.close_reason = f"Execution halted; broker state requires reconciliation: {ex}"
+                        setup.close_reason = f"Execution failed: {ex}"
                         setup.closed_at = datetime.now(timezone.utc).isoformat()
                         self.trade_history.append(setup)
                         self.pending_setups.pop(sym, None)
@@ -303,8 +326,12 @@ class ExecutionEngine:
                         just_executed = True
                         ev = {
                             "event": "TRADE_EXECUTED", "order": setup, "price": exec_price,
-                            "message": (f"PAPER TRADE CONFIRMED: {setup.symbol} {setup.direction} at {exec_price:.4f}. "
-                                        "Live execution is blocked until exchange-side protection can be verified."),
+                            "message": ((
+                                f"✅ **PAPER TRADE CONFIRMED**\n"
+                                f"`{setup.symbol}` **{setup.direction}** @ `${exec_price:,.4f}`\n"
+                                f"SL `${setup.stop_loss:,.2f}` | TP1 `${setup.tp1:,.2f}` | Lots `{setup.lots}`\n"
+                                f"_Paper mode — no real funds risked._"
+                            )),
                         }
                         events.append(ev)
                         self._dispatch_event(ev["event"], setup, ev["message"])
@@ -329,6 +356,52 @@ class ExecutionEngine:
                 pos.unrealized_pnl = (curr_price - entry) * pos.remaining_size
             else:
                 pos.unrealized_pnl = (entry - curr_price) * pos.remaining_size
+
+            try:
+                import config as _cfg_sc
+                scalp_cfg = bool(getattr(_cfg_sc, "SCALP_ENABLED", False))
+                scalp_usd = float(getattr(_cfg_sc, "SCALP_TAKE_PROFIT_USD", 5.0) or 0)
+                scalp_pct = float(getattr(_cfg_sc, "SCALP_TAKE_PROFIT_PCT", 0.15) or 0)
+            except Exception:
+                scalp_cfg, scalp_usd, scalp_pct = False, 5.0, 0.15
+            scalp_on = getattr(self, "scalp_mode", False) or (
+                scalp_cfg and (
+                    "scalp" in str(getattr(pos, "setup_reason", "")).lower()
+                    or getattr(pos, "is_scalp", False)
+                    or (not pos.tp1 and not pos.tp2)
+                )
+            )
+            if scalp_on and pos.unrealized_pnl > 0:
+                hit_pct = False
+                if scalp_pct > 0 and entry > 0:
+                    move_pct = abs(curr_price - entry) / entry * 100.0
+                    hit_pct = move_pct >= scalp_pct
+                hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= scalp_usd
+                if hit_usd or hit_pct:
+                    pos.exit_price = curr_price
+                    pos.realized_pnl = pos.unrealized_pnl
+                    pos.status = OrderStatus.CLOSED
+                    pos.closed_at = datetime.now(timezone.utc).isoformat()
+                    pos.close_reason = f"Scalp TP (${pos.realized_pnl:+.2f})"
+                    try:
+                        self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=0.0)
+                    except Exception:
+                        pass
+                    self.trade_history.append(pos)
+                    del self.active_positions[sym]
+                    if getattr(self, "broker", None):
+                        try:
+                            self.broker.close_position(sym, price=curr_price)
+                        except Exception:
+                            pass
+                    msg = (
+                        f"⚡ **SCALP AUTO-CLOSE** `{sym}`\n"
+                        f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
+                        f"_Fast scalp profit target hit_"
+                    )
+                    events.append({"event": "SCALP_CLOSE", "order": pos, "price": curr_price, "message": msg})
+                    self._dispatch_event("SCALP_CLOSE", pos, msg)
+                    return events
 
             # (A) Check Liquidation barrier for leveraged positions
             if pos.liquidation_price and pos.leverage > 1.0:
@@ -496,8 +569,10 @@ class ExecutionEngine:
 
             # (F) Stop Loss / Break-Even / Exit Hit
             stop_tightened_in_candle = (pos.stop_loss != old_stop)
-            if tp1_just_hit or just_executed or stop_tightened_in_candle:
-                # Check if original stop was hit, or if price subsequently fell back to the new tightened stop
+            if just_executed:
+                # Entry candle range must not force an instant stop-out after paper fill
+                stop_hit = (curr_price <= pos.stop_loss) if is_long else (curr_price >= pos.stop_loss)
+            elif tp1_just_hit or stop_tightened_in_candle:
                 if is_long:
                     stop_hit = (low <= old_stop) or (curr_price <= pos.stop_loss)
                 else:
@@ -599,6 +674,40 @@ class ExecutionEngine:
             if current_price is None or current_price <= 0:
                 current_price = pos.executed_price or pos.entry_level
         return self.close_manually(sym, current_price, reason=reason)
+
+
+    def close_all_positions(self, reason: str = "Close all") -> list:
+        closed = []
+        for sym in list(self.active_positions.keys()):
+            try:
+                pos = self.close_position(sym, reason=reason)
+                if pos is not None:
+                    closed.append(pos)
+            except Exception as ex:
+                print(f"[ExecutionEngine] close_all {sym}: {ex}")
+        return closed
+
+    def format_positions_detail(self) -> str:
+        lines = ["📋 **Open Positions**"]
+        if not self.active_positions:
+            lines.append("_No open positions._")
+        else:
+            for sym, pos in self.active_positions.items():
+                entry = float(pos.executed_price or pos.entry_level or 0)
+                u = float(getattr(pos, "unrealized_pnl", 0) or 0)
+                lines.append(
+                    f"\n`{sym}` **{pos.direction}**\n"
+                    f"• Entry `${entry:,.2f}` | Mark PnL `${u:+,.2f}`\n"
+                    f"• SL `${float(pos.stop_loss):,.2f}` | TP1 `${float(pos.tp1):,.2f}` | TP2 `${float(pos.tp2):,.2f}`\n"
+                    f"• Lots `{pos.lots}` | Lev `{float(pos.leverage or 1):.0f}x` | Margin `${float(pos.margin_required or 0):,.2f}`"
+                )
+        summary = self.get_portfolio_summary()
+        lines.append(
+            f"\n💰 Equity `${summary.get('equity', 0):,.2f}` | "
+            f"Unrealized `${summary.get('unrealized_pnl', 0):+,.2f}` | "
+            f"Open `{summary.get('active_positions_count', 0)}`"
+        )
+        return "\n".join(lines)
 
     def get_portfolio_summary(self) -> Dict:
         """Returns account equity, margin utilization, and open positions stats."""

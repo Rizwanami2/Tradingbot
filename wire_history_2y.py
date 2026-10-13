@@ -70,7 +70,7 @@ def main() -> None:
             )
             t = t[:vt] + inject + t[vt:]
             if 'f"{plan_txt}"' in t and "hist_txt" not in t.split('f"{plan_txt}"')[1][:80]:
-                t = t.replace('f"{plan_txt}"', 'f"{plan_txt}"{0}'.format('\n        f"{hist_txt}"'), 1)
+                t = t.replace('f"{plan_txt}"', 'f"{plan_txt}"\n        f"{hist_txt}"', 1)
             elif 'f"{plan_txt}"\n    )' in t:
                 t = t.replace('f"{plan_txt}"\n    )', 'f"{plan_txt}"\n        f"{hist_txt}"\n    )', 1)
             changed = True

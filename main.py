@@ -68,7 +68,19 @@ gemini = GeminiClient()
 risk_mgr = RiskManager(equity=config.INITIAL_EQUITY, symbol=config.DEFAULT_SYMBOL)
 risk_mgr.set_leverage(config.DEFAULT_LEVERAGE)
 arbiter = Arbiter(allow_asian=True)
-engine = ExecutionEngine(risk_manager=risk_mgr)
+try:
+    from execution import create_broker
+    _broker = create_broker(
+        broker_mode=getattr(config, "BROKER_MODE", "paper"),
+        exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),
+        api_key=getattr(config, "EXCHANGE_API_KEY", ""),
+        api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),
+        initial_balance=getattr(config, "INITIAL_EQUITY", 10000.0),
+    )
+except Exception as _broker_err:
+    print("[boot] broker:", _broker_err)
+    _broker = None
+engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)
 
 # Bot runtime state. Monitoring is off by default until explicitly enabled.
 autotrade_active: bool = config.AUTOTRADE_ENABLED
@@ -200,7 +212,7 @@ def format_price_string(info: Dict) -> str:
 
 async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     welcome = (
-        "🤖 **Institutional Multi-Agent Trading Assistant**\n\n"
+        "🤖 **TradingBot — Multi-Agent Paper Assistant**\n\n"
         "Welcome! Use /help for commands. /signal for 5-agent consensus.\n"
         "Setup monitoring tracks levels locally; live exchange execution is separate."
     )
@@ -209,7 +221,7 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "📖 **Institutional Trading Assistant Guide**\n\n"
+        "📖 **TradingBot Guide**\n\n"
         "⚡ **Market & Signals:**\n"
         "• `/price [SYM]` — Live mark price & quote\n"
         "• `/levels [SYM]` — Key levels (PDH/PDL, pivots, swings)\n"
@@ -259,43 +271,38 @@ async def price_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    sym = (ctx.args[0] if ctx.args else config.DEFAULT_SYMBOL).upper()
-    if sym in ("BTC", "BITCOIN", "BTCUSD", "XBT"):
-        sym = "BTCUSDT"
-    elif sym in ("ETH", "ETHEREUM", "ETHUSD"):
-        sym = "ETHUSDT"
-    elif sym in ("GOLD", "XAU", "XAUT", "XAUTUSD"):
-        sym = "XAUUSD"
-    await update.message.reply_text(f"⏳ Evaluating **{sym}** across all 5 agents...", parse_mode="Markdown")
-    risk_mgr.set_symbol(sym)
-    res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE, leverage=risk_mgr.get_leverage(), on_demand=True)
-    price_val = res.get("price", 0.0) or 0.0
-    sig = res.get("signal")
-    votes = res.get("votes", [])
-    vote_lines = []
-    for v in votes:
-        icon = "🟢" if v["direction"] == "LONG" else ("🔴" if v["direction"] == "SHORT" else "⚪")
-        vote_lines.append(f"{icon} **{v['agent']}:** {v['direction']} ({v['reason']})")
-    status_str = f"⚡ **Consensus:** `{res.get('status', 'No consensus')}`"
-    if sig:
-        dir_name = sig["direction"].name if hasattr(sig["direction"], "name") else str(sig["direction"])
-        dir_icon = "🟢 LONG" if "LONG" in dir_name.upper() else "🔴 SHORT"
-        sig_box = (
-            f"\n🎯 **TRADE SETUP ({dir_icon}):**\n"
-            f"• **Entry:** `${sig['entry']:,.2f}`\n"
-            f"• **Stop Loss:** `${sig['stop']:,.2f}`\n"
-            f"• **Target 1:** `${sig['tp1']:,.2f}` | **Target 2:** `${sig['tp2']:,.2f}`\n"
-            f"• **Lots:** `{sig['lots']}` | **Lev:** `{sig.get('leverage', risk_mgr.get_leverage()):.0f}x`\n"
-            f"• **Margin:** `${sig.get('margin_required', 0.0):,.2f}` | **R:R:** `1:{sig.get('rr', 0):.1f}`\n"
+    """High-reliability /signal — leverage + paper micro size safe."""
+    raw = (ctx.args[0] if ctx.args else config.DEFAULT_SYMBOL)
+    try:
+        from signal_pipeline import run_signal, format_signal_message, try_paper_execute, _norm_symbol
+        sym = _norm_symbol(raw)
+        await update.message.reply_text(
+            f"⏳ Evaluating **{sym}** (lev `{risk_mgr.get_leverage():.0f}x`)...",
+            parse_mode="Markdown",
         )
-    else:
-        sig_box = "\n🛡️ **Stay Flat.** Waiting for confluence.\n"
-    msg = (
-        f"📊 **Multi-Agent Evaluation for {sym}**\n"
-        f"Mark: `${float(price_val):,.2f}`\n\n"
-        f"**Agent Votes:**\n" + "\n".join(vote_lines) + f"\n\n{status_str}\n{sig_box}"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+        res = run_signal(
+            sym,
+            equity=float(getattr(risk_mgr.state, "equity", None) or config.INITIAL_EQUITY),
+            leverage=float(risk_mgr.get_leverage()),
+            source=config.DEFAULT_DATA_SOURCE,
+        )
+        msg = format_signal_message(res)
+        try:
+            await update.message.reply_text(msg, parse_mode="Markdown")
+        except Exception:
+            await update.message.reply_text(msg.replace("*", "").replace("`", ""))
+        sig = res.get("signal")
+        if sig and autotrade_active:
+            ok, note = try_paper_execute(engine, sig, candle_price=res.get("price") or sig.get("entry"))
+            tag = "✅" if ok else "⚠️"
+            try:
+                await update.message.reply_text(f"{tag} Autotrade: {note}", parse_mode="Markdown")
+            except Exception:
+                await update.message.reply_text(f"{tag} Autotrade: {note}")
+    except Exception as e:
+        logger.exception("signal_command failed")
+        await update.message.reply_text(f"Signal error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
+
 
 
 async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -358,23 +365,45 @@ async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    summary = engine.get_portfolio_summary()
-    active = summary.get("active_positions_count", 0)
-    pending = summary.get("pending_setups_count", 0)
-    msg = f"📋 **Positions**\n• Open: `{active}` | Pending setups: `{pending}`\n• Unrealized: `${summary.get('unrealized_pnl', 0):+,.2f}`"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    try:
+        if hasattr(engine, "format_positions_detail"):
+            msg = engine.format_positions_detail()
+        else:
+            summary = engine.get_portfolio_summary()
+            msg = f"📋 Positions open={summary.get('active_positions_count', 0)}"
+        try:
+            await update.message.reply_text(msg, parse_mode="Markdown")
+        except Exception:
+            await update.message.reply_text(msg.replace("*", "").replace("`", ""))
+    except Exception as e:
+        await update.message.reply_text(f"Positions error: {e}")
 
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    sym = (ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL)
-    try:
-        closed = engine.close_position(sym)
-        if closed:
-            await update.message.reply_text(f"Close executed for `{sym}`", parse_mode="Markdown")
+    arg = (ctx.args[0] if ctx.args else "").strip().upper()
+    if not arg or arg in ("ALL", "CLOSED", "*"):
+        if not engine.active_positions:
+            await update.message.reply_text("No open positions to close.")
+            return
+        closed = []
+        if hasattr(engine, "close_all_positions"):
+            closed = engine.close_all_positions(reason="Manual close all")
         else:
-            await update.message.reply_text(f"No active position for `{sym}`", parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"Close failed: {e}")
+            for sym in list(engine.active_positions.keys()):
+                p = engine.close_position(sym, reason="Manual close all")
+                if p:
+                    closed.append(p)
+        lines = [f"✅ Closed {len(closed)} position(s)"]
+        for p in closed:
+            lines.append(f"{p.symbol} PnL ${float(getattr(p, 'realized_pnl', 0) or 0):+.2f}")
+        await update.message.reply_text("\n".join(lines))
+        return
+    sym = arg if arg not in ("BTC", "BTCUSD") else "BTCUSDT"
+    closed = engine.close_position(sym, reason="Manual close")
+    if closed:
+        await update.message.reply_text(f"✅ Closed {sym} PnL ${float(getattr(closed, 'realized_pnl', 0) or 0):+.2f}")
+    else:
+        await update.message.reply_text(f"No position for {sym}. Use /close all")
 
 
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -524,9 +553,33 @@ async def chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def live_monitoring_worker(app):
+    try:
+        from autotrade_worker import live_monitoring_worker as _multi_worker
+        return await _multi_worker(
+            app,
+            config=config,
+            engine=engine,
+            risk_mgr=risk_mgr,
+            arbiter=arbiter,
+            MarketDataFeed=MarketDataFeed,
+            autotrade_active_getter=lambda: autotrade_active,
+            write_runtime_status=_write_runtime_status,
+            monitoring_health=monitoring_health,
+            now_iso=_now_iso,
+        )
+    except Exception as _aw_err:
+        print("[autotrade_worker] using legacy worker:", _aw_err)
     """Background task that polls candles and tracks setups/positions."""
-    feed = MarketDataFeed(symbol=config.DEFAULT_SYMBOL, source=config.DEFAULT_DATA_SOURCE)
-    symbol = config.DEFAULT_SYMBOL
+    try:
+        from multi_agent_trading_bot import _norm_trade_symbol
+        symbol = _norm_trade_symbol(getattr(config, "DEFAULT_SYMBOL", "XAUUSD"))
+    except Exception:
+        symbol = str(getattr(config, "DEFAULT_SYMBOL", "XAUUSD")).upper()
+        if symbol in ("XAUTUSD", "XAUT", "GOLD", "XAU"):
+            symbol = "XAUUSD"
+        if symbol in ("BTC", "BTCUSD", "XBT"):
+            symbol = "BTCUSDT"
+    feed = MarketDataFeed(symbol=symbol, source=config.DEFAULT_DATA_SOURCE)
     _write_runtime_status()
     while True:
         monitoring_health["last_poll_at"] = _now_iso()
@@ -825,12 +878,15 @@ def main():
     app.add_handler(CommandHandler("levels", levels_command))
     app.add_handler(CommandHandler("price", price_command))
     app.add_handler(CommandHandler("signal", signal_command))
+    app.add_handler(CommandHandler("asignal", signal_command))
     app.add_handler(CommandHandler("single", signal_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
     app.add_handler(CommandHandler("close", close_command))
+    app.add_handler(CommandHandler("closeall", close_command))
+    app.add_handler(CommandHandler("closed", close_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("news", news_command))
     app.add_handler(CommandHandler("positions", positions_command))

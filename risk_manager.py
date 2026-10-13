@@ -361,6 +361,27 @@ class RiskManager:
             lots = 0.0
         return round(lots, 4), round(stop_pips, 2), pip_value
 
+    def _adapt_profile_for_equity(self) -> None:
+        """Scale instrument profile for small paper accounts (e.g. $100)."""
+        eq = float(self.state.equity or 0)
+        p = dict(self.profile)
+        sym = (self.symbol or "").upper()
+        if eq <= 0:
+            return
+        if eq < 500:
+            if any(x in sym for x in ("XAU", "GOLD", "GC")):
+                p["contract_size"] = 1
+                p["pip_value_per_lot"] = 0.01
+                p["min_lot"] = 0.01
+                p["lot_step"] = 0.01
+            if any(x in sym for x in ("BTC", "ETH", "SOL", "BNB")):
+                p["min_lot"] = min(float(p.get("min_lot", 0.001)), 0.001)
+                p["lot_step"] = min(float(p.get("lot_step", 0.001)), 0.001)
+        if eq < 200 and p.get("contract_size", 100) == 1:
+            p["min_lot"] = min(float(p.get("min_lot", 0.01)), 0.001)
+            p["lot_step"] = min(float(p.get("lot_step", 0.01)), 0.001)
+        self.profile = p
+
     def position_size(
         self,
         entry: float,
@@ -368,12 +389,23 @@ class RiskManager:
         equity: Optional[float] = None,
         symbol: Optional[str] = None,
     ) -> TradeRiskResult:
+        if isinstance(equity, str) and symbol is None:
+            symbol, equity = equity, None
         if symbol:
             self.set_symbol(symbol)
         if equity is not None:
+            try:
+                equity = float(equity)
+            except (TypeError, ValueError):
+                equity = None
+        if equity is not None:
             self.state.equity = equity
-            self.state.peak_equity = max(self.state.peak_equity, equity)
+            try:
+                self.state.peak_equity = max(float(self.state.peak_equity or 0), float(equity))
+            except (TypeError, ValueError):
+                self.state.peak_equity = float(equity)
 
+        self._adapt_profile_for_equity()
         ok, why = self.can_trade()
         if not ok:
             return TradeRiskResult(
@@ -410,16 +442,23 @@ class RiskManager:
             step = self.profile["lot_step"]
             min_lot = self.config.min_lot_override or self.profile["min_lot"]
             if affordable_lots < min_lot:
-                return TradeRiskResult(
-                    size=0.0, lots=0.0, risk_amount=0.0, risk_pct_used=0.0,
-                    stop_distance=round(stop_dist, 6), stop_pips=stop_pips,
-                    tp1=tps["tp1"], tp2=tps["tp2"], tp3=tps.get("tp3"),
-                    mode=self.state.mode, reason=f"blocked: required margin exceeds capacity (min {min_lot} lots)",
-                    symbol=self.symbol, pip_value=pip_value, leverage=lev,
-                    margin_required=margin_required, notional_value=notional_value,
-                )
-            lots = max(min_lot, math.floor(affordable_lots / step) * step)
-            lots = round(lots, 4)
+                import math as _m
+                micro_step = min(step, 0.001)
+                if affordable_lots < micro_step:
+                    return TradeRiskResult(
+                        size=0.0, lots=0.0, risk_amount=0.0, risk_pct_used=0.0,
+                        stop_distance=round(stop_dist, 6), stop_pips=stop_pips,
+                        tp1=tps["tp1"], tp2=tps["tp2"], tp3=tps.get("tp3"),
+                        mode=self.state.mode, reason=f"blocked: required margin exceeds capacity (min {min_lot} lots)",
+                        symbol=self.symbol, pip_value=pip_value, leverage=lev,
+                        margin_required=margin_required, notional_value=notional_value,
+                    )
+                lots = max(micro_step, _m.floor(max(affordable_lots, 0) / micro_step) * micro_step)
+                lots = round(lots, 6)
+                reason = (reason + " | micro-size").strip(" |")
+            else:
+                lots = max(min_lot, math.floor(affordable_lots / step) * step)
+                lots = round(lots, 4)
             notional_value = round(lots * contract_size * entry, 2)
             margin_required = round(self.calc_margin(notional_value, lev), 2)
 
