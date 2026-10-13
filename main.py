@@ -219,64 +219,137 @@ def format_price_string(info: Dict) -> str:
 
 async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     welcome = (
-        "🤖 **TradingBot — Multi-Agent Paper Assistant**\n\n"
-        "Welcome! Institutional crypto & gold algorithmic trading assistant powered by 6 autonomous strategy agents, dynamic entry planning, and safe paper execution.\n\n"
+        "🤖 **TradingBot — Multi-Agent Paper & MT5 Assistant**\n\n"
+        "Welcome! Institutional crypto & gold algorithmic trading assistant powered by 7 autonomous strategy agents, dynamic entry planning, and safe paper/MT5 execution.\n\n"
         "⚡ **Quick Start:**\n"
         "• `/signal btc` — Multi-agent consensus & best entry zone\n"
-        "• `/autotrade on` — Automated paper trading (up to 5 active trades)\n"
+        "• `/autotrade on` — Automated trading (up to 5 active trades)\n"
         "• `/positions` — Monitor open trades, PnL & dynamic trailing stops\n"
         "• `/status` — Portfolio equity & system health\n"
-        "• `/help` — Full categorized command catalog\n\n"
+        "• `/commands` or `/help` — Full categorized command catalog\n\n"
         "🛡️ _Default paper equity: $1,000 | Max concurrent active trades: 5_"
     )
-    await update.message.reply_text(welcome, parse_mode="Markdown")
+    try:
+        await update.message.reply_text(welcome, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(welcome.replace("*", "").replace("_", "").replace("`", ""))
 
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "📖 **TradingBot Command Center**\n"
-        "_Institutional Multi-Agent Paper Trading & Analysis System_\n\n"
-        "📊 **Market Data & Live Quotes:**\n"
-        "• `/price [SYM]` — Live mark price, 24h change & stats\n"
-        "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
-        "• `/news [SYM]` — Macro calendar & economic shock detection\n\n"
-        "🎯 **Signals & Strategy Confluence:**\n"
-        "• `/signal [SYM]` — 6-Agent consensus (Trend, SMC, Indicators, AI, News, VWAP)\n"
-        "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
-        "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n\n"
-        "⚡ **Execution & Positions (Active Limit: 5):**\n"
-        "• `/positions` — Open active trades, pending setups & real-time PnL\n"
-        "• `/autotrade on|off` — Paper autotrading (up to 5 concurrent active trades)\n"
-        "• `/close [SYM|all]` — Instantly close position(s)\n"
-        "• `/cancel [SYM]` — Cancel pending order setup\n"
-        "• `/closed` — Recently closed trades history & realized PnL\n\n"
-        "🛡️ **Risk & Safety Management:**\n"
-        "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
-        "• `/health` — Real-time telemetry & background worker heartbeat\n"
-        "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
-        "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
-        "• `/kill [on|off]` — Emergency execution stop circuit breaker\n\n"
-        "🏦 **MetaTrader 5 & Broker Accounts:**\n"
-        "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
-        "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
-        "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account (fail-closed safe)\n"
-        "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
-        "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine\n\n"
-        "📈 **Backtesting & Research:**\n"
-        "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
-        "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
-        "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
-        "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n\n"
-        "🧠 **Autonomous AI & Standings:**\n"
-        "• `/brain` — Autonomous learner knowledge & win rates\n"
-        "• `/relearn [SYM]` — Force 5Y history retraining bootstrap\n"
-        "• `/board` — Strategy board & agent standings\n"
-        "• `/journal` — Trade journal analytics & history\n"
-        "• `/digest` — Daily market performance digest\n"
-        "• `/reset` — Clear conversation context\n"
-        "• `Any message` — Conversational assistant with Gemini AI\n"
-    )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    cat = (ctx.args[0].lower() if ctx.args else "").strip()
+    if cat in ("market", "price", "quotes", "levels"):
+        text = (
+            "📊 **Market Data & Live Quotes:**\n"
+            "• `/price [SYM]` — Live mark price, 24h change & stats\n"
+            "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
+            "• `/news [SYM]` — Macro calendar & economic sentiment"
+        )
+    elif cat in ("signal", "signals", "setup", "confluence"):
+        text = (
+            "🎯 **Signals & Strategy Confluence:**\n"
+            "• `/signal [SYM]` — 7-Agent consensus & optimal entry zone\n"
+            "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
+            "• `/quality [SYM]` — Comprehensive signal quality score & breakdown"
+        )
+    elif cat in ("execution", "orders", "trades", "pos", "positions"):
+        text = (
+            "⚡ **Execution & Positions (Active Limit: 5):**\n"
+            "• `/positions` — Open active trades, pending setups & real-time PnL\n"
+            "• `/autotrade on|off` — Multi-symbol autotrading (up to 5 concurrent active trades)\n"
+            "• `/close [SYM|all]` — Instantly close position(s)\n"
+            "• `/cancel [SYM]` — Cancel pending order setup\n"
+            "• `/closed` — Recently closed trades history & realized PnL"
+        )
+    elif cat in ("mt5", "broker"):
+        text = (
+            "🏦 **MetaTrader 5 & Broker Accounts:**\n"
+            "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
+            "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
+            "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account (fail-closed safe)\n"
+            "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
+            "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine"
+        )
+    elif cat in ("risk", "safety", "limits"):
+        text = (
+            "🛡️ **Risk & Safety Management:**\n"
+            "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
+            "• `/health` — Real-time telemetry & background worker heartbeat\n"
+            "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+            "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
+            "• `/kill [on|off]` — Emergency execution stop circuit breaker"
+        )
+    elif cat in ("backtest", "research", "abacktest"):
+        text = (
+            "📈 **Backtesting & Research:**\n"
+            "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
+            "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
+            "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
+            "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)"
+        )
+    elif cat in ("ai", "brain", "learner", "agent", "agents"):
+        text = (
+            "🧠 **Autonomous AI & Standings:**\n"
+            "• `/board` — Strategy board & agent standings\n"
+            "• `/journal` — Trade journal analytics & history\n"
+            "• `/agents` — Agent performance rankings & stats\n"
+            "• `/tiers` — Risk tier allocations\n"
+            "• `/digest` — Daily market performance digest\n"
+            "• `/brain` — Autonomous learner knowledge & win rates\n"
+            "• `/relearn [SYM]` — Force 5Y history retraining bootstrap\n"
+            "• `/reset` — Clear conversation context\n"
+            "• `/ask [question]` — Conversational assistant with Gemini AI"
+        )
+    else:
+        text = (
+            "📖 **TradingBot Command Center**\n"
+            "_Institutional Multi-Agent Paper & MT5 Trading System_\n\n"
+            "📊 **Market Data & Live Quotes:**\n"
+            "• `/price [SYM]` — Live mark price, 24h change & stats\n"
+            "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
+            "• `/news [SYM]` — Macro calendar & economic sentiment\n\n"
+            "🎯 **Signals & Strategy Confluence:**\n"
+            "• `/signal [SYM]` — 7-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP)\n"
+            "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
+            "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n\n"
+            "⚡ **Execution & Positions (Active Limit: 5):**\n"
+            "• `/positions` — Open active trades, pending setups & real-time PnL\n"
+            "• `/autotrade on|off` — Multi-symbol autotrading (up to 5 concurrent active trades)\n"
+            "• `/close [SYM|all]` — Instantly close position(s)\n"
+            "• `/cancel [SYM]` — Cancel pending order setup\n"
+            "• `/closed` — Recently closed trades history & realized PnL\n\n"
+            "🏦 **MetaTrader 5 & Broker Accounts:**\n"
+            "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
+            "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
+            "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account (fail-closed safe)\n"
+            "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
+            "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine\n\n"
+            "🛡️ **Risk & Safety Management:**\n"
+            "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
+            "• `/health` — Real-time telemetry & background worker heartbeat\n"
+            "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+            "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
+            "• `/kill [on|off]` — Emergency execution stop circuit breaker\n\n"
+            "📈 **Backtesting & Research:**\n"
+            "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
+            "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
+            "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
+            "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n\n"
+            "🧠 **Autonomous AI & Standings:**\n"
+            "• `/board` — Strategy board & agent standings\n"
+            "• `/journal` — Trade journal analytics & history\n"
+            "• `/agents` — Agent performance rankings & stats\n"
+            "• `/tiers` — Risk tier allocations\n"
+            "• `/digest` — Daily market performance digest\n"
+            "• `/brain` — Autonomous learner knowledge & win rates\n"
+            "• `/relearn [SYM]` — Force 5Y history retraining bootstrap\n"
+            "• `/reset` — Clear conversation context\n"
+            "• `/ask [question]` — Conversational assistant with Gemini AI\n\n"
+            "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands backtest`, `/commands ai`_"
+        )
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(text.replace("*", "").replace("_", "").replace("`", ""))
 
 
 async def levels_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -432,7 +505,7 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     arg = (ctx.args[0] if ctx.args else "").strip().upper()
-    if not arg or arg in ("ALL", "CLOSED", "*"):
+    if not arg or arg in ("ALL", "*"):
         if not engine.active_positions:
             await update.message.reply_text("ℹ️ No open positions to close.")
             return
@@ -459,6 +532,75 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Closed `{sym}` — Realized PnL: {pnl_icon} `${pnl:+,.2f}`", parse_mode="Markdown")
     else:
         await update.message.reply_text(f"⚠️ No active position found for `{sym}`. Use `/close all`", parse_mode="Markdown")
+
+
+async def closed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View recently closed trades and realized PnL history."""
+    try:
+        from trade_journal import TradeJournal
+        journal = TradeJournal()
+        closes = journal.closed_summary(8)
+    except Exception:
+        closes = []
+
+    lines = ["📜 **Recently Closed Trades History**"]
+    if closes:
+        total_pnl = 0.0
+        for r in reversed(closes):
+            won = r.get("won")
+            icon = "✅" if won else "❌"
+            pnl = float(r.get("pnl") or 0.0)
+            total_pnl += pnl
+            r_mult = r.get("r_multiple", 0.0)
+            sym = r.get("symbol", "")
+            d = r.get("direction", "")
+            lines.append(f"• {icon} `{sym}` {d} — PnL: `${pnl:+,.2f}` (R: `{r_mult:+.2f}`)")
+        lines.append(f"\n💰 **Total Realized PnL:** `${total_pnl:+,.2f}`")
+    elif getattr(engine, "trade_history", None):
+        history = list(reversed(engine.trade_history))[:8]
+        total_pnl = 0.0
+        for t in history:
+            pnl = float(getattr(t, "realized_pnl", 0.0) or 0.0)
+            total_pnl += pnl
+            icon = "✅" if pnl >= 0 else "❌"
+            sym = getattr(t, "symbol", "")
+            d = getattr(t, "direction", "")
+            lines.append(f"• {icon} `{sym}` {d} — PnL: `${pnl:+,.2f}`")
+        lines.append(f"\n💰 **Total Realized PnL:** `${total_pnl:+,.2f}`")
+    else:
+        lines.append("ℹ️ No closed trades on record yet. Completed trades will appear here.")
+
+    try:
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text("\n".join(lines).replace("*", "").replace("`", ""))
+
+
+async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Direct query to Gemini conversational trading assistant."""
+    query = " ".join(ctx.args).strip() if ctx.args else ""
+    if not query:
+        await update.message.reply_text("Usage: `/ask <your question>`", parse_mode="Markdown")
+        return
+    market_context = ""
+    try:
+        info = get_price_info(config.DEFAULT_SYMBOL)
+        if info.get("ok"):
+            market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+    except Exception:
+        pass
+    reply = gemini.ask(chat_id=update.effective_chat.id, user_text=query, market_context=market_context)
+    await update.message.reply_text(reply)
+
+
+async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Friendly fallback when an unrecognized command is typed."""
+    cmd = update.message.text.split()[0] if (update.message and update.message.text) else "/command"
+    await update.message.reply_text(
+        f"❓ Unknown command: `{cmd}`\n\n"
+        "Use `/commands` or `/help` to view all available commands.",
+        parse_mode="Markdown",
+    )
 
 
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1126,17 +1268,88 @@ def run_cli_interactive():
             else:
                 bname = type(engine.broker).__name__ if engine.broker else "None"
                 print(f"Active broker: {bname} ({getattr(config, 'BROKER_MODE', 'paper')})")
-        elif name == "help":
+        elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], performance, profile [NAME], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], levels [SYM], news [SYM]\n"
-                "🎯 Signals: signal [SYM], single [SYM], quality [SYM]\n"
-                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], mt5 [CMD], broker [MODE]\n"
+                "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
+                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], closed, mt5 [CMD], broker [MODE]\n"
                 "🛡️ Risk: status, health, risk, leverage [LEV], kill [on|off]\n"
-                "📈 Research: backtest [BARS] [SYM], performance, profile [NAME]\n"
-                "🧠 AI & Controls: ask [TEXT], reset, exit"
+                "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME]\n"
+                "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, relearn [SYM]\n"
+                "💬 Assistant: ask [TEXT], reset, exit"
             )
+        elif name == "asignal":
+            sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+            prof = parts[2].lower() if len(parts) > 2 else "balanced"
+            try:
+                from advanced_integration import AdvancedEngine
+                eng = AdvancedEngine(symbol=sym, profile=prof)
+                res = eng.evaluate(sym)
+                print(res.get("status"), res.get("signal"))
+            except Exception as e:
+                print(f"asignal error: {e}")
+        elif name == "closed":
+            try:
+                from trade_journal import TradeJournal
+                j = TradeJournal()
+                closes = j.closed_summary(8)
+                if closes:
+                    print("Closed trades:")
+                    for r in reversed(closes):
+                        print(f"• {'✅' if r.get('won') else '❌'} {r.get('symbol')} {r.get('direction')} PnL: ${float(r.get('pnl') or 0):+,.2f} (R: {r.get('r_multiple')})")
+                elif getattr(engine, "trade_history", None):
+                    print("Closed trades:")
+                    for t in list(reversed(engine.trade_history))[:8]:
+                        print(f"• {'✅' if getattr(t, 'realized_pnl', 0) >= 0 else '❌'} {getattr(t, 'symbol', '')} {getattr(t, 'direction', '')} PnL: ${float(getattr(t, 'realized_pnl', 0)):+,.2f}")
+                else:
+                    print("No closed trades on record yet.")
+            except Exception as e:
+                print(f"Closed history error: {e}")
+        elif name == "board":
+            try:
+                from telegram_feature_pack import _get_pack
+                print(_get_pack().board())
+            except Exception as e:
+                print(f"Board error: {e}")
+        elif name == "journal":
+            try:
+                from telegram_feature_pack import _get_pack
+                print(_get_pack().journal.telegram_report())
+            except Exception as e:
+                print(f"Journal error: {e}")
+        elif name == "agents":
+            try:
+                from telegram_feature_pack import _get_pack
+                print(_get_pack().agent_stats.telegram_report())
+            except Exception as e:
+                print(f"Agents error: {e}")
+        elif name == "tiers":
+            try:
+                from telegram_feature_pack import _get_pack
+                print(_get_pack().risk_tiers.telegram_line())
+            except Exception as e:
+                print(f"Tiers error: {e}")
+        elif name == "digest":
+            try:
+                from telegram_feature_pack_v4 import _get
+                print(_get().daily_digest())
+            except Exception as e:
+                print(f"Digest error: {e}")
+        elif name == "brain":
+            try:
+                from autonomous_learner import get_brain
+                print(get_brain(auto_bootstrap=False).summary())
+            except Exception as e:
+                print(f"Brain error: {e}")
+        elif name == "relearn":
+            try:
+                from autonomous_learner import get_brain
+                sym = parts[1].upper() if len(parts) > 1 else "XAUUSD"
+                print(get_brain(auto_bootstrap=False).bootstrap(symbol=sym, years=5.0))
+            except Exception as e:
+                print(f"Relearn error: {e}")
         else:
             print("Commands: signal, price, levels, news, quality, positions, autotrade, close, cancel, mt5, broker, status, health, risk, leverage, kill, backtest, performance, profile, ask, reset, exit")
 
@@ -1158,7 +1371,51 @@ def main():
     async def on_post_init(application):
         logger.info("Initializing live monitoring background worker...")
         asyncio.create_task(live_monitoring_worker(application))
-        # Advanced commands if available
+
+        # Register official Telegram Bot Command list so Telegram UI command menu ('/') works
+        try:
+            from telegram import BotCommand
+            bot_commands = [
+                BotCommand("start", "Start bot & interactive overview"),
+                BotCommand("help", "Full command center & user guide"),
+                BotCommand("commands", "Interactive catalog of all bot commands"),
+                BotCommand("price", "Live mark price & 24h market stats"),
+                BotCommand("levels", "Key levels (PDH/PDL, pivots, 2Y S/R)"),
+                BotCommand("signal", "7-Agent consensus & optimal entry zone"),
+                BotCommand("asignal", "Advanced SMC + CVD orderflow setup"),
+                BotCommand("quality", "Signal quality score & breakdown"),
+                BotCommand("positions", "Active trades & real-time PnL"),
+                BotCommand("autotrade", "Toggle multi-symbol autotrade (max 5 slots)"),
+                BotCommand("close", "Close position(s) by symbol or all"),
+                BotCommand("cancel", "Cancel pending setup order"),
+                BotCommand("closed", "Recently closed trades history & PnL"),
+                BotCommand("status", "Portfolio equity & margin capacity"),
+                BotCommand("health", "System health & background worker telemetry"),
+                BotCommand("risk", "Risk tier report & lot sizing"),
+                BotCommand("leverage", "Set or view leverage ceiling (1-20x)"),
+                BotCommand("kill", "Emergency execution circuit breaker switch"),
+                BotCommand("news", "Macro calendar & economic sentiment"),
+                BotCommand("mt5", "MetaTrader 5 paper/live status & telemetry"),
+                BotCommand("broker", "View or switch active broker engine"),
+                BotCommand("backtest", "Fast backtest engine on historical data"),
+                BotCommand("abacktest", "Advanced backtest suite (WF / MC / sweep)"),
+                BotCommand("performance", "Trade metrics, win rate & Sharpe ratio"),
+                BotCommand("profile", "View or switch strategy profile"),
+                BotCommand("board", "Strategy board & agent standings"),
+                BotCommand("journal", "Trade journal analytics & history"),
+                BotCommand("agents", "Agent performance rankings & stats"),
+                BotCommand("tiers", "Risk tier status & allocations"),
+                BotCommand("digest", "Daily market performance digest"),
+                BotCommand("brain", "Autonomous learner intelligence & state"),
+                BotCommand("relearn", "Retrain autonomous learner on 5Y data"),
+                BotCommand("reset", "Clear conversational chat memory"),
+            ]
+            await application.bot.set_my_commands(bot_commands)
+            logger.info("Registered %d commands with Telegram Bot API", len(bot_commands))
+        except Exception as cmd_err:
+            logger.warning("Failed to sync Bot Commands with Telegram API: %s", cmd_err)
+
+        # Advanced commands and autonomous learner
         try:
             from telegram_advanced import register_all_advanced
             register_all_advanced(application)
@@ -1167,28 +1424,95 @@ def main():
             print(f"Advanced commands not loaded: {adv_err}")
 
     app = ApplicationBuilder().token(token).post_init(on_post_init).build()
+
+    # Core Navigation & Help
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler(["help", "commands", "cmd", "menu", "list", "all", "command"], help_command))
+
+    # Market Data
     app.add_handler(CommandHandler("levels", levels_command))
     app.add_handler(CommandHandler("price", price_command))
-    app.add_handler(CommandHandler("signal", signal_command))
-    app.add_handler(CommandHandler("asignal", signal_command))
-    app.add_handler(CommandHandler("single", signal_command))
+    app.add_handler(CommandHandler("news", news_command))
+
+    # Signals & Confluence
+    app.add_handler(CommandHandler(["signal", "single"], signal_command))
+    try:
+        from telegram_advanced import asignal_command
+        app.add_handler(CommandHandler("asignal", asignal_command))
+    except Exception:
+        app.add_handler(CommandHandler("asignal", signal_command))
+    try:
+        from telegram_feature_pack_v4 import quality_command
+        app.add_handler(CommandHandler("quality", quality_command))
+    except Exception:
+        pass
+
+    # Execution & Trades
+    app.add_handler(CommandHandler("positions", positions_command))
+    app.add_handler(CommandHandler("autotrade", autotrade_command))
+    app.add_handler(CommandHandler(["close", "closeall"], close_command))
+    app.add_handler(CommandHandler("closed", closed_command))
+    app.add_handler(CommandHandler("cancel", cancel_command))
+
+    # MT5 & Broker
+    app.add_handler(CommandHandler("mt5", mt5_command))
+    app.add_handler(CommandHandler("broker", broker_command))
+
+    # Risk & Safety
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
-    app.add_handler(CommandHandler("close", close_command))
-    app.add_handler(CommandHandler("closeall", close_command))
-    app.add_handler(CommandHandler("closed", close_command))
-    app.add_handler(CommandHandler("cancel", cancel_command))
-    app.add_handler(CommandHandler("news", news_command))
-    app.add_handler(CommandHandler("positions", positions_command))
-    app.add_handler(CommandHandler("autotrade", autotrade_command))
-    app.add_handler(CommandHandler("mt5", mt5_command))
-    app.add_handler(CommandHandler("broker", broker_command))
+    try:
+        from telegram_advanced import kill_command
+        app.add_handler(CommandHandler("kill", kill_command))
+    except Exception:
+        pass
+
+    # Backtesting & Research
     app.add_handler(CommandHandler("backtest", backtest_command))
+    try:
+        from telegram_advanced import abacktest_command, performance_command, profile_command
+        app.add_handler(CommandHandler(["abacktest", "backtestall"], abacktest_command))
+        app.add_handler(CommandHandler(["performance", "perf"], performance_command))
+        app.add_handler(CommandHandler("profile", profile_command))
+    except Exception:
+        pass
+
+    # Autonomous AI & Feature Packs
+    try:
+        from telegram_feature_pack import board_command, journal_command, agents_command, tiers_command
+        app.add_handler(CommandHandler("board", board_command))
+        app.add_handler(CommandHandler("journal", journal_command))
+        app.add_handler(CommandHandler("agents", agents_command))
+        app.add_handler(CommandHandler("tiers", tiers_command))
+    except Exception:
+        pass
+    try:
+        from telegram_feature_pack_v4 import digest_command, replay_command, export_command, setups_command, abooks_command, heal_command
+        app.add_handler(CommandHandler("digest", digest_command))
+        app.add_handler(CommandHandler("replay", replay_command))
+        app.add_handler(CommandHandler("export", export_command))
+        app.add_handler(CommandHandler("setups", setups_command))
+        app.add_handler(CommandHandler("abooks", abooks_command))
+        app.add_handler(CommandHandler("heal", heal_command))
+    except Exception:
+        pass
+    try:
+        from telegram_brain import brain_command, relearn_command
+        app.add_handler(CommandHandler("brain", brain_command))
+        app.add_handler(CommandHandler("relearn", relearn_command))
+    except Exception:
+        pass
+
+    # Conversational Assistant & Controls
+    app.add_handler(CommandHandler(["ask", "chat"], ask_command))
     app.add_handler(CommandHandler("reset", reset_command))
+
+    # Fallback for unrecognized commands
+    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+
+    # Conversational chat handler for non-commands
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message))
 
 

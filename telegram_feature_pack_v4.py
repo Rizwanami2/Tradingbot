@@ -114,11 +114,21 @@ async def heal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def register_feature_pack_v4(application) -> None:
-    application.add_handler(CommandHandler("digest", digest_command))
-    application.add_handler(CommandHandler("replay", replay_command))
-    application.add_handler(CommandHandler("export", export_command))
-    application.add_handler(CommandHandler("setups", setups_command))
-    application.add_handler(CommandHandler("abooks", abooks_command))
-    application.add_handler(CommandHandler("quality", quality_command))
-    application.add_handler(CommandHandler("heal", heal_command))
+    existing_cmds = set()
+    for h in application.handlers.get(0, []):
+        if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
+            existing_cmds.update(h.commands)
+
+    for cmd, handler in [
+        ("digest", digest_command),
+        ("replay", replay_command),
+        ("export", export_command),
+        ("setups", setups_command),
+        ("abooks", abooks_command),
+        ("quality", quality_command),
+        ("heal", heal_command),
+    ]:
+        if cmd not in existing_cmds:
+            application.add_handler(CommandHandler(cmd, handler))
+            existing_cmds.add(cmd)
     logger.info("Registered FP4: /digest /replay /export /setups /abooks /quality /heal")

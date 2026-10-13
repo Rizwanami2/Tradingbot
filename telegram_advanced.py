@@ -240,12 +240,22 @@ def register_all_advanced(application) -> None:
     except Exception as e:
         logger.debug("Autonomous learner start skip: %s", e)
 
-    application.add_handler(CommandHandler("performance", performance_command))
-    application.add_handler(CommandHandler("kill", kill_command))
-    application.add_handler(CommandHandler("profile", profile_command))
-    application.add_handler(CommandHandler("asignal", asignal_command))
-    application.add_handler(CommandHandler("abacktest", abacktest_command))
-    application.add_handler(CommandHandler("backtestall", abacktest_command))
+    existing_cmds = set()
+    for h in application.handlers.get(0, []):
+        if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
+            existing_cmds.update(h.commands)
+
+    def _safe_add(cmd: str, handler):
+        if cmd not in existing_cmds:
+            application.add_handler(CommandHandler(cmd, handler))
+            existing_cmds.add(cmd)
+
+    _safe_add("performance", performance_command)
+    _safe_add("kill", kill_command)
+    _safe_add("profile", profile_command)
+    _safe_add("asignal", asignal_command)
+    _safe_add("abacktest", abacktest_command)
+    _safe_add("backtestall", abacktest_command)
     try:
         from telegram_feature_pack import register_feature_pack
         register_feature_pack(application)

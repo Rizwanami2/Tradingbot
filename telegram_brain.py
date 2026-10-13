@@ -32,6 +32,16 @@ async def relearn_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def register_brain(application) -> None:
-    application.add_handler(CommandHandler("brain", brain_command))
-    application.add_handler(CommandHandler("relearn", relearn_command))
+    existing_cmds = set()
+    for h in application.handlers.get(0, []):
+        if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
+            existing_cmds.update(h.commands)
+
+    for cmd, handler in [
+        ("brain", brain_command),
+        ("relearn", relearn_command),
+    ]:
+        if cmd not in existing_cmds:
+            application.add_handler(CommandHandler(cmd, handler))
+            existing_cmds.add(cmd)
     logger.info("Registered /brain /relearn")
