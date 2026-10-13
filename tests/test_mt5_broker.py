@@ -173,6 +173,163 @@ class TestMT5Broker(unittest.TestCase):
         self.assertIsNotNone(closed)
         self.assertEqual(len(b.get_positions()), 0)
 
+    def test_mt5_live_fail_closed_without_gateway_or_package(self):
+        # When MetaTrader5 is unavailable and no gateway is configured, fail closed
+        with patch("mt5_broker.native_mt5", None):
+            with self.assertRaises(BrokerConfigurationError) as ctx:
+                MT5Broker(
+                    mode="live",
+                    login=10054330,
+                    password="secret_password",
+                    server="Mtrading-live",
+                    gateway_url="",
+                )
+            self.assertIn("Native MetaTrader5 library is only available on Windows", str(ctx.exception))
+
+    def test_mt5_gateway_integration(self):
+        # Test connecting and querying account telemetry via REST gateway
+        def mock_request(method, url, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            if "/connect" in url:
+                mock_resp.json.return_value = {
+                    "ok": True,
+                    "login": 10054330,
+                    "server": "Mtrading-live",
+                    "balance": 12500.0,
+                    "equity": 12650.0,
+                    "currency": "USD",
+                    "leverage": 100,
+                }
+            elif "/account" in url:
+                mock_resp.json.return_value = {
+                    "ok": True,
+                    "login": 10054330,
+                    "server": "Mtrading-live",
+                    "balance": 12500.0,
+                    "equity": 12650.0,
+                    "margin": 250.0,
+                    "margin_free": 12400.0,
+                    "margin_level": 5060.0,
+                    "currency": "USD",
+                    "company": "MTrading Global",
+                    "leverage": 100,
+                }
+            return mock_resp
+
+        with patch("requests.request", side_effect=mock_request):
+            broker = MT5Broker(
+                mode="live",
+                login=10054330,
+                password="secret_password",
+                server="Mtrading-live",
+                gateway_url="http://192.168.1.100:5000",
+            )
+            self.assertTrue(broker.is_connected)
+            self.assertEqual(broker.balance, 12500.0)
+            self.assertEqual(broker.equity, 12650.0)
+
+            info = broker.get_account_info()
+            self.assertEqual(info.login, 10054330)
+            self.assertEqual(info.server, "Mtrading-live")
+            self.assertEqual(info.margin, 250.0)
+            self.assertEqual(info.margin_level, 5060.0)
+            self.assertEqual(info.currency, "USD")
+
+    def test_mt5_gateway_orders_and_positions(self):
+        # Test order placement, positions querying, modification, and closing via REST gateway
+        stored_positions = [
+            {
+                "ticket": 554433,
+                "symbol": "BTCUSD",
+                "side": "buy",
+                "qty": 0.10,
+                "entry_price": 60000.0,
+                "sl": 59000.0,
+                "tp": 63000.0,
+                "unrealized_pnl": 150.0,
+                "profit": 150.0,
+            }
+        ]
+
+        def mock_request(method, url, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            if "/connect" in url:
+                mock_resp.json.return_value = {
+                    "ok": True,
+                    "balance": 10000.0,
+                    "equity": 10150.0,
+                    "currency": "USD",
+                }
+            elif "/order" in url:
+                payload = kwargs.get("json", {})
+                mock_resp.json.return_value = {
+                    "ok": True,
+                    "ticket": 554433,
+                    "symbol": payload.get("symbol", "BTCUSD"),
+                    "side": payload.get("side", "buy"),
+                    "qty": payload.get("qty", 0.10),
+                    "price": 60000.0,
+                    "sl": payload.get("sl", 0.0),
+                    "tp": payload.get("tp", 0.0),
+                }
+            elif "/positions" in url:
+                mock_resp.json.return_value = {
+                    "ok": True,
+                    "positions": stored_positions,
+                }
+            elif "/modify" in url:
+                payload = kwargs.get("json", {})
+                mock_resp.json.return_value = {
+                    "ok": True,
+                    "ticket": payload.get("ticket"),
+                    "sl": payload.get("sl"),
+                    "tp": payload.get("tp"),
+                }
+            elif "/close" in url:
+                mock_resp.json.return_value = {
+                    "ok": True,
+                    "ticket": kwargs.get("json", {}).get("ticket"),
+                    "price": 61500.0,
+                    "profit": 150.0,
+                }
+            return mock_resp
+
+        with patch("requests.request", side_effect=mock_request):
+            broker = MT5Broker(
+                mode="live",
+                login=10054330,
+                password="secret_password",
+                server="Mtrading-live",
+                gateway_url="http://192.168.1.100:5000",
+            )
+            # Place order
+            order = broker.place_order(
+                symbol="BTCUSDT",
+                side="buy",
+                qty=0.10,
+                price=60000.0,
+                stop_loss=59000.0,
+                take_profit=63000.0,
+            )
+            self.assertEqual(order.status, "filled")
+            self.assertEqual(order.filled_price, 60000.0)
+
+            # Query positions
+            positions = broker.get_positions()
+            self.assertEqual(len(positions), 1)
+            self.assertEqual(positions[0].symbol, "BTCUSD")
+            self.assertEqual(positions[0].unrealized_pnl, 150.0)
+
+            # Modify position
+            mod_ok = broker.modify_position("BTCUSD", stop_loss=59500.0, take_profit=64000.0)
+            self.assertTrue(mod_ok)
+
+            # Close position
+            close_ok = broker.close_position("BTCUSD", qty=0.10, price=61500.0)
+            self.assertTrue(close_ok)
+
 
 if __name__ == "__main__":
     unittest.main()

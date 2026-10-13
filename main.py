@@ -265,7 +265,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🏦 **MetaTrader 5 & Broker Accounts:**\n"
             "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
             "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
-            "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account (fail-closed safe)\n"
+            "• `/mt5 live [login] [pass] [server] [gateway_url]` — Connect live MT5 account (fail-closed safe)\n"
             "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
             "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine"
         )
@@ -320,7 +320,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🏦 **MetaTrader 5 & Broker Accounts:**\n"
             "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
             "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
-            "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account (fail-closed safe)\n"
+            "• `/mt5 live [login] [pass] [server] [gateway_url]` — Connect live MT5 account (fail-closed safe)\n"
             "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
             "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine\n\n"
             "🛡️ **Risk & Safety Management:**\n"
@@ -789,12 +789,15 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         login = int(args[1]) if len(args) > 1 and args[1].isdigit() else getattr(config, "MT5_LOGIN", 0)
         password = args[2] if len(args) > 2 else getattr(config, "MT5_PASSWORD", "")
         server = args[3] if len(args) > 3 else getattr(config, "MT5_SERVER", "")
+        gateway_url = args[4] if len(args) > 4 else getattr(config, "MT5_GATEWAY_URL", "")
 
         if not login or not password or not server:
             await update.message.reply_text(
-                "❌ **MT5 Live Connection Failed (Missing Credentials)**\n"
-                "Usage: `/mt5 live <LOGIN> <PASSWORD> <SERVER>`\n"
-                "Or configure `MT5_LOGIN`, `MT5_PASSWORD`, and `MT5_SERVER` in `.env`.",
+                "❌ **MT5 Live Connection Failed (Missing Credentials)**\n\n"
+                "Usage: `/mt5 live <LOGIN> <PASSWORD> <SERVER> [GATEWAY_URL]`\n"
+                "Example: `/mt5 live 10054330 Secret123 Mtrading-live`\n"
+                "Via Gateway: `/mt5 live 10054330 Secret123 Mtrading-live http://192.168.1.50:5000`\n\n"
+                "Or configure `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`, and `MT5_GATEWAY_URL` in `.env`.",
                 parse_mode="Markdown",
             )
             return
@@ -808,23 +811,39 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 server=server,
                 path=getattr(config, "MT5_PATH", ""),
                 magic=getattr(config, "MT5_MAGIC", 112233),
-                gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+                gateway_url=gateway_url,
             )
             engine.broker = new_broker
             config.BROKER_MODE = "mt5_live"
+            via_mode = f"Gateway (`{gateway_url}`)" if gateway_url else "Native MetaTrader 5"
             await update.message.reply_text(
                 f"🟢 **MT5 Live Account Connected Successfully**\n"
                 f"• **Account #:** `{login}`\n"
                 f"• **Server:** `{server}`\n"
+                f"• **Bridge:** {via_mode}\n"
                 f"• **Balance:** `${new_broker.balance:,.2f}` | **Equity:** `${new_broker.equity:,.2f}`\n"
                 f"• **Status:** Live deal execution active with server-side SL/TP.",
                 parse_mode="Markdown",
             )
         except Exception as exc:
             logger.error("MT5 Live connect failed: %s", exc)
+            gw_hint = ""
+            err_str = str(exc)
+            if "Native MetaTrader5 package not available" in err_str or "MT5_GATEWAY_URL" in err_str:
+                gw_hint = (
+                    "\n\n💡 **Why did this happen?**\n"
+                    "The official `MetaTrader5` Python library requires Windows and the MT5 desktop terminal (`terminal64.exe`). "
+                    "When running on Linux, macOS, or cloud containers, connect using the MT5 REST Bridge:\n"
+                    "1. On your Windows PC with MT5 running, execute:\n"
+                    "   `python mt5_gateway_server.py --port 5000`\n"
+                    "2. Reconnect with the gateway URL:\n"
+                    f"   `/mt5 live {login} <PASSWORD> {server} http://<WINDOWS_IP>:5000`\n"
+                    "3. Or switch to high-fidelity risk-free simulation:\n"
+                    "   `/mt5 paper`"
+                )
             await update.message.reply_text(
                 f"🚫 **MT5 Live Connection Rejected (Fail-Closed)**\n"
-                f"Error: `{exc}`\n"
+                f"Error: `{exc}`{gw_hint}\n\n"
                 f"_Live mode aborted safely. Current broker remains unchanged._",
                 parse_mode="Markdown",
             )
@@ -854,7 +873,7 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🏦 **MetaTrader 5 Commands:**\n"
             "• `/mt5 status` — Check MT5 account telemetry & connection\n"
             "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
-            "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account\n"
+            "• `/mt5 live [login] [pass] [server] [gateway_url]` — Connect live MT5 account\n"
             "• `/mt5 positions` — Show all active MT5 broker positions",
             parse_mode="Markdown",
         )
@@ -1236,15 +1255,23 @@ def run_cli_interactive():
                 login = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else getattr(config, "MT5_LOGIN", 0)
                 password = parts[3] if len(parts) > 3 else getattr(config, "MT5_PASSWORD", "")
                 server = parts[4] if len(parts) > 4 else getattr(config, "MT5_SERVER", "")
+                gateway_url = parts[5] if len(parts) > 5 else getattr(config, "MT5_GATEWAY_URL", "")
                 if not login or not password or not server:
-                    print("Credentials required: mt5 live <LOGIN> <PASSWORD> <SERVER> or set in .env")
+                    print("Credentials required: mt5 live <LOGIN> <PASSWORD> <SERVER> [GATEWAY_URL] or set in .env")
                 else:
                     try:
                         from mt5_broker import MT5Broker
-                        new_broker = MT5Broker(mode="live", login=login, password=password, server=server)
+                        new_broker = MT5Broker(
+                            mode="live",
+                            login=login,
+                            password=password,
+                            server=server,
+                            gateway_url=gateway_url,
+                        )
                         engine.broker = new_broker
                         config.BROKER_MODE = "mt5_live"
-                        print(f"Connected to MT5 Live account #{login} on {server}")
+                        bridge = f" via {gateway_url}" if gateway_url else ""
+                        print(f"Connected to MT5 Live account #{login} on {server}{bridge}")
                     except Exception as exc:
                         print(f"MT5 Live connection failed: {exc}")
             elif sub in ("positions", "pos"):
@@ -1253,7 +1280,7 @@ def run_cli_interactive():
                 else:
                     print("No broker attached.")
             else:
-                print("Usage: mt5 status | mt5 paper | mt5 live [login] [pass] [server] | mt5 positions")
+                print("Usage: mt5 status | mt5 paper | mt5 live [login] [pass] [server] [gateway_url] | mt5 positions")
         elif name == "broker":
             if len(parts) > 1:
                 bmode = parts[1].lower()

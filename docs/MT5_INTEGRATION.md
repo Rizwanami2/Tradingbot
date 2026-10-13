@@ -77,9 +77,13 @@ Activates paper simulation mode with $0 capital risk.
 
 ### Connecting to Live MT5 Account
 ```text
-/mt5 live <LOGIN> <PASSWORD> <SERVER>
+/mt5 live <LOGIN> <PASSWORD> <SERVER> [GATEWAY_URL]
 ```
-Validates credentials and connects live. Fails closed with descriptive alert if connection cannot be authorized.
+Validates credentials and connects live. Fails closed safely if connection cannot be authorized.
+
+Examples:
+- Direct Windows: `/mt5 live 10054330 MyPassword Mtrading-live`
+- Linux via Gateway: `/mt5 live 10054330 MyPassword Mtrading-live http://192.168.1.50:5000`
 
 ### Viewing Active MT5 Positions
 ```text
@@ -101,3 +105,37 @@ Lists open positions, lots, entry prices, and floating PnL on MT5 terminal.
 1. **Server-Side Protection**: When placing live MT5 orders, Stop Loss and Take Profit levels are attached directly to the `MqlTradeRequest` (`TRADE_ACTION_DEAL`). Protection is active immediately on the broker's matching engine.
 2. **Dynamic Trailing Stops**: As the price advances through Break-Even thresholds (+0.5R, +1.0R), `modify_position` updates the stop loss level on the server (`TRADE_ACTION_SLTP`).
 3. **Concurrent Trade Ceiling**: Capped at 5 active positions (`BOT_MAX_OPEN_TRADES=5`) across the active watchlist (`BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,BNBUSDT`).
+
+---
+
+## 6. Linux & Cloud Deployment via MT5 REST Gateway
+
+### Why is the Gateway Bridge needed?
+The official `MetaTrader5` Python package from MetaQuotes is **Windows-only**. It relies on proprietary Windows C/C++ DLLs and requires an active desktop MT5 terminal (`terminal64.exe`) to execute trades. It does not run natively on standard Linux or cloud containers.
+
+To trade live with MT5 when your bot runs on Linux or in a cloud environment:
+1. **On your Windows PC or Windows VPS** (where MetaTrader 5 is installed):
+   - Install dependencies: `pip install MetaTrader5`
+   - Run the turnkey gateway bridge:
+     ```bash
+     python mt5_gateway_server.py --port 5000
+     ```
+2. **On your Linux TradingBot**:
+   - Set the gateway URL in `.env`:
+     ```ini
+     MT5_GATEWAY_URL=http://<YOUR_WINDOWS_IP>:5000
+     ```
+   - Or connect dynamically from Telegram:
+     ```text
+     /mt5 live 10054330 <PASSWORD> Mtrading-live http://<YOUR_WINDOWS_IP>:5000
+     ```
+
+### Gateway REST API Reference
+- `GET  /health`    — Verifies bridge responsiveness and terminal status
+- `POST /connect`   — Authorizes MT5 account with login, password, and server
+- `GET  /account`   — Returns balance, equity, margin, free margin, and leverage
+- `POST /order`     — Dispatches live deal order with SL/TP
+- `GET  /positions` — Lists open positions with unrealized PnL
+- `POST /modify`    — Updates server-side SL and TP
+- `POST /close`     — Closes open positions
+

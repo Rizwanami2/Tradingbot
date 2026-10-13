@@ -41,6 +41,8 @@ try:
 except ImportError:
     native_mt5 = None
 
+HAS_MT5: bool = native_mt5 is not None
+
 
 @dataclass
 class MT5AccountInfo:
@@ -56,6 +58,10 @@ class MT5AccountInfo:
     leverage: float
     currency: str = "USD"
     company: str = "MetaQuotes"
+
+    @property
+    def margin_level(self) -> float:
+        return self.margin_level_pct
 
     def summary(self) -> str:
         icon = "🟢" if self.trade_mode == "live" else "⚪"
@@ -119,6 +125,26 @@ def resolve_mt5_symbol(symbol: str, available_symbols: Optional[List[str]] = Non
     return normalized
 
 
+def _gateway_request(
+    method: str,
+    url: str,
+    json_data: Optional[Dict[str, Any]] = None,
+    timeout: float = 8.0,
+) -> Dict[str, Any]:
+    """Execute HTTP request to MT5 REST Gateway with error handling."""
+    import requests
+    try:
+        resp = requests.request(method=method, url=url, json=json_data, timeout=timeout)
+        if resp.status_code >= 400:
+            raise ExecutionError(f"MT5 Gateway HTTP {resp.status_code}: {resp.text}")
+        data = resp.json()
+        if isinstance(data, dict) and data.get("ok") is False:
+            raise ExecutionError(f"MT5 Gateway error: {data.get('error', 'Unknown error')}")
+        return data if isinstance(data, dict) else {"data": data}
+    except requests.RequestException as exc:
+        raise ConnectionError(f"MT5 Gateway unreachable at {url}: {exc}") from exc
+
+
 class MT5Broker(Broker):
     """
     MetaTrader 5 broker adapter supporting both Paper / Demo and Live accounts.
@@ -148,6 +174,8 @@ class MT5Broker(Broker):
         # Balance & Account state
         self._initial_balance = max(1.0, float(initial_balance or 1000.0))
         self.balance = self._initial_balance
+        self._cached_equity: Optional[float] = None
+        self._cached_margin: Optional[float] = None
         self.leverage = 20.0
         self.currency = "USD"
         self.company = "MetaQuotes Software Corp."
@@ -169,26 +197,32 @@ class MT5Broker(Broker):
 
     @property
     def equity(self) -> float:
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            try:
-                acc = native_mt5.account_info()
-                if acc:
-                    return float(acc.equity)
-            except Exception:
-                pass
+        if self.mode == "live":
+            if native_mt5 is not None and self._connected:
+                try:
+                    acc = native_mt5.account_info()
+                    if acc:
+                        return float(acc.equity)
+                except Exception:
+                    pass
+            elif self.gateway_url and self._connected and self._cached_equity is not None:
+                return self._cached_equity
         # Paper calculation: balance + sum of unrealized PnL
         unrealized = sum(p.unrealized_pnl for p in self._sim_positions.values())
         return round(self.balance + unrealized, 2)
 
     @property
     def margin(self) -> float:
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            try:
-                acc = native_mt5.account_info()
-                if acc:
-                    return float(acc.margin)
-            except Exception:
-                pass
+        if self.mode == "live":
+            if native_mt5 is not None and self._connected:
+                try:
+                    acc = native_mt5.account_info()
+                    if acc:
+                        return float(acc.margin)
+                except Exception:
+                    pass
+            elif self.gateway_url and self._connected and self._cached_margin is not None:
+                return self._cached_margin
         # Rough margin estimation
         total_margin = sum((p.entry_price * p.qty) / self.leverage for p in self._sim_positions.values())
         return round(total_margin, 2)
@@ -240,13 +274,42 @@ class MT5Broker(Broker):
             else:
                 # If native MetaTrader5 package is unavailable on headless Linux
                 if self.gateway_url:
-                    # REST Gateway integration
-                    self._connected = True
-                    logger.info("[MT5Broker] Connected to MT5 REST Gateway at %s", self.gateway_url)
-                    return True
+                    try:
+                        url = f"{self.gateway_url.rstrip('/')}/connect"
+                        res = _gateway_request("POST", url, {
+                            "login": self.login,
+                            "password": self.password,
+                            "server": self.server,
+                            "path": self.path,
+                            "magic": self.magic,
+                        })
+                        self._connected = True
+                        if "balance" in res:
+                            self.balance = float(res["balance"])
+                        if "equity" in res:
+                            self._cached_equity = float(res["equity"])
+                        if "margin" in res:
+                            self._cached_margin = float(res["margin"])
+                        if "leverage" in res:
+                            self.leverage = float(res["leverage"])
+                        if "currency" in res:
+                            self.currency = str(res["currency"])
+                        if "company" in res:
+                            self.company = str(res["company"])
+                        logger.info("[MT5Broker] Connected to MT5 REST Gateway at %s for account #%s on %s",
+                                    self.gateway_url, self.login, self.server)
+                        return True
+                    except Exception as gw_err:
+                        self._connected = False
+                        self._last_error = f"MT5 Gateway connection failed: {gw_err}"
+                        logger.error("[MT5Broker] %s", self._last_error)
+                        raise BrokerConfigurationError(self._last_error) from gw_err
                 else:
                     self._connected = False
-                    self._last_error = "Native MetaTrader5 package not available in this environment and no MT5_GATEWAY_URL configured."
+                    self._last_error = (
+                        "Native MetaTrader5 library is only available on Windows (MetaQuotes desktop requirement). "
+                        "To trade live from Linux/Cloud, configure MT5_GATEWAY_URL in .env or run mt5_gateway_server.py on Windows."
+                    )
                     logger.error("[MT5Broker] %s", self._last_error)
                     raise BrokerConfigurationError(self._last_error)
 
@@ -374,47 +437,82 @@ class MT5Broker(Broker):
         resolved_sym = resolve_mt5_symbol(symbol)
         fill_price = float(price) if price is not None and price > 0 else 100.0
 
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            # LIVE MT5 ORDER DISPATCH
-            order_type_mt5 = native_mt5.ORDER_TYPE_BUY if side_norm == "buy" else native_mt5.ORDER_TYPE_SELL
-            req = {
-                "action": native_mt5.TRADE_ACTION_DEAL,
-                "symbol": resolved_sym,
-                "volume": float(qty),
-                "type": order_type_mt5,
-                "price": fill_price,
-                "sl": float(stop_loss) if stop_loss else 0.0,
-                "tp": float(take_profit) if take_profit else 0.0,
-                "deviation": 20,
-                "magic": self.magic,
-                "comment": "TradingBot MT5",
-                "type_time": native_mt5.ORDER_TIME_GTC,
-                "type_filling": native_mt5.ORDER_FILLING_IOC,
-            }
-            if params:
-                req.update(params)
+        if self.mode == "live" and self._connected:
+            if native_mt5 is not None:
+                # LIVE MT5 ORDER DISPATCH (Native Windows)
+                order_type_mt5 = native_mt5.ORDER_TYPE_BUY if side_norm == "buy" else native_mt5.ORDER_TYPE_SELL
+                req = {
+                    "action": native_mt5.TRADE_ACTION_DEAL,
+                    "symbol": resolved_sym,
+                    "volume": float(qty),
+                    "type": order_type_mt5,
+                    "price": fill_price,
+                    "sl": float(stop_loss) if stop_loss else 0.0,
+                    "tp": float(take_profit) if take_profit else 0.0,
+                    "deviation": 20,
+                    "magic": self.magic,
+                    "comment": "TradingBot MT5",
+                    "type_time": native_mt5.ORDER_TIME_GTC,
+                    "type_filling": native_mt5.ORDER_FILLING_IOC,
+                }
+                if params:
+                    req.update(params)
 
-            res = native_mt5.order_send(req)
-            if res is None or res.retcode != native_mt5.TRADE_RETCODE_DONE:
-                ret = getattr(res, "retcode", "None")
-                comment = getattr(res, "comment", native_mt5.last_error())
-                raise ExecutionError(f"MT5 order_send failed: retcode={ret} comment={comment}")
+                res = native_mt5.order_send(req)
+                if res is None or res.retcode != native_mt5.TRADE_RETCODE_DONE:
+                    ret = getattr(res, "retcode", "None")
+                    comment = getattr(res, "comment", native_mt5.last_error())
+                    raise ExecutionError(f"MT5 order_send failed: retcode={ret} comment={comment}")
 
-            ticket_id = str(res.order)
-            order = Order(
-                id=ticket_id,
-                symbol=resolved_sym,
-                side=side_norm,
-                order_type=order_type,
-                qty=qty,
-                price=fill_price,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-                status="filled",
-                filled_price=float(res.price or fill_price),
-                filled_qty=float(res.volume or qty),
-            )
-            return order
+                ticket_id = str(res.order)
+                order = Order(
+                    id=ticket_id,
+                    symbol=resolved_sym,
+                    side=side_norm,
+                    order_type=order_type,
+                    qty=qty,
+                    price=fill_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    status="filled",
+                    filled_price=float(res.price or fill_price),
+                    filled_qty=float(res.volume or qty),
+                )
+                return order
+
+            elif self.gateway_url:
+                # LIVE MT5 ORDER DISPATCH (REST Gateway Bridge)
+                url = f"{self.gateway_url.rstrip('/')}/order"
+                req = {
+                    "symbol": resolved_sym,
+                    "side": side_norm,
+                    "qty": float(qty),
+                    "order_type": order_type,
+                    "price": fill_price,
+                    "stop_loss": float(stop_loss) if stop_loss else 0.0,
+                    "take_profit": float(take_profit) if take_profit else 0.0,
+                    "magic": self.magic,
+                    "comment": "TradingBot MT5",
+                }
+                if params:
+                    req.update(params)
+                res = _gateway_request("POST", url, req)
+                ticket_id = str(res.get("ticket") or res.get("order") or int(time.time()))
+                filled_price = float(res.get("price") or fill_price)
+                filled_qty = float(res.get("volume") or res.get("qty") or qty)
+                return Order(
+                    id=ticket_id,
+                    symbol=resolved_sym,
+                    side=side_norm,
+                    order_type=order_type,
+                    qty=qty,
+                    price=fill_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    status="filled",
+                    filled_price=filled_price,
+                    filled_qty=filled_qty,
+                )
 
         # PAPER / DEMO SIMULATION
         self._ticket_counter += 1
@@ -458,27 +556,49 @@ class MT5Broker(Broker):
 
     def get_positions(self) -> List[Position]:
         """Fetch active open positions from MT5."""
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            try:
-                raw_positions = native_mt5.positions_get()
-                if raw_positions is None:
-                    return []
-                out = []
-                for p in raw_positions:
-                    side = "buy" if p.type == native_mt5.ORDER_TYPE_BUY else "sell"
-                    out.append(Position(
-                        symbol=str(p.symbol),
-                        side=side,
-                        qty=float(p.volume),
-                        entry_price=float(p.price_open),
-                        stop_loss=float(p.sl) if p.sl else None,
-                        take_profit=float(p.tp) if p.tp else None,
-                        unrealized_pnl=float(p.profit),
-                    ))
-                return out
-            except Exception as e:
-                logger.error("[MT5Broker] get_positions error: %s", e)
-                raise ExecutionError(f"MT5 get_positions error: {e}") from e
+        if self.mode == "live" and self._connected:
+            if native_mt5 is not None:
+                try:
+                    raw_positions = native_mt5.positions_get()
+                    if raw_positions is None:
+                        return []
+                    out = []
+                    for p in raw_positions:
+                        side = "buy" if p.type == native_mt5.ORDER_TYPE_BUY else "sell"
+                        out.append(Position(
+                            symbol=str(p.symbol),
+                            side=side,
+                            qty=float(p.volume),
+                            entry_price=float(p.price_open),
+                            stop_loss=float(p.sl) if p.sl else None,
+                            take_profit=float(p.tp) if p.tp else None,
+                            unrealized_pnl=float(p.profit),
+                        ))
+                    return out
+                except Exception as e:
+                    logger.error("[MT5Broker] get_positions error: %s", e)
+                    raise ExecutionError(f"MT5 get_positions error: {e}") from e
+            elif self.gateway_url:
+                try:
+                    url = f"{self.gateway_url.rstrip('/')}/positions"
+                    res = _gateway_request("GET", url)
+                    raw_positions = res.get("positions", [])
+                    out = []
+                    for p in raw_positions:
+                        side = "buy" if str(p.get("type", "buy")).lower() in ("buy", "0") else "sell"
+                        out.append(Position(
+                            symbol=str(p.get("symbol", "")),
+                            side=side,
+                            qty=float(p.get("volume", p.get("qty", 0.0))),
+                            entry_price=float(p.get("price_open", p.get("entry_price", 0.0))),
+                            stop_loss=float(p.get("sl", 0.0)) if p.get("sl") else None,
+                            take_profit=float(p.get("tp", 0.0)) if p.get("tp") else None,
+                            unrealized_pnl=float(p.get("profit", p.get("unrealized_pnl", 0.0))),
+                        ))
+                    return out
+                except Exception as e:
+                    logger.error("[MT5Broker] Gateway get_positions error: %s", e)
+                    raise ExecutionError(f"MT5 Gateway get_positions error: {e}") from e
 
         return list(self._sim_positions.values())
 
@@ -492,30 +612,43 @@ class MT5Broker(Broker):
         """Close an open position on MT5 (full or partial)."""
         resolved_sym = resolve_mt5_symbol(symbol)
 
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            positions = native_mt5.positions_get(symbol=resolved_sym)
-            if not positions:
-                return False
-            pos = positions[0]
-            close_side = native_mt5.ORDER_TYPE_SELL if pos.type == native_mt5.ORDER_TYPE_BUY else native_mt5.ORDER_TYPE_BUY
-            close_qty = float(qty) if qty and qty > 0 else float(pos.volume)
-            close_price = float(price) if price and price > 0 else float(pos.price_current)
+        if self.mode == "live" and self._connected:
+            if native_mt5 is not None:
+                positions = native_mt5.positions_get(symbol=resolved_sym)
+                if not positions:
+                    return False
+                pos = positions[0]
+                close_side = native_mt5.ORDER_TYPE_SELL if pos.type == native_mt5.ORDER_TYPE_BUY else native_mt5.ORDER_TYPE_BUY
+                close_qty = float(qty) if qty and qty > 0 else float(pos.volume)
+                close_price = float(price) if price and price > 0 else float(pos.price_current)
 
-            req = {
-                "action": native_mt5.TRADE_ACTION_DEAL,
-                "position": pos.ticket,
-                "symbol": resolved_sym,
-                "volume": close_qty,
-                "type": close_side,
-                "price": close_price,
-                "deviation": 20,
-                "magic": self.magic,
-                "comment": "Close TradingBot MT5",
-                "type_time": native_mt5.ORDER_TIME_GTC,
-                "type_filling": native_mt5.ORDER_FILLING_IOC,
-            }
-            res = native_mt5.order_send(req)
-            return bool(res and res.retcode == native_mt5.TRADE_RETCODE_DONE)
+                req = {
+                    "action": native_mt5.TRADE_ACTION_DEAL,
+                    "position": pos.ticket,
+                    "symbol": resolved_sym,
+                    "volume": close_qty,
+                    "type": close_side,
+                    "price": close_price,
+                    "deviation": 20,
+                    "magic": self.magic,
+                    "comment": "Close TradingBot MT5",
+                    "type_time": native_mt5.ORDER_TIME_GTC,
+                    "type_filling": native_mt5.ORDER_FILLING_IOC,
+                }
+                res = native_mt5.order_send(req)
+                return bool(res and res.retcode == native_mt5.TRADE_RETCODE_DONE)
+            elif self.gateway_url:
+                url = f"{self.gateway_url.rstrip('/')}/close"
+                req = {
+                    "symbol": resolved_sym,
+                    "qty": float(qty) if qty and qty > 0 else None,
+                    "price": float(price) if price and price > 0 else None,
+                    "magic": self.magic,
+                }
+                if params:
+                    req.update(params)
+                res = _gateway_request("POST", url, req)
+                return bool(res.get("closed", res.get("ok", False)))
 
         # PAPER SIMULATION CLOSE
         pos_key = None
@@ -550,20 +683,31 @@ class MT5Broker(Broker):
     def modify_position(self, symbol: str, stop_loss: Optional[float] = None, take_profit: Optional[float] = None) -> bool:
         """Modify SL and TP of an open MT5 position (e.g. for dynamic trailing stop)."""
         resolved_sym = resolve_mt5_symbol(symbol)
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            positions = native_mt5.positions_get(symbol=resolved_sym)
-            if not positions:
-                return False
-            pos = positions[0]
-            req = {
-                "action": native_mt5.TRADE_ACTION_SLTP,
-                "position": pos.ticket,
-                "symbol": resolved_sym,
-                "sl": float(stop_loss) if stop_loss else float(pos.sl or 0.0),
-                "tp": float(take_profit) if take_profit else float(pos.tp or 0.0),
-            }
-            res = native_mt5.order_send(req)
-            return bool(res and res.retcode == native_mt5.TRADE_RETCODE_DONE)
+        if self.mode == "live" and self._connected:
+            if native_mt5 is not None:
+                positions = native_mt5.positions_get(symbol=resolved_sym)
+                if not positions:
+                    return False
+                pos = positions[0]
+                req = {
+                    "action": native_mt5.TRADE_ACTION_SLTP,
+                    "position": pos.ticket,
+                    "symbol": resolved_sym,
+                    "sl": float(stop_loss) if stop_loss else float(pos.sl or 0.0),
+                    "tp": float(take_profit) if take_profit else float(pos.tp or 0.0),
+                }
+                res = native_mt5.order_send(req)
+                return bool(res and res.retcode == native_mt5.TRADE_RETCODE_DONE)
+            elif self.gateway_url:
+                url = f"{self.gateway_url.rstrip('/')}/modify"
+                req = {
+                    "symbol": resolved_sym,
+                    "stop_loss": float(stop_loss) if stop_loss else None,
+                    "take_profit": float(take_profit) if take_profit else None,
+                    "magic": self.magic,
+                }
+                res = _gateway_request("POST", url, req)
+                return bool(res.get("modified", res.get("ok", False)))
 
         # Paper update
         for key in (resolved_sym, symbol.upper()):
@@ -595,29 +739,57 @@ class MT5Broker(Broker):
 
     def get_account_info(self) -> MT5AccountInfo:
         """Return standardized MT5 account telemetry."""
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            try:
-                acc = native_mt5.account_info()
-                if acc:
-                    margin = float(acc.margin or 0.0)
-                    equity = float(acc.equity or 0.0)
+        if self.mode == "live" and self._connected:
+            if native_mt5 is not None:
+                try:
+                    acc = native_mt5.account_info()
+                    if acc:
+                        margin = float(acc.margin or 0.0)
+                        equity = float(acc.equity or 0.0)
+                        lvl = (equity / margin * 100.0) if margin > 0 else 0.0
+                        return MT5AccountInfo(
+                            login=int(acc.login),
+                            server=str(acc.server),
+                            trade_mode="live",
+                            connected=True,
+                            balance=float(acc.balance),
+                            equity=equity,
+                            margin=margin,
+                            free_margin=float(acc.margin_free or 0.0),
+                            margin_level_pct=lvl,
+                            leverage=float(acc.leverage or 20.0),
+                            currency=str(acc.currency or "USD"),
+                            company=str(acc.company or "MetaQuotes"),
+                        )
+                except Exception as e:
+                    logger.error("[MT5Broker] Failed to fetch account_info: %s", e)
+            elif self.gateway_url:
+                try:
+                    url = f"{self.gateway_url.rstrip('/')}/account"
+                    res = _gateway_request("GET", url)
+                    margin = float(res.get("margin", 0.0) or 0.0)
+                    equity = float(res.get("equity", self.balance) or self.balance)
+                    self.balance = float(res.get("balance", self.balance))
+                    self._cached_equity = equity
+                    self._cached_margin = margin
                     lvl = (equity / margin * 100.0) if margin > 0 else 0.0
+                    lvl_pct = float(res.get("margin_level_pct") or res.get("margin_level") or lvl)
                     return MT5AccountInfo(
-                        login=int(acc.login),
-                        server=str(acc.server),
+                        login=int(res.get("login", self.login)),
+                        server=str(res.get("server", self.server)),
                         trade_mode="live",
                         connected=True,
-                        balance=float(acc.balance),
+                        balance=self.balance,
                         equity=equity,
                         margin=margin,
-                        free_margin=float(acc.margin_free or 0.0),
-                        margin_level_pct=lvl,
-                        leverage=float(acc.leverage or 20.0),
-                        currency=str(acc.currency or "USD"),
-                        company=str(acc.company or "MetaQuotes"),
+                        free_margin=float(res.get("free_margin", equity - margin) or 0.0),
+                        margin_level_pct=lvl_pct,
+                        leverage=float(res.get("leverage", self.leverage) or self.leverage),
+                        currency=str(res.get("currency", self.currency)),
+                        company=str(res.get("company", self.company)),
                     )
-            except Exception as e:
-                logger.error("[MT5Broker] Failed to fetch account_info: %s", e)
+                except Exception as e:
+                    logger.error("[MT5Broker] Gateway get_account_info error: %s", e)
 
         # Paper / Simulated account telemetry
         eq = self.equity
