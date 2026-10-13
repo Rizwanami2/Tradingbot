@@ -95,6 +95,18 @@ NEWS_WINDOW_MIN = _safe_int(os.getenv("BOT_NEWS_WINDOW"), 30)
 DELTA_API = os.getenv("DELTA_API", "https://api.india.delta.exchange/v2/tickers")
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
+EXCHANGE_PASSWORD = os.getenv("EXCHANGE_PASSWORD", "")
+EXCHANGE_TESTNET = os.getenv("EXCHANGE_TESTNET", "false").lower() in ("true", "1", "yes", "on")
+
+# Native OANDA v20 REST Forex & Metals Settings
+OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID", "")
+OANDA_API_TOKEN = os.getenv("OANDA_API_TOKEN", "")
+OANDA_ENVIRONMENT = os.getenv("OANDA_ENVIRONMENT", "practice").lower()
+
+# Native Alpaca REST US Stocks & Crypto Settings
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
+ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
+ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes", "on")
 
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 5)
 _AUTOTRADE_SYMBOLS_RAW = os.getenv(

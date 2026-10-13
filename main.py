@@ -260,14 +260,15 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL"
         )
-    elif cat in ("mt5", "broker"):
+    elif cat in ("mt5", "broker", "brokers", "oanda", "ccxt", "alpaca"):
         text = (
-            "🏦 **MetaTrader 5 & Broker Accounts:**\n"
-            "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
-            "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
-            "• `/mt5 live [login] [pass] [server] [gateway_url]` — Connect live MT5 account (fail-closed safe)\n"
-            "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
-            "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine"
+            "🏦 **MetaTrader 5 & Broker Accounts (Native Linux & Cloud):**\n"
+            "• `/broker` — View active broker environment & telemetry\n"
+            "• `/broker [paper|ccxt|oanda|alpaca|mt5|mt5_live]` — Switch execution broker\n"
+            "• `/oanda [status|live|positions]` — Native OANDA v20 Forex & Metals REST (Linux-Ready)\n"
+            "• `/ccxt [status|live|positions]` — Native CCXT Crypto Exchanges (100+ exchanges)\n"
+            "• `/alpaca [status|live|positions]` — Native Alpaca US Stocks & Crypto REST\n"
+            "• `/mt5 [status|paper|live|positions]` — MetaTrader 5 Simulation or Windows Bridge"
         )
     elif cat in ("risk", "safety", "limits"):
         text = (
@@ -317,12 +318,13 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL\n\n"
-            "🏦 **MetaTrader 5 & Broker Accounts:**\n"
-            "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
-            "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
-            "• `/mt5 live [login] [pass] [server] [gateway_url]` — Connect live MT5 account (fail-closed safe)\n"
-            "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
-            "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine\n\n"
+            "🏦 **Native Live Brokers & Broker Accounts:**\n"
+            "• `/broker` — View active broker environment & telemetry\n"
+            "• `/broker [paper|ccxt|oanda|alpaca|mt5|mt5_live]` — Switch execution broker\n"
+            "• `/oanda [status|live|positions]` — Native OANDA v20 Forex & Metals REST\n"
+            "• `/ccxt [status|live|positions]` — Native CCXT Crypto Exchanges (100+ exchanges)\n"
+            "• `/alpaca [status|live|positions]` — Native Alpaca US Stocks & Crypto REST\n"
+            "• `/mt5 [status|paper|live|positions]` — MetaTrader 5 Simulation or Windows Bridge\n\n"
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
@@ -884,23 +886,77 @@ async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not args:
         bname = type(engine.broker).__name__ if engine.broker else "None"
         bmode = getattr(config, "BROKER_MODE", "paper").upper()
+        summary = ""
+        if hasattr(engine.broker, "get_account_info"):
+            try:
+                summary = f"\n\n{engine.broker.get_account_info().summary()}"
+            except Exception:
+                pass
         await update.message.reply_text(
-            f"🏦 **Active Execution Broker**\n"
+            f"🏦 **Active Execution Broker Environment**\n"
             f"• **Class:** `{bname}`\n"
-            f"• **Mode:** `{bmode}`\n\n"
-            f"Switch broker: `/broker paper` | `/broker mt5` | `/broker mt5_live`",
+            f"• **Mode:** `{bmode}`{summary}\n\n"
+            f"🌐 **Native Linux Broker Environments (No Windows/Desktop Required):**\n"
+            f"• `/oanda` — Institutional Forex, Gold (XAU/USD) & Metals via REST v20\n"
+            f"• `/ccxt` — 100+ Crypto Exchanges (Binance, Bybit, OKX, Bitget, etc.)\n"
+            f"• `/alpaca` — US Equities, ETFs, Options & Crypto via REST API\n"
+            f"• `/broker paper` — Zero-risk local deterministic simulation\n\n"
+            f"🖥️ **MetaTrader 5 Bridge:**\n"
+            f"• `/mt5 paper` (Simulation) | `/mt5 live ...` (Windows terminal / Gateway)",
             parse_mode="Markdown",
         )
         return
 
     mode = args[0].lower()
+    exchange_id = getattr(config, "DEFAULT_EXCHANGE", "binance")
+    api_key = getattr(config, "EXCHANGE_API_KEY", "")
+    api_secret = getattr(config, "EXCHANGE_API_SECRET", "")
+    api_password = getattr(config, "EXCHANGE_PASSWORD", "")
+    is_testnet = getattr(config, "EXCHANGE_TESTNET", False)
+    oanda_account_id = getattr(config, "OANDA_ACCOUNT_ID", "")
+    oanda_api_token = getattr(config, "OANDA_API_TOKEN", "")
+    oanda_env = getattr(config, "OANDA_ENVIRONMENT", "practice")
+    alpaca_api_key = getattr(config, "ALPACA_API_KEY", "")
+    alpaca_api_secret = getattr(config, "ALPACA_API_SECRET", "")
+    alpaca_paper = getattr(config, "ALPACA_PAPER", True)
+
+    if mode in ("ccxt", "live", "ccxt_live"):
+        if len(args) > 1:
+            exchange_id = args[1].lower()
+        if len(args) > 2:
+            api_key = args[2]
+        if len(args) > 3:
+            api_secret = args[3]
+        if len(args) > 4:
+            api_password = args[4]
+    elif mode in ("oanda", "oanda_practice", "oanda_live"):
+        if len(args) > 1:
+            oanda_account_id = args[1]
+        if len(args) > 2:
+            oanda_api_token = args[2]
+        if len(args) > 3:
+            oanda_env = args[3].lower()
+        elif mode == "oanda_live":
+            oanda_env = "live"
+    elif mode in ("alpaca", "alpaca_paper", "alpaca_live"):
+        if len(args) > 1:
+            alpaca_api_key = args[1]
+        if len(args) > 2:
+            alpaca_api_secret = args[2]
+        if len(args) > 3:
+            alpaca_paper = args[3].lower() in ("paper", "demo", "true")
+        elif mode == "alpaca_live":
+            alpaca_paper = False
+
     try:
         from execution import create_broker
         new_b = create_broker(
             broker_mode=mode,
-            exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),
-            api_key=getattr(config, "EXCHANGE_API_KEY", ""),
-            api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),
+            exchange_id=exchange_id,
+            api_key=api_key,
+            api_secret=api_secret,
+            api_password=api_password,
+            is_testnet=is_testnet,
             initial_balance=risk_mgr.state.equity,
             mt5_login=getattr(config, "MT5_LOGIN", 0),
             mt5_password=getattr(config, "MT5_PASSWORD", ""),
@@ -908,17 +964,281 @@ async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             mt5_path=getattr(config, "MT5_PATH", ""),
             mt5_magic=getattr(config, "MT5_MAGIC", 112233),
             mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+            oanda_account_id=oanda_account_id,
+            oanda_api_token=oanda_api_token,
+            oanda_env=oanda_env,
+            alpaca_api_key=alpaca_api_key,
+            alpaca_api_secret=alpaca_api_secret,
+            alpaca_paper=alpaca_paper,
         )
         engine.broker = new_b
         config.BROKER_MODE = mode
         await update.message.reply_text(
             f"✅ **Broker Switched to `{mode.upper()}`**\n"
-            f"Active broker instance: `{type(new_b).__name__}`",
+            f"• **Instance:** `{type(new_b).__name__}`\n"
+            f"• **Status:** Active & Ready for live order execution",
             parse_mode="Markdown",
         )
     except Exception as exc:
         await update.message.reply_text(
             f"🚫 **Failed to Switch Broker (Fail-Closed):**\n`{exc}`",
+            parse_mode="Markdown",
+        )
+
+
+async def oanda_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    args = ctx.args or []
+    sub = args[0].lower() if args else "status"
+
+    if sub in ("status", "info"):
+        from oanda_broker import OANDABroker
+        if isinstance(engine.broker, OANDABroker):
+            info = engine.broker.get_account_info()
+            await update.message.reply_text(info.summary(), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                "🌐 **OANDA v20 REST Broker (Native Linux-Ready)**\n"
+                "• **Current Engine:** OANDA broker is currently inactive.\n"
+                "• **Connect Practice:** `/oanda live <ACCOUNT_ID> <API_TOKEN> practice`\n"
+                "• **Connect Live:** `/oanda live <ACCOUNT_ID> <API_TOKEN> live`\n\n"
+                "💡 _Free demo accounts with $100k balance and instant API tokens available at oanda.com._",
+                parse_mode="Markdown",
+            )
+    elif sub in ("live", "practice", "connect"):
+        acc_id = args[1] if len(args) > 1 else getattr(config, "OANDA_ACCOUNT_ID", "")
+        token = args[2] if len(args) > 2 else getattr(config, "OANDA_API_TOKEN", "")
+        env = args[3].lower() if len(args) > 3 else ("live" if sub == "live" else getattr(config, "OANDA_ENVIRONMENT", "practice"))
+
+        if not acc_id or not token:
+            await update.message.reply_text(
+                "❌ **OANDA Connection Failed (Missing Credentials)**\n\n"
+                "Usage: `/oanda live <ACCOUNT_ID> <API_TOKEN> [practice|live]`\n"
+                "Example: `/oanda live 101-001-12345678-001 abcdef123456 practice`\n\n"
+                "Or configure `OANDA_ACCOUNT_ID` and `OANDA_API_TOKEN` in `.env`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        try:
+            from oanda_broker import OANDABroker
+            new_b = OANDABroker(account_id=acc_id, api_token=token, environment=env)
+            engine.broker = new_b
+            config.BROKER_MODE = f"oanda_{env}"
+            info = new_b.get_account_info()
+            await update.message.reply_text(
+                f"🟢 **OANDA v20 Broker Connected Successfully**\n"
+                f"• **Account ID:** `{acc_id}`\n"
+                f"• **Environment:** `{env.upper()}`\n"
+                f"• **NAV / Equity:** `${info.equity:,.2f}` {info.currency}\n"
+                f"• **Free Margin:** `${info.margin_available:,.2f}`\n"
+                f"• **Status:** Live deal execution active with server-side SL/TP (Linux-Native).",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            logger.error("OANDA connect failed: %s", exc)
+            await update.message.reply_text(
+                f"🚫 **OANDA Connection Rejected (Fail-Closed)**\n"
+                f"Error: `{exc}`\n\n"
+                f"_Live mode aborted safely. Current broker remains unchanged._",
+                parse_mode="Markdown",
+            )
+    elif sub in ("positions", "pos"):
+        from oanda_broker import OANDABroker
+        if isinstance(engine.broker, OANDABroker):
+            pos = engine.broker.get_positions()
+            if not pos:
+                await update.message.reply_text("ℹ️ No active positions on OANDA broker.")
+                return
+            lines = [f"🌐 **OANDA Active Broker Positions ({len(pos)}):**"]
+            for p in pos:
+                icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                lines.append(
+                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.0f}` units @ `${p.entry_price:,.5f}` | "
+                    f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                )
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ Active broker is not OANDA.")
+    else:
+        await update.message.reply_text(
+            "🌐 **OANDA Commands:**\n"
+            "• `/oanda status` — Check OANDA account balance & NAV\n"
+            "• `/oanda live <ACCOUNT_ID> <API_TOKEN> [practice|live]` — Connect OANDA account\n"
+            "• `/oanda positions` — View open OANDA positions",
+            parse_mode="Markdown",
+        )
+
+
+async def alpaca_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    args = ctx.args or []
+    sub = args[0].lower() if args else "status"
+
+    if sub in ("status", "info"):
+        from alpaca_broker import AlpacaBroker
+        if isinstance(engine.broker, AlpacaBroker):
+            info = engine.broker.get_account_info()
+            await update.message.reply_text(info.summary(), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                "🦙 **Alpaca REST Broker (US Stocks, ETFs, Crypto)**\n"
+                "• **Current Engine:** Alpaca broker is currently inactive.\n"
+                "• **Connect Paper:** `/alpaca live <KEY> <SECRET> paper`\n"
+                "• **Connect Live:** `/alpaca live <KEY> <SECRET> live`\n\n"
+                "💡 _Free paper trading keys available at alpaca.markets._",
+                parse_mode="Markdown",
+            )
+    elif sub in ("live", "paper", "connect"):
+        key = args[1] if len(args) > 1 else getattr(config, "ALPACA_API_KEY", "")
+        secret = args[2] if len(args) > 2 else getattr(config, "ALPACA_API_SECRET", "")
+        is_paper = False if (len(args) > 3 and args[3].lower() == "live") or sub == "live" else True
+
+        if not key or not secret:
+            await update.message.reply_text(
+                "❌ **Alpaca Connection Failed (Missing Credentials)**\n\n"
+                "Usage: `/alpaca live <KEY> <SECRET> [paper|live]`\n\n"
+                "Or configure `ALPACA_API_KEY` and `ALPACA_API_SECRET` in `.env`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        try:
+            from alpaca_broker import AlpacaBroker
+            new_b = AlpacaBroker(api_key=key, api_secret=secret, is_paper=is_paper)
+            engine.broker = new_b
+            config.BROKER_MODE = "alpaca_paper" if is_paper else "alpaca_live"
+            info = new_b.get_account_info()
+            await update.message.reply_text(
+                f"🟢 **Alpaca Broker Connected Successfully**\n"
+                f"• **Account #:** `{info.account_number}`\n"
+                f"• **Mode:** `{info.environment.upper()}`\n"
+                f"• **Portfolio Equity:** `${info.equity:,.2f}` {info.currency}\n"
+                f"• **Buying Power:** `${info.buying_power:,.2f}`\n"
+                f"• **Status:** Live execution active (Zero desktop dependencies).",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            logger.error("Alpaca connect failed: %s", exc)
+            await update.message.reply_text(
+                f"🚫 **Alpaca Connection Rejected (Fail-Closed)**\n"
+                f"Error: `{exc}`\n\n"
+                f"_Live mode aborted safely. Current broker remains unchanged._",
+                parse_mode="Markdown",
+            )
+    elif sub in ("positions", "pos"):
+        from alpaca_broker import AlpacaBroker
+        if isinstance(engine.broker, AlpacaBroker):
+            pos = engine.broker.get_positions()
+            if not pos:
+                await update.message.reply_text("ℹ️ No active positions on Alpaca broker.")
+                return
+            lines = [f"🦙 **Alpaca Active Broker Positions ({len(pos)}):**"]
+            for p in pos:
+                icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                lines.append(
+                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.2f}` @ `${p.entry_price:,.2f}` | "
+                    f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                )
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ Active broker is not Alpaca.")
+    else:
+        await update.message.reply_text(
+            "🦙 **Alpaca Commands:**\n"
+            "• `/alpaca status` — Check Alpaca account balance & portfolio value\n"
+            "• `/alpaca live <KEY> <SECRET> [paper|live]` — Connect Alpaca account\n"
+            "• `/alpaca positions` — View open Alpaca positions",
+            parse_mode="Markdown",
+        )
+
+
+async def ccxt_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    args = ctx.args or []
+    sub = args[0].lower() if args else "status"
+
+    if sub in ("status", "info"):
+        from execution import CCXTBroker
+        if isinstance(engine.broker, CCXTBroker):
+            info = engine.broker.get_account_info()
+            await update.message.reply_text(info.summary(), parse_mode="Markdown")
+        else:
+            ex = getattr(config, "DEFAULT_EXCHANGE", "binance")
+            await update.message.reply_text(
+                f"⚡ **CCXT Live Exchange Broker (Native Linux-Ready)**\n"
+                f"• **Current Engine:** CCXT broker is currently inactive.\n"
+                f"• **Connect Exchange:** `/ccxt live <exchange> <API_KEY> <SECRET> [PASSWORD]`\n"
+                f"• **Supported:** Binance, Bybit, OKX, Bitget, Kraken, Gate.io, KuCoin (100+ exchanges)\n"
+                f"• **Default Exchange:** `{ex}`",
+                parse_mode="Markdown",
+            )
+    elif sub in ("live", "connect"):
+        ex_id = args[1].lower() if len(args) > 1 else getattr(config, "DEFAULT_EXCHANGE", "binance")
+        key = args[2] if len(args) > 2 else getattr(config, "EXCHANGE_API_KEY", "")
+        secret = args[3] if len(args) > 3 else getattr(config, "EXCHANGE_API_SECRET", "")
+        password = args[4] if len(args) > 4 else getattr(config, "EXCHANGE_PASSWORD", "")
+        testnet = getattr(config, "EXCHANGE_TESTNET", False)
+
+        if not key or not secret:
+            await update.message.reply_text(
+                "❌ **CCXT Connection Failed (Missing Credentials)**\n\n"
+                "Usage: `/ccxt live <EXCHANGE> <API_KEY> <SECRET> [PASSWORD]`\n"
+                "Example: `/ccxt live bybit my_key my_secret`\n\n"
+                "Or configure `EXCHANGE_API_KEY` and `EXCHANGE_API_SECRET` in `.env`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        try:
+            from execution import CCXTBroker
+            new_b = CCXTBroker(
+                exchange_id=ex_id,
+                api_key=key,
+                api_secret=secret,
+                password=password,
+                is_testnet=testnet,
+            )
+            engine.broker = new_b
+            config.BROKER_MODE = "live"
+            config.DEFAULT_EXCHANGE = ex_id
+            info = new_b.get_account_info()
+            await update.message.reply_text(
+                f"🟢 **CCXT Live Broker Connected Successfully**\n"
+                f"• **Exchange:** `{ex_id.upper()}`\n"
+                f"• **Free Balance:** `${info.free_margin:,.2f}` {info.currency}\n"
+                f"• **Total Equity:** `${info.equity:,.2f}` {info.currency}\n"
+                f"• **Status:** Live spot/futures execution active (Zero desktop dependencies).",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            logger.error("CCXT connect failed: %s", exc)
+            await update.message.reply_text(
+                f"🚫 **CCXT Connection Rejected (Fail-Closed)**\n"
+                f"Error: `{exc}`\n\n"
+                f"_Live mode aborted safely. Current broker remains unchanged._",
+                parse_mode="Markdown",
+            )
+    elif sub in ("positions", "pos"):
+        from execution import CCXTBroker
+        if isinstance(engine.broker, CCXTBroker):
+            pos = engine.broker.get_positions()
+            if not pos:
+                await update.message.reply_text("ℹ️ No active positions on CCXT exchange.")
+                return
+            lines = [f"⚡ **CCXT Active Positions ({len(pos)}):**"]
+            for p in pos:
+                icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                lines.append(
+                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.4f}` @ `${p.entry_price:,.2f}` | "
+                    f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                )
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ Active broker is not CCXT.")
+    else:
+        await update.message.reply_text(
+            "⚡ **CCXT Commands:**\n"
+            "• `/ccxt status` — Check live exchange account balance & margin\n"
+            "• `/ccxt live <exchange> <key> <secret> [password]` — Connect live exchange\n"
+            "• `/ccxt positions` — View open exchange positions",
             parse_mode="Markdown",
         )
 
@@ -1295,6 +1615,101 @@ def run_cli_interactive():
             else:
                 bname = type(engine.broker).__name__ if engine.broker else "None"
                 print(f"Active broker: {bname} ({getattr(config, 'BROKER_MODE', 'paper')})")
+        elif name == "oanda":
+            sub = parts[1].lower() if len(parts) > 1 else "status"
+            if sub in ("status", "info"):
+                from oanda_broker import OANDABroker
+                if isinstance(engine.broker, OANDABroker):
+                    print(engine.broker.get_account_info().summary())
+                else:
+                    print(f"Active broker is {type(engine.broker).__name__}. Connect: oanda live <ACCOUNT_ID> <TOKEN> [practice|live]")
+            elif sub in ("live", "practice", "connect"):
+                acc_id = parts[2] if len(parts) > 2 else getattr(config, "OANDA_ACCOUNT_ID", "")
+                token = parts[3] if len(parts) > 3 else getattr(config, "OANDA_API_TOKEN", "")
+                env = parts[4].lower() if len(parts) > 4 else ("live" if sub == "live" else getattr(config, "OANDA_ENVIRONMENT", "practice"))
+                if not acc_id or not token:
+                    print("Usage: oanda live <ACCOUNT_ID> <API_TOKEN> [practice|live]")
+                else:
+                    try:
+                        from oanda_broker import OANDABroker
+                        new_b = OANDABroker(account_id=acc_id, api_token=token, environment=env)
+                        engine.broker = new_b
+                        config.BROKER_MODE = f"oanda_{env}"
+                        print(f"Connected to OANDA {env} account #{acc_id}")
+                    except Exception as exc:
+                        print(f"OANDA connection failed: {exc}")
+            elif sub in ("positions", "pos"):
+                from oanda_broker import OANDABroker
+                if isinstance(engine.broker, OANDABroker):
+                    print(engine.broker.get_positions())
+                else:
+                    print("Active broker is not OANDA.")
+            else:
+                print("Usage: oanda status | oanda live <ACCOUNT_ID> <TOKEN> [practice|live] | oanda positions")
+        elif name == "alpaca":
+            sub = parts[1].lower() if len(parts) > 1 else "status"
+            if sub in ("status", "info"):
+                from alpaca_broker import AlpacaBroker
+                if isinstance(engine.broker, AlpacaBroker):
+                    print(engine.broker.get_account_info().summary())
+                else:
+                    print(f"Active broker is {type(engine.broker).__name__}. Connect: alpaca live <KEY> <SECRET> [paper|live]")
+            elif sub in ("live", "paper", "connect"):
+                key = parts[2] if len(parts) > 2 else getattr(config, "ALPACA_API_KEY", "")
+                secret = parts[3] if len(parts) > 3 else getattr(config, "ALPACA_API_SECRET", "")
+                is_paper = False if (len(parts) > 4 and parts[4].lower() == "live") or sub == "live" else True
+                if not key or not secret:
+                    print("Usage: alpaca live <KEY> <SECRET> [paper|live]")
+                else:
+                    try:
+                        from alpaca_broker import AlpacaBroker
+                        new_b = AlpacaBroker(api_key=key, api_secret=secret, is_paper=is_paper)
+                        engine.broker = new_b
+                        config.BROKER_MODE = "alpaca_paper" if is_paper else "alpaca_live"
+                        print(f"Connected to Alpaca account #{new_b.account_number}")
+                    except Exception as exc:
+                        print(f"Alpaca connection failed: {exc}")
+            elif sub in ("positions", "pos"):
+                from alpaca_broker import AlpacaBroker
+                if isinstance(engine.broker, AlpacaBroker):
+                    print(engine.broker.get_positions())
+                else:
+                    print("Active broker is not Alpaca.")
+            else:
+                print("Usage: alpaca status | alpaca live <KEY> <SECRET> [paper|live] | alpaca positions")
+        elif name == "ccxt":
+            sub = parts[1].lower() if len(parts) > 1 else "status"
+            if sub in ("status", "info"):
+                from execution import CCXTBroker
+                if isinstance(engine.broker, CCXTBroker):
+                    print(engine.broker.get_account_info().summary())
+                else:
+                    print(f"Active broker is {type(engine.broker).__name__}. Connect: ccxt live <exchange> <KEY> <SECRET> [password]")
+            elif sub in ("live", "connect"):
+                ex_id = parts[2].lower() if len(parts) > 2 else getattr(config, "DEFAULT_EXCHANGE", "binance")
+                key = parts[3] if len(parts) > 3 else getattr(config, "EXCHANGE_API_KEY", "")
+                secret = parts[4] if len(parts) > 4 else getattr(config, "EXCHANGE_API_SECRET", "")
+                pwd = parts[5] if len(parts) > 5 else getattr(config, "EXCHANGE_PASSWORD", "")
+                if not key or not secret:
+                    print("Usage: ccxt live <exchange> <KEY> <SECRET> [password]")
+                else:
+                    try:
+                        from execution import CCXTBroker
+                        new_b = CCXTBroker(exchange_id=ex_id, api_key=key, api_secret=secret, password=pwd)
+                        engine.broker = new_b
+                        config.BROKER_MODE = "live"
+                        config.DEFAULT_EXCHANGE = ex_id
+                        print(f"Connected to CCXT exchange {ex_id}")
+                    except Exception as exc:
+                        print(f"CCXT connection failed: {exc}")
+            elif sub in ("positions", "pos"):
+                from execution import CCXTBroker
+                if isinstance(engine.broker, CCXTBroker):
+                    print(engine.broker.get_positions())
+                else:
+                    print("Active broker is not CCXT.")
+            else:
+                print("Usage: ccxt status | ccxt live <exchange> <KEY> <SECRET> [password] | ccxt positions")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
                 "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
@@ -1424,6 +1839,9 @@ def main():
                 BotCommand("news", "Macro calendar & economic sentiment"),
                 BotCommand("mt5", "MetaTrader 5 paper/live status & telemetry"),
                 BotCommand("broker", "View or switch active broker engine"),
+                BotCommand("oanda", "OANDA v20 Forex & Metals REST broker"),
+                BotCommand("ccxt", "CCXT Crypto live exchange broker"),
+                BotCommand("alpaca", "Alpaca US Stocks & Crypto REST broker"),
                 BotCommand("backtest", "Fast backtest engine on historical data"),
                 BotCommand("abacktest", "Advanced backtest suite (WF / MC / sweep)"),
                 BotCommand("performance", "Trade metrics, win rate & Sharpe ratio"),
@@ -1481,9 +1899,12 @@ def main():
     app.add_handler(CommandHandler("closed", closed_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
-    # MT5 & Broker
+    # MT5 & Native Execution Brokers
     app.add_handler(CommandHandler("mt5", mt5_command))
     app.add_handler(CommandHandler("broker", broker_command))
+    app.add_handler(CommandHandler("oanda", oanda_command))
+    app.add_handler(CommandHandler("alpaca", alpaca_command))
+    app.add_handler(CommandHandler("ccxt", ccxt_command))
 
     # Risk & Safety
     app.add_handler(CommandHandler("status", status_command))
