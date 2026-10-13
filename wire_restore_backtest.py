@@ -31,8 +31,30 @@ def main() -> None:
         print("[wire_restore_bt] done")
         return
     print("[wire_restore_bt] advanced_backtest broken — fetching known-good…")
+    # 1. Try local git repo first
     try:
-        with urllib.request.urlopen(GOOD_URL, timeout=30) as r:
+        import subprocess
+        res = subprocess.run(
+            ["git", "show", "b2f17eb:advanced_backtest.py"],
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        if res.returncode == 0 and not _is_bad(res.stdout):
+            adv.write_text(res.stdout)
+            print(f"[wire_restore_bt] restored {len(res.stdout)} bytes from local git (b2f17eb)")
+            print("[wire_restore_bt] done")
+            return
+    except Exception as ge:
+        print(f"[wire_restore_bt] local git show failed: {ge}")
+
+    # 2. Try remote URL with SSL fallback
+    try:
+        import ssl
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(GOOD_URL, timeout=30, context=ctx) as r:
             body = r.read().decode("utf-8", errors="ignore")
         if _is_bad(body):
             print("[wire_restore_bt] remote also bad")

@@ -28,9 +28,9 @@ class SMCSetup:
 
 def detect_equal_highs_lows(df: pd.DataFrame, lookback: int = 30, tol: float = 0.0008) -> List[SMCSetup]:
     out: List[SMCSetup] = []
-    if df is None or len(df) < lookback:
+    if df is None or len(df) < 2:
         return out
-    window = df.iloc[-lookback:]
+    window = df.iloc[-lookback:] if len(df) > lookback else df
     highs = window["high"].values
     lows = window["low"].values
     last_h = float(highs[-1])
