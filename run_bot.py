@@ -34,6 +34,7 @@ def main() -> None:
         "wire_signal_fix",
         "wire_railway_fix",
         "wire_positions_scalp",
+        "wire_history_2y",
     ):
         _safe_wire(name)
 
@@ -50,7 +51,6 @@ def main() -> None:
         if "application.add_handler" in t:
             t = t.replace("application.add_handler", "app.add_handler")
             fixed = True
-            print("[run_bot] fixed application->app NameError")
         if "engine = ExecutionEngine(risk_manager=risk_mgr)" in t and "broker=_broker" not in t:
             t = t.replace(
                 "engine = ExecutionEngine(risk_manager=risk_mgr)",
@@ -70,7 +70,6 @@ def main() -> None:
                 1,
             )
             fixed = True
-            print("[run_bot] paper broker wired")
         if fixed:
             main_py.write_text(t)
 
