@@ -11,10 +11,20 @@ Fetches ~730 daily bars (2 years) and derives long-term structure:
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+
+
+_DAILY_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
+_CACHE_TTL: float = 300.0  # 5 minutes TTL for daily candles
+
+
+def clear_history_cache() -> None:
+    """Clear in-memory cache for historical 2y daily candle data."""
+    _DAILY_CACHE.clear()
 
 
 def _safe(x, default: float = 0.0) -> float:
@@ -56,11 +66,20 @@ def fetch_daily_2y(symbol: str, limit: int = 730) -> pd.DataFrame:
     if sym in ("XAU", "GOLD", "XAUT", "XAUTUSD"):
         sym = "XAUUSD"
 
+    cache_key = f"{sym}_{limit}"
+    now = time.time()
+    if cache_key in _DAILY_CACHE:
+        ts, cached_df = _DAILY_CACHE[cache_key]
+        if (now - ts) < _CACHE_TTL and cached_df is not None and not getattr(cached_df, "empty", True):
+            return cached_df.copy()
+
     try:
         from realtime_prices import fetch_ohlcv
         df = fetch_ohlcv(sym, interval="1d", limit=min(limit, 1000))
         if df is not None and not getattr(df, "empty", True) and len(df) >= 60:
-            return df
+            df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            _DAILY_CACHE[cache_key] = (now, df)
+            return df.copy()
     except Exception:
         pass
 
@@ -68,7 +87,9 @@ def fetch_daily_2y(symbol: str, limit: int = 730) -> pd.DataFrame:
         from data_feed import DataFeed
         df = DataFeed(symbol=sym, source="ccxt").fetch(limit=min(limit, 1000), timeframe="1d")
         if df is not None and not getattr(df, "empty", True) and len(df) >= 60:
-            return df
+            df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            _DAILY_CACHE[cache_key] = (now, df)
+            return df.copy()
     except Exception:
         pass
 
@@ -84,9 +105,16 @@ def fetch_daily_2y(symbol: str, limit: int = 730) -> pd.DataFrame:
         hist = yf.Ticker(ysym).history(period="2y", interval="1d")
         if hist is not None and len(hist) >= 60:
             df = hist.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]].dropna()
-            return df.tail(limit)
+            df = df.tail(limit)
+            _DAILY_CACHE[cache_key] = (now, df)
+            return df.copy()
     except Exception:
         pass
+
+    if cache_key in _DAILY_CACHE:
+        _, stale_df = _DAILY_CACHE[cache_key]
+        if stale_df is not None and not getattr(stale_df, "empty", True):
+            return stale_df.copy()
 
     return pd.DataFrame()
 
@@ -101,6 +129,18 @@ def analyze_2y(symbol: str, df: Optional[pd.DataFrame] = None) -> History2Y:
             ema50=0.0, ema200=0.0, trend="RANGE",
             summary="Insufficient 2y history",
         )
+
+    if not all(col in df.columns for col in ["open", "high", "low", "close"]):
+        df = df.rename(columns={c: str(c).lower() for c in df.columns})
+
+    for req in ("close", "high", "low"):
+        if req not in df.columns:
+            return History2Y(
+                symbol=symbol, bars=0, years_span=0.0, mark=0.0,
+                high_2y=0.0, low_2y=0.0, high_52w=0.0, low_52w=0.0,
+                ema50=0.0, ema200=0.0, trend="RANGE",
+                summary="Missing OHLC columns in 2y history",
+            )
 
     c = df["close"].astype(float)
     h = df["high"].astype(float)

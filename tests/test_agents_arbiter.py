@@ -14,6 +14,7 @@ from multi_agent_trading_bot import (
     evaluate_symbol,
     Dir,
 )
+from gautam_jha_strategy import GautamJhaAgent, GJDir
 from risk_manager import RiskManager
 
 
@@ -57,6 +58,28 @@ class TestAgentsAndArbiter(unittest.TestCase):
         vote = agent.vote()
         self.assertEqual(vote.agent, "NEWS")
         self.assertEqual(vote.direction, Dir.FLAT)
+
+    def test_gautam_jha_agent(self):
+        agent = GautamJhaAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "GAUTAM-JHA")
+        self.assertIn(vote.direction, (GJDir.LONG, GJDir.SHORT, GJDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame, missing columns
+        import pandas as pd
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, GJDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, GJDir.FLAT)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
+        v_missing = agent.vote(pd.DataFrame({"foo": range(40)}))
+        self.assertEqual(v_missing.direction, GJDir.FLAT)
+        self.assertEqual(v_missing.reason, "Missing OHLC columns")
 
     def test_evaluate_symbol(self):
         res = evaluate_symbol("XAUUSD", source="demo")

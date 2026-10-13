@@ -321,6 +321,55 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertTrue(any(ev["event"] == "SCALP_CLOSE" for ev in events))
         self.assertNotIn("XAUUSD", self.engine.active_positions)
 
+    def test_max_open_trades_limit(self):
+        self.engine.max_open_trades = 2
+        self.assertEqual(self.engine.open_trade_count(), 0)
+        self.assertEqual(self.engine.slots_available(), 2)
+
+        sig1 = {
+            "symbol": "XAUUSD", "direction": "LONG", "entry": 2650.0, "stop": 2640.0,
+            "tp1": 2665.0, "tp2": 2675.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+            "margin_required": 53.0, "risk_amount": 20.0, "rr": 1.5,
+        }
+        sig2 = {
+            "symbol": "BTCUSDT", "direction": "LONG", "entry": 65000.0, "stop": 64000.0,
+            "tp1": 66500.0, "tp2": 67500.0, "lots": 0.01, "size": 0.01, "leverage": 20.0,
+            "margin_required": 32.5, "risk_amount": 10.0, "rr": 1.5,
+        }
+        sig3 = {
+            "symbol": "ETHUSDT", "direction": "LONG", "entry": 3500.0, "stop": 3400.0,
+            "tp1": 3650.0, "tp2": 3750.0, "lots": 0.1, "size": 0.1, "leverage": 20.0,
+            "margin_required": 17.5, "risk_amount": 10.0, "rr": 1.5,
+        }
+
+        self.engine.register_setup(sig1)
+        self.assertEqual(self.engine.open_trade_count(), 1)
+        self.assertEqual(self.engine.slots_available(), 1)
+
+        self.engine.register_setup(sig2)
+        self.assertEqual(self.engine.open_trade_count(), 2)
+        self.assertEqual(self.engine.slots_available(), 0)
+
+        # 3rd setup must be rejected
+        with self.assertRaises(RuntimeError) as ctx:
+            self.engine.register_setup(sig3)
+        self.assertIn("Max concurrent trades reached (2)", str(ctx.exception))
+
+        # Re-registering existing symbol does not violate limit
+        self.engine.register_setup(sig1)
+        self.assertEqual(self.engine.open_trade_count(), 2)
+
+        # Cancel one setup and verify a slot opens
+        self.engine.cancel_setup("BTCUSDT", reason="test slot freeing")
+        self.assertEqual(self.engine.open_trade_count(), 1)
+        self.assertEqual(self.engine.slots_available(), 1)
+
+        # Now 3rd setup can be registered
+        order3 = self.engine.register_setup(sig3)
+        self.assertEqual(order3.symbol, "ETHUSDT")
+        self.assertEqual(self.engine.open_trade_count(), 2)
+        self.assertEqual(self.engine.slots_available(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -167,6 +167,14 @@ class GautamJhaAgent:
         try:
             if df is None or getattr(df, "empty", True) or len(df) < 30:
                 return GJVote(self.name, GJDir.FLAT, 0.0, "Need more bars")
+            if not all(col in df.columns for col in ["open", "high", "low", "close"]):
+                df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            required_cols = {"open", "high", "low", "close"}
+            if not required_cols.issubset(set(df.columns)):
+                return GJVote(self.name, GJDir.FLAT, 0.0, "Missing OHLC columns")
+            if daily is not None and not getattr(daily, "empty", True):
+                if not all(col in daily.columns for col in ["open", "high", "low", "close"]):
+                    daily = daily.rename(columns={c: str(c).lower() for c in daily.columns})
             levels = _daily_levels(daily, df)
             trend, t_str, t_why = _trend_structure(df)
             for label, fn in (
