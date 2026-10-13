@@ -19,7 +19,8 @@ def apply():
     except ImportError:
         print("[wire_backtest_v2] backtest_signals_v2 not found")
         return
-    ab.ema_cross_signal = ema_cross_signal
+    ab.ema_cross_signal = trend_pullback_signal
+    ab.ema_cross_raw = ema_cross_signal
     ab.adaptive_signal = adaptive_signal
     ab.multiagent_proxy_signal = multiagent_proxy_signal
     ab.trend_pullback_signal = trend_pullback_signal
@@ -29,51 +30,33 @@ def apply():
     ab._adx = _adx
     ab._atr = _atr
     ab._rsi = _rsi
-    ab.SimConfig.risk_per_trade = 0.005
-    ab.SimConfig.tp_r = 2.8
+    ab.SimConfig.risk_per_trade = 0.01
+    ab.SimConfig.tp_r = 2.5
     ab.SimConfig.commission_pct = 0.00025
+    ab.SimConfig.min_bars = 60
 
     _orig_load = ab.load_data
-    def _load15(symbol, bars, source, csv, timeframe="15m"):
+    def _load_smart(symbol, bars=1000, source="ccxt", csv=None, timeframe="1d"):
         try:
-            return _orig_load(symbol, bars, source, csv, timeframe=timeframe)
+            from historical_2y import fetch_daily_2y
+            df = fetch_daily_2y(symbol, limit=max(bars, 500))
+            if df is not None and len(df) >= 120:
+                print(f"[wire] daily 2Y: {len(df)} bars")
+                return df.tail(bars) if bars < len(df) else df
+        except Exception:
+            pass
+        try:
+            return _orig_load(symbol, bars, source, csv)
         except TypeError:
             try:
                 from realtime_prices import fetch_ohlcv
-                for tf in (timeframe, "15m", "1h", "1m"):
+                for tf in ("1d", "1h", "15m"):
                     df = fetch_ohlcv(symbol, interval=tf, limit=min(bars, 1000))
                     if df is not None and not df.empty and len(df) >= 80:
-                        print(f"[wire] realtime_prices {tf}: {len(df)} bars")
+                        print(f"[wire] realtime {tf}: {len(df)} bars")
                         return df.tail(bars)
             except Exception as e:
                 print(f"[wire] realtime fallback: {e}")
             return _orig_load(symbol, bars, source, csv)
-    ab.load_data = _load15
-    print("[wire_backtest_v2] improved signals + defaults + 15m load active")
-
-
-def apply_growth():
-    """Wire growth signal + aggressive risk defaults for ~40% annual target profile."""
-    apply()
-    import advanced_backtest as ab
-    from backtest_signals_v2 import ema_growth_signal
-    ab.ema_growth_signal = ema_growth_signal
-    ab.SimConfig.risk_per_trade = 0.05
-    ab.SimConfig.tp_r = 2.8
-    ab.SimConfig.max_leverage = 15.0
-    print("[wire_backtest_v2] GROWTH profile active (5% risk, daily preferred)")
-
-
-def apply_target25():
-    """~25% annual target: same growth EMA, moderate 3.2% risk, daily bars."""
-    apply()
-    import advanced_backtest as ab
-    from backtest_signals_v2 import ema_growth_signal
-    ab.ema_growth_signal = ema_growth_signal
-    ab.SimConfig.risk_per_trade = 0.032
-    ab.SimConfig.tp_r = 2.8
-    ab.SimConfig.max_leverage = 12.0
-    print("[wire_backtest_v2] TARGET25 profile active (3.2% risk, daily preferred)")
-
-if __name__ == "__main__":
-    apply()
+    ab.load_data = _load_smart
+    print("[wire_backtest_v2] trend-pullback primary + daily load active")
