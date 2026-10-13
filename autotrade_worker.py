@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Multi-symbol autotrade monitoring worker (max concurrent trades)."""
+"""Multi-symbol autotrade monitoring worker — Gold + BTC only."""
 from __future__ import annotations
 
 import asyncio
@@ -24,31 +24,38 @@ async def live_monitoring_worker(
     monitoring_health: Dict[str, Any],
     now_iso: Callable[[], str],
 ):
-    """Poll watchlist symbols; open up to MAX_OPEN_TRADES concurrent setups/positions."""
+    """Poll Gold + BTC only; open up to MAX_OPEN_TRADES concurrent setups/positions."""
     try:
         from multi_agent_trading_bot import _norm_trade_symbol
     except Exception:
         def _norm_trade_symbol(s):
             s = str(s or "").upper()
-            if s in ("XAUTUSD", "XAUT", "GOLD", "XAU"):
+            if s in ("XAUTUSD", "XAUT", "GOLD", "XAU", "PAXGUSDT", "PAXG"):
                 return "XAUUSD"
             if s in ("BTC", "BTCUSD", "XBT"):
                 return "BTCUSDT"
-            if s in ("ETH", "ETHUSD"):
-                return "ETHUSDT"
             return s
 
-    raw_syms = list(getattr(config, "AUTOTRADE_SYMBOLS", None) or [getattr(config, "DEFAULT_SYMBOL", "XAUUSD")])
+    raw_syms = list(getattr(config, "AUTOTRADE_SYMBOLS", None) or ["BTCUSDT", "XAUUSD"])
+    _ALLOWED = {"BTCUSDT", "BTCUSD", "BTC", "XAUUSD", "XAUTUSD", "XAU", "GOLD", "XAUT", "PAXGUSDT"}
     watchlist: List[str] = []
     for s in raw_syms:
         try:
             n = _norm_trade_symbol(s)
         except Exception:
             n = str(s).upper()
-        if n and n not in watchlist:
+        if not n:
+            continue
+        if n not in _ALLOWED and not any(x in n for x in ("BTC", "XAU", "GOLD", "PAXG")):
+            continue
+        if "BTC" in n:
+            n = "BTCUSDT"
+        elif any(x in n for x in ("XAU", "GOLD", "PAXG", "XAUT")):
+            n = "XAUUSD"
+        if n not in watchlist:
             watchlist.append(n)
     if not watchlist:
-        watchlist = [_norm_trade_symbol(getattr(config, "DEFAULT_SYMBOL", "XAUUSD"))]
+        watchlist = ["BTCUSDT", "XAUUSD"]
 
     max_open = int(getattr(config, "MAX_OPEN_TRADES", 5) or 5)
     try:
@@ -57,7 +64,7 @@ async def live_monitoring_worker(
         pass
 
     feeds = {sym: MarketDataFeed(symbol=sym, source=config.DEFAULT_DATA_SOURCE) for sym in watchlist}
-    logger.info("Autotrade watchlist=%s max_open=%s", watchlist, max_open)
+    logger.info("Autotrade watchlist=%s max_open=%s (Gold+BTC only)", watchlist, max_open)
     write_runtime_status()
 
     while True:

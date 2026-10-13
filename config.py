@@ -83,15 +83,15 @@ EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
 
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 5)
+# Autotrade ONLY Gold + BTC
 _AUTOTRADE_SYMBOLS_RAW = os.getenv(
     "BOT_AUTOTRADE_SYMBOLS",
-    "BTCUSDT,ETHUSDT,XAUUSD,SOLUSDT,BNBUSDT",
+    "BTCUSDT,XAUUSD",
 )
 AUTOTRADE_SYMBOLS = [
     s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip()
-] or [DEFAULT_SYMBOL]
+] or ["BTCUSDT", "XAUUSD"]
 
-# Fast scalping: auto-close when unrealized profit hits USD or % move
 SCALP_TAKE_PROFIT_USD = _safe_float(os.getenv("BOT_SCALP_TP_USD"), 5.0)
 SCALP_TAKE_PROFIT_PCT = _safe_float(os.getenv("BOT_SCALP_TP_PCT"), 0.15)
 SCALP_ENABLED = os.getenv("BOT_SCALP", "true").lower() in ("true", "1", "yes", "on")

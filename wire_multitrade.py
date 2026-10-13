@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ensure max 5 concurrent autotrade slots + multi-symbol worker wiring."""
+"""Ensure max concurrent autotrade slots + Gold/BTC-only defaults."""
 from __future__ import annotations
 from pathlib import Path
 
@@ -14,12 +14,19 @@ def main() -> None:
             append = "\n".join([
                 "",
                 "MAX_OPEN_TRADES = _safe_int(os.getenv(\"BOT_MAX_OPEN_TRADES\"), 5)",
-                "_AUTOTRADE_SYMBOLS_RAW = os.getenv(\"BOT_AUTOTRADE_SYMBOLS\", \"BTCUSDT,ETHUSDT,XAUUSD,SOLUSDT,BNBUSDT\")",
-                "AUTOTRADE_SYMBOLS = [s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(\",\") if s.strip()] or [DEFAULT_SYMBOL]",
+                "_AUTOTRADE_SYMBOLS_RAW = os.getenv(\"BOT_AUTOTRADE_SYMBOLS\", \"BTCUSDT,XAUUSD\")",
+                "AUTOTRADE_SYMBOLS = [s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(\",\") if s.strip()] or [\"BTCUSDT\", \"XAUUSD\"]",
                 "",
             ])
             cfg.write_text(t + append)
             print("[wire_multitrade] config defaults added")
+        elif "ETHUSDT" in t or "SOLUSDT" in t or "BNBUSDT" in t:
+            t = t.replace("BTCUSDT,ETHUSDT,XAUUSD,SOLUSDT,BNBUSDT", "BTCUSDT,XAUUSD")
+            t = t.replace("BTCUSDT,ETHUSDT,XAUUSD", "BTCUSDT,XAUUSD")
+            cfg.write_text(t)
+            print("[wire_multitrade] symbols -> Gold+BTC only")
+        else:
+            print("[wire_multitrade] config OK")
 
     ee = ROOT / "execution_engine.py"
     if ee.exists():
