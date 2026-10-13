@@ -9,7 +9,6 @@ from typing import Optional
 
 
 def load_dotenv(env_path: str = ".env"):
-    """Simple, dependency-free .env file loader."""
     path = Path(env_path)
     if not path.is_file():
         return
@@ -62,7 +61,7 @@ TRADINGVIEW_SCREENER = os.getenv("TRADINGVIEW_SCREENER", "")
 POLL_INTERVAL = _safe_int(os.getenv("BOT_POLL"), 10)
 FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
 BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
-_equity_default = 100.0 if BROKER_MODE == "paper" else 10000.0
+_equity_default = 1000.0 if BROKER_MODE == "paper" else 10000.0
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), _equity_default)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.18)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
@@ -91,3 +90,8 @@ _AUTOTRADE_SYMBOLS_RAW = os.getenv(
 AUTOTRADE_SYMBOLS = [
     s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip()
 ] or [DEFAULT_SYMBOL]
+
+# Fast scalping: auto-close when unrealized profit hits USD or % move
+SCALP_TAKE_PROFIT_USD = _safe_float(os.getenv("BOT_SCALP_TP_USD"), 5.0)
+SCALP_TAKE_PROFIT_PCT = _safe_float(os.getenv("BOT_SCALP_TP_PCT"), 0.15)
+SCALP_ENABLED = os.getenv("BOT_SCALP", "true").lower() in ("true", "1", "yes", "on")

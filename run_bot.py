@@ -33,6 +33,7 @@ def main() -> None:
         "wire_micro_equity",
         "wire_signal_fix",
         "wire_railway_fix",
+        "wire_positions_scalp",
     ):
         _safe_wire(name)
 
@@ -60,7 +61,7 @@ def main() -> None:
                 '        exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),\n'
                 '        api_key=getattr(config, "EXCHANGE_API_KEY", ""),\n'
                 '        api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),\n'
-                '        initial_balance=getattr(config, "INITIAL_EQUITY", 100.0),\n'
+                '        initial_balance=getattr(config, "INITIAL_EQUITY", 1000.0),\n'
                 "    )\n"
                 "except Exception as _broker_err:\n"
                 '    print("[boot] broker:", _broker_err)\n'
