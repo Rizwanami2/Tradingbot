@@ -756,10 +756,42 @@ def run_cli_interactive():
                     print(f"Available profiles: {', '.join(profiles.keys())}")
             except Exception as e:
                 print(f"Profile error: {e}")
+        elif name in ("ask", "chat"):
+            query = " ".join(parts[1:]).strip()
+            if not query:
+                print("Usage: ask <question> or chat <message>")
+            else:
+                market_context = ""
+                try:
+                    info = get_price_info(config.DEFAULT_SYMBOL)
+                    if info.get("ok"):
+                        market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+                except Exception:
+                    pass
+                reply = gemini.ask(chat_id=0, user_text=query, market_context=market_context)
+                print(reply)
+        elif name == "reset":
+            gemini.reset(0)
+            print("Conversation memory cleared.")
+        elif name == "quality":
+            sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+            try:
+                from signal_quality import evaluate_signal_quality
+                feed = MarketDataFeed(symbol=sym, source=getattr(config, "DEFAULT_DATA_SOURCE", "demo"))
+                data = feed.multi_tf(limit_1m=120)
+                df = data.get("1m") if data else None
+                if df is None or df.empty:
+                    print(f"No market data returned for {sym}")
+                else:
+                    q = evaluate_signal_quality(df, "LONG", spread=0.0)
+                    icon = "✅" if q.allowed else "❌"
+                    print(f"{icon} Signal Quality {sym} (score={q.score:.2f}):\n" + "\n".join(f"• {r}" for r in q.reasons))
+            except Exception as e:
+                print(f"Quality check failed: {e}")
         elif name == "help":
-            print("Commands: signal [SYM], backtest [BARS] [SYM], status, health, levels [SYM], price [SYM], news [SYM], risk, leverage [LEV], positions, performance, kill [on|off], profile [NAME], autotrade on|off, close [SYM], cancel [SYM], exit")
+            print("Commands: signal [SYM], backtest [BARS] [SYM], status, health, levels [SYM], price [SYM], news [SYM], quality [SYM], risk, leverage [LEV], positions, performance, kill [on|off], profile [NAME], autotrade on|off, close [SYM], cancel [SYM], ask [TEXT], reset, exit")
         else:
-            print("Commands: signal, single, backtest, status, health, levels, price, news, risk, leverage, positions, performance, kill, profile, autotrade on|off, close, cancel, exit")
+            print("Commands: signal, single, backtest, status, health, levels, price, news, quality, risk, leverage, positions, performance, kill, profile, autotrade on|off, close, cancel, ask, reset, exit")
 
 
 def main():

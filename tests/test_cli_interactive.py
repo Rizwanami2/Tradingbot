@@ -148,6 +148,24 @@ class TestCliInteractive(unittest.TestCase):
         self.assertIn("Available profiles:", out)
         self.assertIn("Profile:", out)
 
+    def test_cli_ask_and_chat(self):
+        input_data = io.StringIO("ask\nask What is the market trend?\nchat analyze BTC\nreset\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("Usage: ask <question>", out)
+        self.assertIn("Trading Assistant:", out)
+        self.assertIn("Conversation memory cleared.", out)
+
+    def test_cli_quality(self):
+        input_data = io.StringIO("quality BTC\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("Signal Quality BTC", out)
+
     def test_cli_unknown_command(self):
         input_data = io.StringIO("unknown_cmd\nexit\n")
         output_data = io.StringIO()
