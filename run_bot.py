@@ -31,6 +31,7 @@ def main() -> None:
         "wire_strategy_fixes",
         "wire_multitrade",
         "wire_gautam",
+        "wire_mean_reversion",
         "wire_micro_equity",
         "wire_signal_fix",
         "wire_railway_fix",

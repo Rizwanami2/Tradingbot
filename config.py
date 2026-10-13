@@ -63,7 +63,7 @@ FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
 BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
 _equity_default = 1000.0 if BROKER_MODE == "paper" else 10000.0
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), _equity_default)
-DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.18)
+DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.20)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
 AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
 
@@ -83,14 +83,13 @@ EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
 
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 5)
-# Autotrade ONLY Gold + BTC
 _AUTOTRADE_SYMBOLS_RAW = os.getenv(
     "BOT_AUTOTRADE_SYMBOLS",
-    "BTCUSDT,XAUUSD",
+    "BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,BNBUSDT",
 )
 AUTOTRADE_SYMBOLS = [
     s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip()
-] or ["BTCUSDT", "XAUUSD"]
+] or ["BTCUSDT", "XAUUSD", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
 SCALP_TAKE_PROFIT_USD = _safe_float(os.getenv("BOT_SCALP_TP_USD"), 5.0)
 SCALP_TAKE_PROFIT_PCT = _safe_float(os.getenv("BOT_SCALP_TP_PCT"), 0.15)

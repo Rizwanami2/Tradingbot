@@ -688,24 +688,35 @@ class ExecutionEngine:
         return closed
 
     def format_positions_detail(self) -> str:
-        lines = ["📋 **Open Positions**"]
+        max_trades = int(getattr(self, "max_open_trades", 5) or 5)
+        slots = self.slots_available()
+        lines = [f"📋 **Active Positions ({len(self.active_positions)}/{max_trades} active | {slots} slots free)**"]
         if not self.active_positions:
-            lines.append("_No open positions._")
+            lines.append("_No open active positions._")
         else:
             for sym, pos in self.active_positions.items():
                 entry = float(pos.executed_price or pos.entry_level or 0)
                 u = float(getattr(pos, "unrealized_pnl", 0) or 0)
+                dir_icon = "🟢" if "LONG" in str(pos.direction).upper() else "🔴"
+                pnl_icon = "📈" if u >= 0 else "📉"
                 lines.append(
-                    f"\n`{sym}` **{pos.direction}**\n"
-                    f"• Entry `${entry:,.2f}` | Mark PnL `${u:+,.2f}`\n"
-                    f"• SL `${float(pos.stop_loss):,.2f}` | TP1 `${float(pos.tp1):,.2f}` | TP2 `${float(pos.tp2):,.2f}`\n"
-                    f"• Lots `{pos.lots}` | Lev `{float(pos.leverage or 1):.0f}x` | Margin `${float(pos.margin_required or 0):,.2f}`"
+                    f"\n{dir_icon} `{sym}` **{pos.direction}**\n"
+                    f"• **Entry:** `${entry:,.2f}` | **PnL:** {pnl_icon} `${u:+,.2f}`\n"
+                    f"• **SL:** `${float(pos.stop_loss):,.2f}` | **TP1:** `${float(pos.tp1):,.2f}` | **TP2:** `${float(pos.tp2):,.2f}`\n"
+                    f"• **Lots:** `{pos.lots}` | **Lev:** `{float(pos.leverage or 1):.0f}x` | **Margin:** `${float(pos.margin_required or 0):,.2f}`"
+                )
+        if self.pending_setups:
+            lines.append(f"\n⏳ **Pending Setups ({len(self.pending_setups)}):**")
+            for psym, pord in self.pending_setups.items():
+                pdir_icon = "🟢" if "LONG" in str(pord.direction).upper() else "🔴"
+                lines.append(
+                    f"• {pdir_icon} `{psym}` **{pord.direction}** @ `${pord.entry_level:,.2f}` | SL `${pord.stop_loss:,.2f}` (Lots `{pord.lots}`)"
                 )
         summary = self.get_portfolio_summary()
         lines.append(
-            f"\n💰 Equity `${summary.get('equity', 0):,.2f}` | "
-            f"Unrealized `${summary.get('unrealized_pnl', 0):+,.2f}` | "
-            f"Open `{summary.get('active_positions_count', 0)}`"
+            f"\n💰 **Equity:** `${summary.get('equity', 0):,.2f}` | "
+            f"**Unrealized:** `${summary.get('unrealized_pnl', 0):+,.2f}` | "
+            f"**Used Margin:** `${summary.get('used_margin', 0):,.2f}`"
         )
         return "\n".join(lines)
 

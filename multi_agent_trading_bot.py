@@ -63,6 +63,12 @@ except ImportError:
     GautamJhaAgent = None
     GJDir = None
 
+try:
+    from mean_reversion_vwap_strategy import MeanReversionVWAPAgent, MRDir
+except ImportError:
+    MeanReversionVWAPAgent = None
+    MRDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -441,6 +447,7 @@ class Arbiter:
         "AI-LEARNER": 0.90,
         "NEWS": 0.70,
         "GAUTAM-JHA": 1.55,
+        "MEAN-REVERSION": 1.35,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -454,6 +461,7 @@ class Arbiter:
         self.ai = AILearnerAgent()
         self.news = NewsAgent()
         self.gautam = GautamJhaAgent() if GautamJhaAgent is not None else None
+        self.mr = MeanReversionVWAPAgent() if MeanReversionVWAPAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -469,6 +477,15 @@ class Arbiter:
                 dname = getattr(gv.direction, "name", str(gv.direction))
                 direction = Dir.LONG if dname == "LONG" else (Dir.SHORT if dname == "SHORT" else Dir.FLAT)
                 votes.append(Vote(gv.agent, direction, float(gv.strength), gv.reason))
+            except Exception:
+                pass
+
+        if getattr(self, "mr", None) is not None:
+            try:
+                mv = self.mr.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(mv.direction, "name", str(mv.direction))
+                direction = Dir.LONG if dname == "LONG" else (Dir.SHORT if dname == "SHORT" else Dir.FLAT)
+                votes.append(Vote(mv.agent, direction, float(mv.strength), mv.reason))
             except Exception:
                 pass
 

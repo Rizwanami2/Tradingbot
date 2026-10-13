@@ -6,10 +6,10 @@ Modern Telegram bot for **Gold (XAUUSD)** and **BTC (BTCUSDT)** with multi-agent
 
 | Area | Capability |
 |------|------------|
-| **Signals** | Trend, Liquidity/SMC, Indicators, AI-Learner, News, Gautam Jha |
+| **Signals** | 6 Agents: Trend, Liquidity/SMC, Indicators, AI-Learner, News, Gautam Jha, Mean-Reversion VWAP |
 | **Entry plan** | Best entry *zone* from PDH/PDL, EMAs, swings, ATR, 2Y S/R |
 | **2Y history** | ~730 daily bars — 52w range, EMA50/200, major S/R |
-| **Autotrade** | Paper only, **Gold + BTC** watchlist, max concurrent slots |
+| **Autotrade** | Paper execution, up to **5 concurrent active trade slots** |
 | **Scalp** | Optional auto-close on USD or % profit target |
 | **Risk** | Leverage-aware sizing, micro lots, $1000 paper default |
 
@@ -30,7 +30,8 @@ BOT_BROKER_MODE=paper
 BOT_EQUITY=1000
 BOT_LEVERAGE=20
 BOT_AUTOTRADE=true
-BOT_AUTOTRADE_SYMBOLS=BTCUSDT,XAUUSD
+BOT_AUTOTRADE_SYMBOLS=BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,BNBUSDT
+BOT_MAX_OPEN_TRADES=5
 BOT_SCALP=true
 BOT_SCALP_TP_USD=5
 BOT_DATA_SOURCE=ccxt
@@ -42,7 +43,7 @@ BOT_DATA_SOURCE=ccxt
 |---------|-------------|
 | `/signal btc` · `/asignal gold` | Agents + entry plan + 2Y context |
 | `/price` · `/levels` | Live mark and key levels |
-| `/autotrade on\|off` | Paper autotrade (Gold + BTC only) |
+| `/autotrade on\|off` | Paper autotrade (up to 5 concurrent active trades) |
 | `/positions` | Open / pending / recent closed |
 | `/close all` · `/close BTCUSDT` | Close all or one symbol |
 | `/leverage` · `/status` · `/risk` | Risk controls |

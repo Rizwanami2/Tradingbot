@@ -28,7 +28,7 @@ class Position:
 
 SECTOR_MAP = {
     "XAU": "metals", "GOLD": "metals", "XAUT": "metals",
-    "BTC": "crypto", "ETH": "crypto", "SOL": "crypto",
+    "BTC": "crypto", "ETH": "crypto", "SOL": "crypto", "BNB": "crypto",
     "EUR": "fx", "GBP": "fx", "JPY": "fx", "AUD": "fx", "CAD": "fx", "CHF": "fx",
 }
 
@@ -44,8 +44,8 @@ def detect_sector(symbol: str) -> str:
 class PortfolioRisk:
     def __init__(
         self,
-        max_total_risk_pct: float = 2.0,
-        max_sector_risk_pct: float = 1.2,
+        max_total_risk_pct: float = 3.0,
+        max_sector_risk_pct: float = 2.5,
         max_positions: int = 5,
         equity: float = 10000.0,
     ):

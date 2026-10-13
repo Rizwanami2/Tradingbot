@@ -213,36 +213,55 @@ def format_price_string(info: Dict) -> str:
 async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     welcome = (
         "🤖 **TradingBot — Multi-Agent Paper Assistant**\n\n"
-        "Welcome! Use /help for commands. /signal for 5-agent consensus.\n"
-        "Setup monitoring tracks levels locally; live exchange execution is separate."
+        "Welcome! Institutional crypto & gold algorithmic trading assistant powered by 6 autonomous strategy agents, dynamic entry planning, and safe paper execution.\n\n"
+        "⚡ **Quick Start:**\n"
+        "• `/signal btc` — Multi-agent consensus & best entry zone\n"
+        "• `/autotrade on` — Automated paper trading (up to 5 active trades)\n"
+        "• `/positions` — Monitor open trades, PnL & dynamic trailing stops\n"
+        "• `/status` — Portfolio equity & system health\n"
+        "• `/help` — Full categorized command catalog\n\n"
+        "🛡️ _Default paper equity: $1,000 | Max concurrent active trades: 5_"
     )
     await update.message.reply_text(welcome, parse_mode="Markdown")
 
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "📖 **TradingBot Guide**\n\n"
-        "⚡ **Market & Signals:**\n"
-        "• `/price [SYM]` — Live mark price & quote\n"
-        "• `/levels [SYM]` — Key levels (PDH/PDL, pivots, swings)\n"
-        "• `/signal [SYM]` or `/single [SYM]` — 5-Agent confluence setup\n"
-        "• `/asignal [SYM] [profile]` — Advanced SMC + CVD setup\n"
-        "• `/news` — Market sentiment & shock detection\n\n"
-        "📊 **Risk & Position Management:**\n"
-        "• `/status` — Portfolio health & autotrade state\n"
-        "• `/positions` — Active open trades\n"
-        "• `/risk` — Risk tier & exposure summary\n"
-        "• `/leverage [1-20]` — Set maximum leverage\n"
-        "• `/close [ID]` & `/cancel [ID]` — Manage trades\n"
-        "• `/kill [on|off]` — Emergency execution stop\n\n"
-        "🔬 **Backtesting & Research:**\n"
-        "• `/backtest [single|auto] [bars] [SYM]` — Fast backtest\n"
-        "• `/abacktest [mode] [bars] [SYM]` — Advanced backtest suite\n"
-        "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
-        "• `/performance` — Detailed trade metrics & Sharpe\n"
-        "• `/brain` & `/relearn` — Autonomous self-learning memory\n"
-        "• `/autotrade on|off` — Toggle setup monitoring & trade tracking\n"
+        "📖 **TradingBot Command Center**\n"
+        "_Institutional Multi-Agent Paper Trading & Analysis System_\n\n"
+        "📊 **Market Data & Live Quotes:**\n"
+        "• `/price [SYM]` — Live mark price, 24h change & stats\n"
+        "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
+        "• `/news [SYM]` — Macro calendar & economic shock detection\n\n"
+        "🎯 **Signals & Strategy Confluence:**\n"
+        "• `/signal [SYM]` — 6-Agent consensus (Trend, SMC, Indicators, AI, News, VWAP)\n"
+        "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
+        "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n\n"
+        "⚡ **Execution & Positions (Active Limit: 5):**\n"
+        "• `/positions` — Open active trades, pending setups & real-time PnL\n"
+        "• `/autotrade on|off` — Paper autotrading (up to 5 concurrent active trades)\n"
+        "• `/close [SYM|all]` — Instantly close position(s)\n"
+        "• `/cancel [SYM]` — Cancel pending order setup\n"
+        "• `/closed` — Recently closed trades history & realized PnL\n\n"
+        "🛡️ **Risk & Safety Management:**\n"
+        "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
+        "• `/health` — Real-time telemetry & background worker heartbeat\n"
+        "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+        "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
+        "• `/kill [on|off]` — Emergency execution stop circuit breaker\n\n"
+        "📈 **Backtesting & Research:**\n"
+        "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
+        "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
+        "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
+        "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n\n"
+        "🧠 **Autonomous AI & Standings:**\n"
+        "• `/brain` — Autonomous learner knowledge & win rates\n"
+        "• `/relearn [SYM]` — Force 5Y history retraining bootstrap\n"
+        "• `/board` — Strategy board & agent standings\n"
+        "• `/journal` — Trade journal analytics & history\n"
+        "• `/digest` — Daily market performance digest\n"
         "• `/reset` — Clear conversation context\n"
+        "• `Any message` — Conversational assistant with Gemini AI\n"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -310,24 +329,28 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
     auto_status = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
     summary = engine.get_portfolio_summary()
+    max_trades = getattr(engine, "max_open_trades", 5)
+    slots = engine.slots_available()
+    symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
     msg = (
-        f"📈 **Bot Status**\n"
-        f"• Monitoring: {auto_status}\n"
-        f"• Symbol: `{config.DEFAULT_SYMBOL}`\n"
-        f"• Equity: `${summary['equity']:,.2f}` | Lev: `{summary['leverage']:.0f}x`\n"
-        f"• Positions: `{summary['active_positions_count']}` | Pending: `{summary['pending_setups_count']}`\n"
-        f"• Risk: {mode_icon} `{s.mode.upper()}` | Today PnL: `${s.daily_pnl:+,.2f}`\n"
+        f"📊 **System & Portfolio Status**\n"
+        f"• **Autotrade:** {auto_status} (Cap: `{summary['active_positions_count']}/{max_trades}` active | `{slots}` slots free)\n"
+        f"• **Watchlist:** `{symbols_str}`\n"
+        f"• **Equity:** `${summary['equity']:,.2f}` | **Leverage:** `{summary['leverage']:.0f}x`\n"
+        f"• **Active Positions:** `{summary['active_positions_count']}` | **Pending Setups:** `{summary['pending_setups_count']}`\n"
+        f"• **Risk Mode:** {mode_icon} `{s.mode.upper()}` | **Today PnL:** `${s.daily_pnl:+,.2f}`\n"
+        f"• **Broker Mode:** `{getattr(config, 'BROKER_MODE', 'paper').upper()}`\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = (
-        f"❤️ **Health**\n"
-        f"• Last poll: `{monitoring_health.get('last_poll_at')}`\n"
-        f"• Last success: `{monitoring_health.get('last_success_at')}`\n"
-        f"• Last error: `{monitoring_health.get('last_error')}`\n"
-        f"• Consecutive errors: `{monitoring_health.get('consecutive_errors')}`\n"
+        f"❤️ **Health Telemetry**\n"
+        f"• **Last Poll:** `{monitoring_health.get('last_poll_at')}`\n"
+        f"• **Last Success:** `{monitoring_health.get('last_success_at')}`\n"
+        f"• **Last Error:** `{monitoring_health.get('last_error') or 'None'}`\n"
+        f"• **Consecutive Errors:** `{monitoring_health.get('consecutive_errors', 0)}`\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -335,10 +358,15 @@ async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = risk_mgr.state
     risk_pct, reason = risk_mgr.current_risk_pct()
+    max_trades = getattr(engine, "max_open_trades", 5)
+    mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
     msg = (
-        f"🛡️ **Risk**\n"
-        f"• Risk/trade: `{risk_pct:.2f}%` ({reason})\n"
-        f"• Equity: `${s.equity:,.2f}` | Mode: `{s.mode}`\n"
+        f"🛡️ **Institutional Risk Controls**\n"
+        f"• **Risk/Trade:** `{risk_pct:.2f}%` ({reason})\n"
+        f"• **Max Concurrent Trades:** `{max_trades}` active slots\n"
+        f"• **Account Equity:** `${s.equity:,.2f}` | **Mode:** {mode_icon} `{s.mode.upper()}`\n"
+        f"• **Max Daily Loss:** `{risk_mgr.config.max_daily_loss_pct:.1f}%` | **Weekly:** `{risk_mgr.config.max_weekly_loss_pct:.1f}%`\n"
+        f"• **Margin Utilization Cap:** `{risk_mgr.config.max_margin_utilization_pct:.0f}%`\n"
         f"• {_safe_summary()}\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -383,7 +411,7 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     arg = (ctx.args[0] if ctx.args else "").strip().upper()
     if not arg or arg in ("ALL", "CLOSED", "*"):
         if not engine.active_positions:
-            await update.message.reply_text("No open positions to close.")
+            await update.message.reply_text("ℹ️ No open positions to close.")
             return
         closed = []
         if hasattr(engine, "close_all_positions"):
@@ -393,17 +421,21 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 p = engine.close_position(sym, reason="Manual close all")
                 if p:
                     closed.append(p)
-        lines = [f"✅ Closed {len(closed)} position(s)"]
+        lines = [f"✅ **Closed {len(closed)} position(s):**"]
         for p in closed:
-            lines.append(f"{p.symbol} PnL ${float(getattr(p, 'realized_pnl', 0) or 0):+.2f}")
-        await update.message.reply_text("\n".join(lines))
+            pnl = float(getattr(p, 'realized_pnl', 0) or 0)
+            pnl_icon = "📈" if pnl >= 0 else "📉"
+            lines.append(f"• `{p.symbol}` PnL: {pnl_icon} `${pnl:+,.2f}`")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         return
     sym = arg if arg not in ("BTC", "BTCUSD") else "BTCUSDT"
     closed = engine.close_position(sym, reason="Manual close")
     if closed:
-        await update.message.reply_text(f"✅ Closed {sym} PnL ${float(getattr(closed, 'realized_pnl', 0) or 0):+.2f}")
+        pnl = float(getattr(closed, 'realized_pnl', 0) or 0)
+        pnl_icon = "📈" if pnl >= 0 else "📉"
+        await update.message.reply_text(f"✅ Closed `{sym}` — Realized PnL: {pnl_icon} `${pnl:+,.2f}`", parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"No position for {sym}. Use /close all")
+        await update.message.reply_text(f"⚠️ No active position found for `{sym}`. Use `/close all`", parse_mode="Markdown")
 
 
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -411,11 +443,11 @@ async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         cancelled = engine.cancel_setup(sym, reason="Manual cancel")
         if cancelled:
-            await update.message.reply_text(f"Cancelled pending setup for `{sym}`", parse_mode="Markdown")
+            await update.message.reply_text(f"✅ Cancelled pending setup for `{sym}`", parse_mode="Markdown")
         else:
-            await update.message.reply_text(f"No pending setup for `{sym}`", parse_mode="Markdown")
+            await update.message.reply_text(f"ℹ️ No pending setup for `{sym}`", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Cancel failed: {e}")
+        await update.message.reply_text(f"⚠️ Cancel failed: `{e}`", parse_mode="Markdown")
 
 
 async def news_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -435,16 +467,31 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global autotrade_active
     arg = (ctx.args[0].lower() if ctx.args else "")
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
+    max_trades = getattr(engine, "max_open_trades", 5)
+    symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
     if arg in ("on", "1", "true", "enable"):
         autotrade_active = True
         engine.reset_halt()
-        await update.message.reply_text(f"🟢 Autotrade **ON** ({broker_mode} mode monitoring)", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"🟢 **Autotrade ACTIVATED**\n"
+            f"• **Execution Mode:** `{broker_mode}`\n"
+            f"• **Active Trade Limit:** `{max_trades}` concurrent positions\n"
+            f"• **Active Watchlist:** `{symbols_str}`",
+            parse_mode="Markdown",
+        )
     elif arg in ("off", "0", "false", "disable"):
         autotrade_active = False
-        await update.message.reply_text("⚪ Autotrade **OFF**", parse_mode="Markdown")
+        await update.message.reply_text("⚪ **Autotrade PAUSED** (monitoring stopped)", parse_mode="Markdown")
     else:
-        st = "ON" if autotrade_active else "OFF"
-        await update.message.reply_text(f"Autotrade is **{st}** ({broker_mode}). Use `/autotrade on|off`", parse_mode="Markdown")
+        st = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+        await update.message.reply_text(
+            f"⚡ **Autotrade Status:** {st}\n"
+            f"• **Mode:** `{broker_mode}`\n"
+            f"• **Active Limit:** `{max_trades}` concurrent trades\n"
+            f"• **Watchlist:** `{symbols_str}`\n"
+            f"Toggle with: `/autotrade on` or `/autotrade off`",
+            parse_mode="Markdown",
+        )
 
 
 async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -842,9 +889,18 @@ def run_cli_interactive():
             except Exception as e:
                 print(f"Quality check failed: {e}")
         elif name == "help":
-            print("Commands: signal [SYM], backtest [BARS] [SYM], status, health, levels [SYM], price [SYM], news [SYM], quality [SYM], risk, leverage [LEV], positions, performance, kill [on|off], profile [NAME], autotrade on|off, close [SYM], cancel [SYM], ask [TEXT], reset, exit")
+            print(
+                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], performance, profile [NAME], ask [TEXT], reset, exit\n\n"
+                "Commands by category:\n"
+                "📊 Market: price [SYM], levels [SYM], news [SYM]\n"
+                "🎯 Signals: signal [SYM], single [SYM], quality [SYM]\n"
+                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM]\n"
+                "🛡️ Risk: status, health, risk, leverage [LEV], kill [on|off]\n"
+                "📈 Research: backtest [BARS] [SYM], performance, profile [NAME]\n"
+                "🧠 AI & Controls: ask [TEXT], reset, exit"
+            )
         else:
-            print("Commands: signal, single, backtest, status, health, levels, price, news, quality, risk, leverage, positions, performance, kill, profile, autotrade on|off, close, cancel, ask, reset, exit")
+            print("Commands: signal, price, levels, news, quality, positions, autotrade, close, cancel, status, health, risk, leverage, kill, backtest, performance, profile, ask, reset, exit")
 
 
 def main():

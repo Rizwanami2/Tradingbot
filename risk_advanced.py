@@ -46,7 +46,7 @@ def _sector_of(symbol: str) -> str:
 class RiskAdvanced:
     def __init__(
         self,
-        max_daily_trades: int = 3,
+        max_daily_trades: int = 10,
         corr_block_threshold: float = 0.75,  # conceptual; we use same-group same-dir
         pyramid_min_r: float = 0.8,
         size_mult_after_dd: float = 0.6,

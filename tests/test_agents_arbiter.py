@@ -81,18 +81,27 @@ class TestAgentsAndArbiter(unittest.TestCase):
         self.assertEqual(v_missing.direction, GJDir.FLAT)
         self.assertEqual(v_missing.reason, "Missing OHLC columns")
 
+    def test_mean_reversion_agent(self):
+        from mean_reversion_vwap_strategy import MeanReversionVWAPAgent, MRDir
+        agent = MeanReversionVWAPAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "MEAN-REVERSION")
+        self.assertIn(vote.direction, (MRDir.LONG, MRDir.SHORT, MRDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
     def test_evaluate_symbol(self):
         res = evaluate_symbol("XAUUSD", source="demo")
         self.assertEqual(res["symbol"], "XAUUSD")
         self.assertGreater(res["price"], 0.0)
         self.assertIn("votes", res)
-        self.assertIn(len(res["votes"]), (5, 6))
+        self.assertIn(len(res["votes"]), (5, 6, 7))
 
     def test_evaluate_symbol_btc_normalization(self):
         res = evaluate_symbol("BTC", source="demo", on_demand=True)
         self.assertEqual(res["symbol"], "BTCUSDT")
         self.assertGreater(res["price"], 0.0)
-        self.assertIn(len(res["votes"]), (5, 6))
+        self.assertIn(len(res["votes"]), (5, 6, 7))
 
 
 if __name__ == "__main__":

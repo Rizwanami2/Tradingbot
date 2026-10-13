@@ -55,6 +55,9 @@ INSTRUMENTS = {
     "SOLUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "SOLUSD":  {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "SOL":     {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
+    "BNBUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
+    "BNBUSD":  {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
+    "BNB":     {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "XAUUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "DEFAULT": {"contract_size": 100000, "pip_size": 0.0001, "pip_value_per_lot": 10.0, "min_lot": 0.01, "lot_step": 0.01},
 }
@@ -69,12 +72,12 @@ class RiskMode(Enum):
 
 @dataclass
 class RiskConfig:
-    base_risk_pct: float = 0.25
+    base_risk_pct: float = 0.20
     min_risk_pct: float = 0.10
     max_risk_pct: float = 0.50
-    max_daily_loss_pct: float = 1.5
-    max_weekly_loss_pct: float = 4.0
-    max_consecutive_losses: int = 3
+    max_daily_loss_pct: float = 3.0
+    max_weekly_loss_pct: float = 6.0
+    max_consecutive_losses: int = 4
     tp1_r: float = 1.5
     tp2_r: float = 2.5
     tp3_r: float = 4.0
