@@ -35,6 +35,7 @@ def main() -> None:
         "wire_railway_fix",
         "wire_positions_scalp",
         "wire_history_2y",
+        "wire_polish",
     ):
         _safe_wire(name)
 
