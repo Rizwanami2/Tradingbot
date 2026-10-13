@@ -76,6 +76,13 @@ try:
         api_key=getattr(config, "EXCHANGE_API_KEY", ""),
         api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),
         initial_balance=getattr(config, "INITIAL_EQUITY", 10000.0),
+        mt5_mode=getattr(config, "MT5_MODE", "paper"),
+        mt5_login=getattr(config, "MT5_LOGIN", 0),
+        mt5_password=getattr(config, "MT5_PASSWORD", ""),
+        mt5_server=getattr(config, "MT5_SERVER", "MetaQuotes-Demo"),
+        mt5_path=getattr(config, "MT5_PATH", ""),
+        mt5_magic=getattr(config, "MT5_MAGIC", 112233),
+        mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
     )
 except Exception as _broker_err:
     print("[boot] broker:", _broker_err)
@@ -249,6 +256,12 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
         "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
         "• `/kill [on|off]` — Emergency execution stop circuit breaker\n\n"
+        "🏦 **MetaTrader 5 & Broker Accounts:**\n"
+        "• `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin\n"
+        "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
+        "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account (fail-closed safe)\n"
+        "• `/mt5 positions` — Show active positions on MT5 broker terminal\n"
+        "• `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine\n\n"
         "📈 **Backtesting & Research:**\n"
         "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
         "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
@@ -332,6 +345,15 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     max_trades = getattr(engine, "max_open_trades", 5)
     slots = engine.slots_available()
     symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
+    bname = type(engine.broker).__name__ if engine.broker else "None"
+    bmode = getattr(config, "BROKER_MODE", "paper").upper()
+    b_extra = ""
+    if hasattr(engine.broker, "get_account_info"):
+        try:
+            ai = engine.broker.get_account_info()
+            b_extra = f"\n• **MT5 Server:** `{ai.server}` | **Free Margin:** `${ai.free_margin:,.2f}`"
+        except Exception:
+            pass
     msg = (
         f"📊 **System & Portfolio Status**\n"
         f"• **Autotrade:** {auto_status} (Cap: `{summary['active_positions_count']}/{max_trades}` active | `{slots}` slots free)\n"
@@ -339,9 +361,10 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Equity:** `${summary['equity']:,.2f}` | **Leverage:** `{summary['leverage']:.0f}x`\n"
         f"• **Active Positions:** `{summary['active_positions_count']}` | **Pending Setups:** `{summary['pending_setups_count']}`\n"
         f"• **Risk Mode:** {mode_icon} `{s.mode.upper()}` | **Today PnL:** `${s.daily_pnl:+,.2f}`\n"
-        f"• **Broker Mode:** `{getattr(config, 'BROKER_MODE', 'paper').upper()}`\n"
+        f"• **Broker:** `{bname}` (Mode: `{bmode}`){b_extra}\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
+
 
 
 async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -574,6 +597,169 @@ async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
 
+
+
+async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    args = ctx.args or []
+    sub = args[0].lower() if args else "status"
+
+    if sub in ("status", "info"):
+        if hasattr(engine.broker, "get_account_info"):
+            try:
+                info = engine.broker.get_account_info()
+                await update.message.reply_text(info.summary(), parse_mode="Markdown")
+                return
+            except Exception as e:
+                logger.warning("MT5 get_account_info failed: %s", e)
+        if hasattr(engine.broker, "get_account_summary"):
+            s = engine.broker.get_account_summary()
+            msg = (
+                f"🏦 **Broker Account Summary**\n"
+                f"• **Type:** `{type(engine.broker).__name__}`\n"
+                f"• **Balance:** `${s.get('balance', 0):,.2f}` | **Equity:** `${s.get('equity', 0):,.2f}`\n"
+                f"• **Open Positions:** `{s.get('open_positions', 0)}`"
+            )
+            await update.message.reply_text(msg, parse_mode="Markdown")
+        else:
+            bname = type(engine.broker).__name__ if engine.broker else "None"
+            await update.message.reply_text(f"🏦 Active broker: `{bname}` (Mode: `{getattr(config, 'BROKER_MODE', 'paper').upper()}`)")
+
+    elif sub in ("paper", "demo"):
+        from mt5_broker import MT5Broker
+        engine.broker = MT5Broker(
+            mode="paper",
+            initial_balance=risk_mgr.state.equity,
+            login=getattr(config, "MT5_LOGIN", 0),
+            server=getattr(config, "MT5_SERVER", "MetaQuotes-Demo"),
+            magic=getattr(config, "MT5_MAGIC", 112233),
+            gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+        )
+        config.BROKER_MODE = "mt5_paper"
+        await update.message.reply_text(
+            "⚪ **MT5 Paper / Demo Mode Activated**\n"
+            "• High-fidelity MT5 simulation engine active\n"
+            "• Real MT5 tickets, fees, and SL/TP bounds\n"
+            "• Safe testing with zero capital risk",
+            parse_mode="Markdown",
+        )
+
+    elif sub in ("live", "connect"):
+        login = int(args[1]) if len(args) > 1 and args[1].isdigit() else getattr(config, "MT5_LOGIN", 0)
+        password = args[2] if len(args) > 2 else getattr(config, "MT5_PASSWORD", "")
+        server = args[3] if len(args) > 3 else getattr(config, "MT5_SERVER", "")
+
+        if not login or not password or not server:
+            await update.message.reply_text(
+                "❌ **MT5 Live Connection Failed (Missing Credentials)**\n"
+                "Usage: `/mt5 live <LOGIN> <PASSWORD> <SERVER>`\n"
+                "Or configure `MT5_LOGIN`, `MT5_PASSWORD`, and `MT5_SERVER` in `.env`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        try:
+            from mt5_broker import MT5Broker
+            new_broker = MT5Broker(
+                mode="live",
+                login=login,
+                password=password,
+                server=server,
+                path=getattr(config, "MT5_PATH", ""),
+                magic=getattr(config, "MT5_MAGIC", 112233),
+                gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+            )
+            engine.broker = new_broker
+            config.BROKER_MODE = "mt5_live"
+            await update.message.reply_text(
+                f"🟢 **MT5 Live Account Connected Successfully**\n"
+                f"• **Account #:** `{login}`\n"
+                f"• **Server:** `{server}`\n"
+                f"• **Balance:** `${new_broker.balance:,.2f}` | **Equity:** `${new_broker.equity:,.2f}`\n"
+                f"• **Status:** Live deal execution active with server-side SL/TP.",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            logger.error("MT5 Live connect failed: %s", exc)
+            await update.message.reply_text(
+                f"🚫 **MT5 Live Connection Rejected (Fail-Closed)**\n"
+                f"Error: `{exc}`\n"
+                f"_Live mode aborted safely. Current broker remains unchanged._",
+                parse_mode="Markdown",
+            )
+
+    elif sub in ("positions", "pos"):
+        if engine.broker:
+            try:
+                positions = engine.broker.get_positions()
+                if not positions:
+                    await update.message.reply_text("ℹ️ No active positions on MT5 broker.")
+                    return
+                lines = [f"🏦 **MT5 Active Broker Positions ({len(positions)}):**"]
+                for p in positions:
+                    icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                    lines.append(
+                        f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.2f}` lots @ `${p.entry_price:,.2f}` | "
+                        f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                    )
+                await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ Error fetching MT5 positions: `{e}`", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ No broker attached to engine.")
+
+    else:
+        await update.message.reply_text(
+            "🏦 **MetaTrader 5 Commands:**\n"
+            "• `/mt5 status` — Check MT5 account telemetry & connection\n"
+            "• `/mt5 paper` — Switch to MT5 Paper simulation engine\n"
+            "• `/mt5 live [login] [pass] [server]` — Connect live MT5 account\n"
+            "• `/mt5 positions` — Show all active MT5 broker positions",
+            parse_mode="Markdown",
+        )
+
+
+async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    args = ctx.args or []
+    if not args:
+        bname = type(engine.broker).__name__ if engine.broker else "None"
+        bmode = getattr(config, "BROKER_MODE", "paper").upper()
+        await update.message.reply_text(
+            f"🏦 **Active Execution Broker**\n"
+            f"• **Class:** `{bname}`\n"
+            f"• **Mode:** `{bmode}`\n\n"
+            f"Switch broker: `/broker paper` | `/broker mt5` | `/broker mt5_live`",
+            parse_mode="Markdown",
+        )
+        return
+
+    mode = args[0].lower()
+    try:
+        from execution import create_broker
+        new_b = create_broker(
+            broker_mode=mode,
+            exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),
+            api_key=getattr(config, "EXCHANGE_API_KEY", ""),
+            api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),
+            initial_balance=risk_mgr.state.equity,
+            mt5_login=getattr(config, "MT5_LOGIN", 0),
+            mt5_password=getattr(config, "MT5_PASSWORD", ""),
+            mt5_server=getattr(config, "MT5_SERVER", "MetaQuotes-Demo"),
+            mt5_path=getattr(config, "MT5_PATH", ""),
+            mt5_magic=getattr(config, "MT5_MAGIC", 112233),
+            mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+        )
+        engine.broker = new_b
+        config.BROKER_MODE = mode
+        await update.message.reply_text(
+            f"✅ **Broker Switched to `{mode.upper()}`**\n"
+            f"Active broker instance: `{type(new_b).__name__}`",
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        await update.message.reply_text(
+            f"🚫 **Failed to Switch Broker (Fail-Closed):**\n`{exc}`",
+            parse_mode="Markdown",
+        )
 
 
 async def reset_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -888,19 +1074,71 @@ def run_cli_interactive():
                     print(f"{icon} Signal Quality {sym} (score={q.score:.2f}):\n" + "\n".join(f"• {r}" for r in q.reasons))
             except Exception as e:
                 print(f"Quality check failed: {e}")
+        elif name == "mt5":
+            sub = parts[1].lower() if len(parts) > 1 else "status"
+            if sub in ("status", "info"):
+                if hasattr(engine.broker, "get_account_info"):
+                    info = engine.broker.get_account_info()
+                    print(info.summary())
+                elif hasattr(engine.broker, "get_account_summary"):
+                    print(engine.broker.get_account_summary())
+                else:
+                    bname = type(engine.broker).__name__ if engine.broker else "None"
+                    print(f"Broker: {bname} ({getattr(config, 'BROKER_MODE', 'paper')})")
+            elif sub in ("paper", "demo"):
+                from mt5_broker import MT5Broker
+                engine.broker = MT5Broker(mode="paper", initial_balance=risk_mgr.state.equity)
+                config.BROKER_MODE = "mt5_paper"
+                print("MT5 Paper mode activated.")
+            elif sub in ("live", "connect"):
+                login = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else getattr(config, "MT5_LOGIN", 0)
+                password = parts[3] if len(parts) > 3 else getattr(config, "MT5_PASSWORD", "")
+                server = parts[4] if len(parts) > 4 else getattr(config, "MT5_SERVER", "")
+                if not login or not password or not server:
+                    print("Credentials required: mt5 live <LOGIN> <PASSWORD> <SERVER> or set in .env")
+                else:
+                    try:
+                        from mt5_broker import MT5Broker
+                        new_broker = MT5Broker(mode="live", login=login, password=password, server=server)
+                        engine.broker = new_broker
+                        config.BROKER_MODE = "mt5_live"
+                        print(f"Connected to MT5 Live account #{login} on {server}")
+                    except Exception as exc:
+                        print(f"MT5 Live connection failed: {exc}")
+            elif sub in ("positions", "pos"):
+                if engine.broker:
+                    print(engine.broker.get_positions())
+                else:
+                    print("No broker attached.")
+            else:
+                print("Usage: mt5 status | mt5 paper | mt5 live [login] [pass] [server] | mt5 positions")
+        elif name == "broker":
+            if len(parts) > 1:
+                bmode = parts[1].lower()
+                try:
+                    from execution import create_broker
+                    new_b = create_broker(broker_mode=bmode, initial_balance=risk_mgr.state.equity)
+                    engine.broker = new_b
+                    config.BROKER_MODE = bmode
+                    print(f"Broker switched to {bmode} ({type(new_b).__name__})")
+                except Exception as exc:
+                    print(f"Broker switch failed: {exc}")
+            else:
+                bname = type(engine.broker).__name__ if engine.broker else "None"
+                print(f"Active broker: {bname} ({getattr(config, 'BROKER_MODE', 'paper')})")
         elif name == "help":
             print(
-                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], performance, profile [NAME], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], performance, profile [NAME], ask [TEXT], reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], single [SYM], quality [SYM]\n"
-                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM]\n"
+                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], mt5 [CMD], broker [MODE]\n"
                 "🛡️ Risk: status, health, risk, leverage [LEV], kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], performance, profile [NAME]\n"
                 "🧠 AI & Controls: ask [TEXT], reset, exit"
             )
         else:
-            print("Commands: signal, price, levels, news, quality, positions, autotrade, close, cancel, status, health, risk, leverage, kill, backtest, performance, profile, ask, reset, exit")
+            print("Commands: signal, price, levels, news, quality, positions, autotrade, close, cancel, mt5, broker, status, health, risk, leverage, kill, backtest, performance, profile, ask, reset, exit")
 
 
 def main():
@@ -947,9 +1185,12 @@ def main():
     app.add_handler(CommandHandler("news", news_command))
     app.add_handler(CommandHandler("positions", positions_command))
     app.add_handler(CommandHandler("autotrade", autotrade_command))
+    app.add_handler(CommandHandler("mt5", mt5_command))
+    app.add_handler(CommandHandler("broker", broker_command))
     app.add_handler(CommandHandler("backtest", backtest_command))
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message))
+
 
     print("Trading Bot is running. Press Ctrl+C to terminate.")
     app.run_polling()

@@ -60,12 +60,26 @@ TRADINGVIEW_EXCHANGE = os.getenv("TRADINGVIEW_EXCHANGE", "")
 TRADINGVIEW_SCREENER = os.getenv("TRADINGVIEW_SCREENER", "")
 POLL_INTERVAL = _safe_int(os.getenv("BOT_POLL"), 10)
 FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
+# MetaTrader 5 (MT5) Configuration
+MT5_ENABLED = os.getenv("MT5_ENABLED", "false").lower() in ("true", "1", "yes", "on")
+MT5_MODE = os.getenv("MT5_MODE", "paper").lower()  # "paper" or "live"
+MT5_LOGIN = _safe_int(os.getenv("MT5_LOGIN"), 0)
+MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
+MT5_SERVER = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
+MT5_PATH = os.getenv("MT5_PATH", "")
+MT5_MAGIC = _safe_int(os.getenv("MT5_MAGIC"), 112233)
+MT5_GATEWAY_URL = os.getenv("MT5_GATEWAY_URL", "")
+
 BROKER_MODE = os.getenv("BOT_BROKER_MODE", "paper").lower()
-_equity_default = 1000.0 if BROKER_MODE == "paper" else 10000.0
+if MT5_ENABLED and BROKER_MODE in ("paper", "mt5"):
+    BROKER_MODE = "mt5_live" if MT5_MODE == "live" else "mt5_paper"
+
+_equity_default = 1000.0 if BROKER_MODE in ("paper", "mt5_paper") else 10000.0
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), _equity_default)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.20)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
 AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
+
 
 STATUS_FILE = os.getenv(
     "BOT_STATUS_FILE",

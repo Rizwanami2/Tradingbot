@@ -385,9 +385,12 @@ def create_broker_fail_closed(
     *,
     paper_factory,
     live_factory,
+    mt5_paper_factory=None,
+    mt5_live_factory=None,
 ):
     """
     Create the requested broker without silently falling back between modes.
+    Supports 'paper', 'live', 'mt5'/'mt5_paper', and 'mt5_live'.
     If live mode is requested, missing credentials or initialization failure raises
     BrokerConfigurationError instead of returning a paper broker.
     """
@@ -396,9 +399,45 @@ def create_broker_fail_closed(
     if mode == "paper":
         return paper_factory()
 
+    if mode in ("mt5", "mt5_paper", "mt5_demo"):
+        if mt5_paper_factory is not None:
+            return mt5_paper_factory()
+        try:
+            from mt5_broker import MT5Broker
+            return MT5Broker(mode="paper")
+        except Exception as exc:
+            raise BrokerConfigurationError(f"MT5 Paper broker initialization failed: {exc}") from exc
+
+    if mode == "mt5_live":
+        if mt5_live_factory is not None:
+            return mt5_live_factory()
+        try:
+            import config
+            login = getattr(config, "MT5_LOGIN", 0) or 0
+            password = getattr(config, "MT5_PASSWORD", "") or api_secret or ""
+            server = getattr(config, "MT5_SERVER", "") or exchange_id or ""
+            if not login or not password or not server:
+                raise BrokerConfigurationError(
+                    "MT5 Live mode requested, but credentials (MT5_LOGIN, MT5_PASSWORD, MT5_SERVER) are missing."
+                )
+            from mt5_broker import MT5Broker
+            return MT5Broker(
+                mode="live",
+                login=login,
+                password=password,
+                server=server,
+                path=getattr(config, "MT5_PATH", ""),
+                magic=getattr(config, "MT5_MAGIC", 112233),
+                gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+            )
+        except Exception as exc:
+            if isinstance(exc, BrokerConfigurationError):
+                raise
+            raise BrokerConfigurationError(f"MT5 Live broker initialization failed: {exc}") from exc
+
     if mode != "live":
         raise BrokerConfigurationError(
-            f"Unsupported broker mode {broker_mode!r}; expected 'paper' or 'live'."
+            f"Unsupported broker mode {broker_mode!r}; expected 'paper', 'live', 'mt5', or 'mt5_live'."
         )
 
     if not api_key or not api_secret:
@@ -588,16 +627,47 @@ def create_broker(
     api_key: str = "",
     api_secret: str = "",
     initial_balance: float = 10000.0,
+    mt5_mode: str = "paper",
+    mt5_login: int = 0,
+    mt5_password: str = "",
+    mt5_server: str = "MetaQuotes-Demo",
+    mt5_path: str = "",
+    mt5_magic: int = 112233,
+    mt5_gateway_url: str = "",
 ) -> Broker:
-    """Factory creating PaperBroker or live CCXTBroker with fail-closed safety."""
+    """Factory creating PaperBroker, live CCXTBroker, or MT5Broker (paper/live) with fail-closed safety."""
+    from mt5_broker import MT5Broker
+    effective_mode = (broker_mode or "").strip().lower()
+    if effective_mode == "mt5":
+        effective_mode = "mt5_live" if str(mt5_mode).lower() == "live" else "mt5_paper"
+
     return create_broker_fail_closed(
-        broker_mode=broker_mode,
+        broker_mode=effective_mode,
         api_key=api_key,
         api_secret=api_secret,
         exchange_id=exchange_id,
         paper_factory=lambda: PaperBroker(initial_balance=initial_balance),
         live_factory=lambda eid, k, s: CCXTBroker(exchange_id=eid, api_key=k, api_secret=s),
+        mt5_paper_factory=lambda: MT5Broker(
+            mode="paper",
+            login=mt5_login,
+            server=mt5_server,
+            initial_balance=initial_balance,
+            magic=mt5_magic,
+            path=mt5_path,
+            gateway_url=mt5_gateway_url,
+        ),
+        mt5_live_factory=lambda: MT5Broker(
+            mode="live",
+            login=mt5_login,
+            password=mt5_password,
+            server=mt5_server,
+            magic=mt5_magic,
+            path=mt5_path,
+            gateway_url=mt5_gateway_url,
+        ),
     )
+
 
 
 class CCXTBroker(Broker):

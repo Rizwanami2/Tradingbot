@@ -94,8 +94,19 @@ class ExecutionEngine:
                     api_key=getattr(config, "EXCHANGE_API_KEY", ""),
                     api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),
                     initial_balance=self.risk_manager.state.equity,
+                    mt5_mode=getattr(config, "MT5_MODE", "paper"),
+                    mt5_login=getattr(config, "MT5_LOGIN", 0),
+                    mt5_password=getattr(config, "MT5_PASSWORD", ""),
+                    mt5_server=getattr(config, "MT5_SERVER", "MetaQuotes-Demo"),
+                    mt5_path=getattr(config, "MT5_PATH", ""),
+                    mt5_magic=getattr(config, "MT5_MAGIC", 112233),
+                    mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
                 )
-            except Exception:
+            except Exception as e:
+                import config
+                mode = getattr(config, "BROKER_MODE", "paper").lower()
+                if mode in ("live", "mt5_live"):
+                    raise
                 try:
                     from execution import PaperBroker
                     self.broker = PaperBroker(initial_balance=self.risk_manager.state.equity)
@@ -356,6 +367,17 @@ class ExecutionEngine:
                 pos.unrealized_pnl = (curr_price - entry) * pos.remaining_size
             else:
                 pos.unrealized_pnl = (entry - curr_price) * pos.remaining_size
+
+            # Sync broker mark price if supported
+            if getattr(self, "broker", None) is not None:
+                try:
+                    if hasattr(self.broker, "update_mark_price"):
+                        self.broker.update_mark_price(sym, curr_price)
+                    elif hasattr(self.broker, "mark_price"):
+                        self.broker.mark_price(sym, curr_price)
+                except Exception:
+                    pass
+
 
             try:
                 import config as _cfg_sc
