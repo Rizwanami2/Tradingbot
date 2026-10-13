@@ -26,6 +26,7 @@ def main() -> None:
 
     for name in (
         "restore_production",
+        "wire_restore_backtest",
         "wire_production_fixes",
         "wire_strategy_fixes",
         "wire_multitrade",
