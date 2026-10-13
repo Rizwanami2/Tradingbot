@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reliable signal + paper autotrade pipeline (leverage, $100 micro size safe)."""
+"""Reliable signal + paper autotrade pipeline (leverage, entry plan, micro size)."""
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
@@ -19,7 +19,7 @@ def _norm_symbol(sym: str) -> str:
 def run_signal(
     symbol: str,
     *,
-    equity: float = 100.0,
+    equity: float = 1000.0,
     leverage: float = 20.0,
     source: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -29,7 +29,7 @@ def run_signal(
 
     sym = _norm_symbol(symbol)
     src = (source or getattr(config, "DEFAULT_DATA_SOURCE", "ccxt")).lower()
-    eq = float(equity if equity is not None else getattr(config, "INITIAL_EQUITY", 100.0))
+    eq = float(equity if equity is not None else getattr(config, "INITIAL_EQUITY", 1000.0))
     lev = float(leverage if leverage is not None else getattr(config, "DEFAULT_LEVERAGE", 20.0))
 
     risk = RiskManager(equity=eq, symbol=sym)
@@ -117,6 +117,44 @@ def run_signal(
             except Exception:
                 pass
 
+    # Best entry-level plan from all data sources
+    try:
+        from entry_level_planner import plan_best_entry, attach_plan_to_signal
+        dname = "FLAT"
+        sig = res.get("signal")
+        if sig is not None:
+            d = sig.get("direction")
+            dname = d.name if hasattr(d, "name") else str(d)
+        else:
+            longs = shorts = 0
+            for v in res.get("votes") or []:
+                dd = str(v.get("direction", "")).upper()
+                if dd == "LONG":
+                    longs += 1
+                elif dd == "SHORT":
+                    shorts += 1
+            if longs > shorts and longs >= 2:
+                dname = "LONG"
+            elif shorts > longs and shorts >= 2:
+                dname = "SHORT"
+        df = None
+        try:
+            from multi_agent_trading_bot import MarketDataFeed
+            feed = MarketDataFeed(symbol=sym, source=src)
+            data = feed.multi_tf(limit_1m=500)
+            if data and "1m" in data:
+                df = data["1m"]
+        except Exception:
+            pass
+        mark = float(res.get("price") or 0) or None
+        stop_hint = float(sig["stop"]) if sig and sig.get("stop") else None
+        plan = plan_best_entry(sym, df, direction=dname, mark=mark, stop_hint=stop_hint)
+        res["entry_plan"] = plan.to_dict()
+        if sig is not None:
+            res["signal"] = attach_plan_to_signal(sig, plan)
+    except Exception as _ep_err:
+        res["entry_plan_error"] = str(_ep_err)
+
     res["symbol"] = sym
     res["equity"] = eq
     res["leverage"] = risk.get_leverage()
@@ -162,6 +200,30 @@ def format_signal_message(res: Dict[str, Any]) -> str:
     else:
         sig_box = "\n🛡️ **Stay Flat.** Waiting for confluence.\n"
 
+    plan_txt = ""
+    try:
+        from entry_level_planner import EntryPlan, format_entry_plan
+        ep = res.get("entry_plan")
+        if ep:
+            plan = EntryPlan(
+                direction=str(ep.get("direction", "FLAT")),
+                mark=float(ep.get("mark") or 0),
+                best_entry=float(ep.get("best_entry") or 0),
+                entry_low=float(ep.get("entry_low") or 0),
+                entry_high=float(ep.get("entry_high") or 0),
+                stop=float(ep.get("stop") or 0),
+                tp1=float(ep.get("tp1") or 0),
+                tp2=float(ep.get("tp2") or 0),
+                confidence=float(ep.get("confidence") or 0),
+                levels=ep.get("levels") or {},
+                reasons=ep.get("reasons") or [],
+                invalid_above=ep.get("invalid_above"),
+                invalid_below=ep.get("invalid_below"),
+            )
+            plan_txt = format_entry_plan(plan)
+    except Exception:
+        plan_txt = ""
+
     votes_txt = "\n".join(vote_lines) if vote_lines else "_No votes_"
     return (
         f"📊 **Multi-Agent Evaluation for {sym}**\n"
@@ -169,6 +231,7 @@ def format_signal_message(res: Dict[str, Any]) -> str:
         f"**Agent Votes:**\n{votes_txt}\n\n"
         f"⚡ **Consensus:** `{status}`"
         f"{sig_box}"
+        f"{plan_txt}"
     )
 
 
