@@ -1326,105 +1326,25 @@ async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def delta_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Manage Delta Exchange India live broker, orders, and manual/auto leverage up to 200x."""
     from delta_broker import DeltaBroker
-    args = ctx.args or []
-    if not args or args[0].lower() in ("status", "info"):
-        if isinstance(engine.broker, DeltaBroker) or (hasattr(engine.broker, "get_account_info") and "Delta" in type(engine.broker).__name__):
-            info = engine.broker.get_account_info()
-            await update.message.reply_text(info.summary(), parse_mode="Markdown")
-        else:
-            bname = type(engine.broker).__name__ if engine.broker else "None"
-            await update.message.reply_text(
-                f"🇮🇳 **Delta Exchange India Live Broker**\n"
-                f"• **Current Broker:** `{bname}` (Delta Exchange is not active)\n\n"
-                f"🚀 **Connect Delta Exchange India Live:**\n"
-                f"• `/delta live <API_KEY> <API_SECRET>` — Connect live account for real trade execution\n"
-                f"• `/delta testnet <API_KEY> <API_SECRET>` — Connect testnet sandbox\n\n"
-                f"⚡ **Leverage Controls (Max 200x):**\n"
-                f"• `/delta leverage <1-200> [SYMBOL]` — Manually set order leverage (up to 200x)\n"
-                f"• `/delta auto_leverage [on|off]` — Dynamic auto-leverage up to 200x\n\n"
-                f"📋 **Positions & Orders:**\n"
-                f"• `/delta positions` — List open Delta Exchange positions\n"
-                f"• `/delta status` — Refresh balance & telemetry\n\n"
-                f"_Configure `DELTA_EXCHANGE_API_KEY` and `DELTA_EXCHANGE_API_SECRET` in `.env` for automatic connection._",
-                parse_mode="Markdown",
-            )
-        return
+    args = list(ctx.args or [])
 
-    sub = args[0].lower()
+    env_key = getattr(config, "DELTA_EXCHANGE_API_KEY", "") or os.getenv("DELTA_EXCHANGE_API_KEY", "")
+    env_secret = getattr(config, "DELTA_EXCHANGE_API_SECRET", "") or os.getenv("DELTA_EXCHANGE_API_SECRET", "")
 
-    if sub in ("live", "connect"):
-        key = args[1].strip() if len(args) > 1 else getattr(config, "DELTA_EXCHANGE_API_KEY", "")
-        secret = args[2].strip() if len(args) > 2 else getattr(config, "DELTA_EXCHANGE_API_SECRET", "")
-        base_url = args[3].strip() if len(args) > 3 else getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
-
-        if not key or not secret:
-            await update.message.reply_text(
-                "❌ **Delta Exchange India Connection Failed (Missing Credentials)**\n\n"
-                "Usage: `/delta live <API_KEY> <API_SECRET> [BASE_URL]`\n"
-                "Example: `/delta live d7a8... 9b2c... https://api.india.delta.exchange`\n\n"
-                "Or configure `DELTA_EXCHANGE_API_KEY` and `DELTA_EXCHANGE_API_SECRET` in `.env`.",
-                parse_mode="Markdown",
-            )
-            return
-
+    async def _connect_and_reply(key: str, secret: str, is_testnet: bool = False, base_url: str = ""):
         try:
             new_broker = DeltaBroker(
                 api_key=key,
                 api_secret=secret,
-                base_url=base_url,
-                is_testnet=False,
+                base_url=base_url or ("" if is_testnet else getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")),
+                is_testnet=is_testnet,
                 leverage=getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0),
                 auto_leverage=getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True),
                 max_leverage=getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0),
             )
             engine.broker = new_broker
-            config.BROKER_MODE = "delta_live"
             config.DELTA_EXCHANGE_API_KEY = key
             config.DELTA_EXCHANGE_API_SECRET = secret
-            config.DELTA_EXCHANGE_BASE_URL = base_url
-            await update.message.reply_text(
-                f"🟢 **Delta Exchange India Live Connected Successfully**\n"
-                f"• **Environment:** `LIVE` (Delta India)\n"
-                f"• **Wallet Balance:** `${new_broker.balance:,.2f}` {new_broker.currency}\n"
-                f"• **Equity:** `${new_broker.equity:,.2f}` {new_broker.currency}\n"
-                f"• **Available Margin:** `${new_broker.free_margin:,.2f}`\n"
-                f"• **Active Leverage:** `{new_broker.default_leverage:.0f}x` (Max: `{new_broker.max_leverage:.0f}x`)\n"
-                f"• **Auto-Leverage Engine:** {'🟢 ON (Dynamic up to 200x)' if new_broker.auto_leverage else '⚪ OFF'}\n"
-                f"• **Status:** Live deal execution active with server-side brackets & leverage.",
-                parse_mode="Markdown",
-            )
-        except Exception as exc:
-            logger.error("Delta Exchange India connect failed: %s", exc)
-            await update.message.reply_text(
-                f"🚫 **Delta Exchange India Connection Rejected (Fail-Closed)**\n"
-                f"Error: `{exc}`\n\n"
-                f"_Live mode aborted safely. Current broker remains unchanged._",
-                parse_mode="Markdown",
-            )
-
-    elif sub in ("testnet", "demo"):
-        key = args[1].strip() if len(args) > 1 else getattr(config, "DELTA_EXCHANGE_API_KEY", "")
-        secret = args[2].strip() if len(args) > 2 else getattr(config, "DELTA_EXCHANGE_API_SECRET", "")
-        if not key or not secret:
-            await update.message.reply_text(
-                "Usage: `/delta testnet <API_KEY> <API_SECRET>`\n"
-                "Connects to Delta Exchange Testnet (`https://cdn-ind.testnet.deltaex.org` / `https://testnet.delta.exchange`).\n\n"
-                "💡 *Did you create your keys on the live exchange?*\n"
-                "If trading with real funds on Delta Exchange India, connect using:\n"
-                "`/delta live <API_KEY> <API_SECRET>`",
-                parse_mode="Markdown",
-            )
-            return
-        try:
-            new_broker = DeltaBroker(
-                api_key=key,
-                api_secret=secret,
-                is_testnet=True,
-                leverage=getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0),
-                auto_leverage=getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True),
-                max_leverage=200.0,
-            )
-            engine.broker = new_broker
             if new_broker.is_testnet:
                 config.BROKER_MODE = "delta_testnet"
                 await update.message.reply_text(
@@ -1434,33 +1354,133 @@ async def delta_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"• **Wallet Balance:** `${new_broker.balance:,.2f}` {new_broker.currency}\n"
                     f"• **Equity:** `${new_broker.equity:,.2f}` {new_broker.currency}\n"
                     f"• **Available Margin:** `${new_broker.free_margin:,.2f}`\n"
-                    f"• **Max Leverage:** `200x`",
+                    f"• **Max Leverage:** `200x`\n"
+                    f"• **Status:** Active orders will now execute on Delta Exchange testnet.",
                     parse_mode="Markdown",
                 )
             else:
                 config.BROKER_MODE = "delta_live"
                 await update.message.reply_text(
                     f"🟢 **Delta Exchange India LIVE Connected Successfully**\n"
-                    f"*(Auto-detected Live API Key)*\n"
                     f"• **Environment:** `LIVE (Delta Exchange India)`\n"
                     f"• **Endpoint:** `{new_broker.base_url}`\n"
                     f"• **Wallet Balance:** `${new_broker.balance:,.2f}` {new_broker.currency}\n"
                     f"• **Equity:** `${new_broker.equity:,.2f}` {new_broker.currency}\n"
                     f"• **Available Margin:** `${new_broker.free_margin:,.2f}`\n"
-                    f"• **Max Leverage:** `200x`",
+                    f"• **Max Leverage:** `200x`\n"
+                    f"• **Status:** Live deal execution active with server-side brackets & leverage.",
                     parse_mode="Markdown",
                 )
+            return True
         except Exception as exc:
+            logger.error("Delta Exchange connection error: %s", exc)
             await update.message.reply_text(
                 f"❌ **Delta Exchange Connection Failed**\n\n"
                 f"`{exc}`\n\n"
                 f"🔍 **Troubleshooting Tips:**\n"
-                f"1. **Live Key**: If this API key is from **https://india.delta.exchange**, connect via `/delta live <API_KEY> <API_SECRET>`.\n"
-                f"2. **Testnet Key**: Testnet accounts are separate — register at **https://testnet.delta.exchange**.\n"
-                f"3. **IP Whitelist**: If enabled on Delta Exchange, remove the IP restriction or whitelist your server IP.\n"
+                f"1. **Live vs Testnet**: Testnet keys are created at `https://testnet.delta.exchange`. Live keys are created at `https://india.delta.exchange`.\n"
+                f"2. **Format**: Connect with `/delta live <API_KEY> <API_SECRET>` or `/delta testnet <API_KEY> <API_SECRET>`.\n"
+                f"3. **IP Whitelist**: If enabled on your Delta account, ensure your server IP is whitelisted.\n"
                 f"4. **Permissions**: Make sure 'Read' and 'Trade' permissions are active on the key.",
                 parse_mode="Markdown",
             )
+            return False
+
+    # 1. No arguments or status
+    if not args or args[0].lower() in ("status", "info"):
+        if isinstance(engine.broker, DeltaBroker) or (hasattr(engine.broker, "get_account_info") and "Delta" in type(engine.broker).__name__):
+            info = engine.broker.get_account_info()
+            await update.message.reply_text(info.summary(), parse_mode="Markdown")
+            return
+        elif env_key and env_secret:
+            # Credentials present in environment — auto-connect immediately!
+            is_test = getattr(config, "DELTA_EXCHANGE_TESTNET", False)
+            await _connect_and_reply(env_key, env_secret, is_testnet=is_test)
+            return
+        else:
+            bname = type(engine.broker).__name__ if engine.broker else "None"
+            await update.message.reply_text(
+                f"🇮🇳 **Delta Exchange India Live Broker**\n"
+                f"• **Current Broker:** `{bname}` (Delta Exchange is not active)\n\n"
+                f"🚀 **Connect Delta Exchange India Live:**\n"
+                f"• `/delta live <API_KEY> <API_SECRET>` — Connect live account for real trade execution\n"
+                f"• `/delta testnet <API_KEY> <API_SECRET>` — Connect testnet sandbox\n"
+                f"• `/delta <API_KEY> <API_SECRET>` — Direct connection (auto-detects Live/Testnet)\n\n"
+                f"⚡ **Leverage Controls (Max 200x):**\n"
+                f"• `/delta leverage <1-200> [SYMBOL]` — Manually set order leverage (up to 200x)\n"
+                f"• `/delta auto_leverage [on|off]` — Dynamic auto-leverage up to 200x\n\n"
+                f"📋 **Positions & Orders:**\n"
+                f"• `/delta positions` — List open Delta Exchange positions\n"
+                f"• `/delta status` — Refresh balance & telemetry\n\n"
+                f"_Tip: Set `DELTA_EXCHANGE_API_KEY` and `DELTA_EXCHANGE_API_SECRET` in `.env` for zero-click automatic connection._",
+                parse_mode="Markdown",
+            )
+            return
+
+    sub = args[0].lower()
+
+    # 2. Command word with zero extra args: /delta live, /delta testnet, /delta connect, /broker delta
+    if sub in ("delta", "connect", "on", "enable") and len(args) == 1:
+        if env_key and env_secret:
+            is_test = getattr(config, "DELTA_EXCHANGE_TESTNET", False)
+            await _connect_and_reply(env_key, env_secret, is_testnet=is_test)
+            return
+        else:
+            await update.message.reply_text(
+                "❌ **Missing Delta Exchange API Credentials**\n\n"
+                "Please connect using:\n"
+                "`/delta live <API_KEY> <API_SECRET>`\n"
+                "or configure `DELTA_EXCHANGE_API_KEY` and `DELTA_EXCHANGE_API_SECRET` in `.env`.",
+                parse_mode="Markdown",
+            )
+            return
+
+    # 3. /delta live [KEY] [SECRET]
+    if sub in ("live", "connect"):
+        key = args[1].strip() if len(args) > 1 else env_key
+        secret = args[2].strip() if len(args) > 2 else env_secret
+        base_url = args[3].strip() if len(args) > 3 else getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+        if not key or not secret:
+            await update.message.reply_text(
+                "❌ **Missing Credentials**\n"
+                "Usage: `/delta live <API_KEY> <API_SECRET>`",
+                parse_mode="Markdown",
+            )
+            return
+        await _connect_and_reply(key, secret, is_testnet=False, base_url=base_url)
+        return
+
+    # 4. /delta testnet [KEY] [SECRET]
+    if sub in ("testnet", "demo"):
+        key = args[1].strip() if len(args) > 1 else env_key
+        secret = args[2].strip() if len(args) > 2 else env_secret
+        if not key or not secret:
+            await update.message.reply_text(
+                "Usage: `/delta testnet <API_KEY> <API_SECRET>`\n"
+                "Connects to Delta Exchange Testnet (`https://cdn-ind.testnet.deltaex.org` / `https://testnet.delta.exchange`).\n\n"
+                "💡 *Did you create your keys on the live exchange?*\n"
+                "If trading real money on Delta Exchange India, connect with:\n"
+                "`/delta live <API_KEY> <API_SECRET>`",
+                parse_mode="Markdown",
+            )
+            return
+        await _connect_and_reply(key, secret, is_testnet=True)
+        return
+
+    # 5. Direct keys: /delta <API_KEY> <API_SECRET> (user omitted the word "live" or "testnet")
+    if len(args) >= 2 and sub not in ("leverage", "lev", "auto_leverage", "autolev", "positions", "pos"):
+        key = args[0].strip()
+        secret = args[1].strip()
+        await _connect_and_reply(key, secret, is_testnet=False)
+        return
+
+    # 6. Single argument with delimiter (e.g. KEY:SECRET or KEY,SECRET)
+    if len(args) == 1 and any(delim in args[0] for delim in (":", ",", "|")):
+        for delim in (":", ",", "|"):
+            if delim in args[0]:
+                parts = args[0].split(delim, 1)
+                await _connect_and_reply(parts[0].strip(), parts[1].strip(), is_testnet=False)
+                return
 
     elif sub in ("leverage", "lev"):
         if len(args) < 2:
@@ -1607,6 +1627,8 @@ async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
     elif mode in ("delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet"):
+        if len(args) > 1:
+            ctx.args = list(args[1:])
         await delta_command(update, ctx)
     elif mode in ("mt5", "mt5_paper", "mt5_live"):
         await mt5_command(update, ctx)

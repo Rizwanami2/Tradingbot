@@ -117,6 +117,9 @@ DELTA_EXCHANGE_DEFAULT_LEVERAGE = _safe_float(os.getenv("DELTA_DEFAULT_LEVERAGE"
 DELTA_EXCHANGE_AUTO_LEVERAGE = os.getenv("DELTA_AUTO_LEVERAGE", "true").lower() in ("true", "1", "yes", "on")
 DELTA_EXCHANGE_MAX_LEVERAGE = _safe_float(os.getenv("DELTA_MAX_LEVERAGE"), 200.0)
 
+if (DELTA_EXCHANGE_API_KEY and DELTA_EXCHANGE_API_SECRET) and BROKER_MODE in ("paper", "default") and not MT5_ENABLED:
+    BROKER_MODE = "delta_testnet" if DELTA_EXCHANGE_TESTNET else "delta_live"
+
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 2)
 ALLOWED_TRADING_SYMBOLS = {"BTCUSDT", "XAUUSD", "BTCUSD", "XAUTUSD", "PAXGUSDT", "GOLD", "XAU", "BTC", "ETHUSD", "ETHUSDT"}
 

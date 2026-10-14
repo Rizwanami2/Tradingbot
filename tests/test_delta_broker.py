@@ -454,6 +454,13 @@ class TestDeltaBroker(unittest.TestCase):
                 self.assertIsInstance(engine.broker, DeltaBroker)
                 self.assertIn("Connected Successfully", update.message.reply_text.call_args[0][0])
 
+                # Test direct /delta <KEY> <SECRET> without "live" keyword
+                ctx.args = ["test_key_direct", "test_secret_direct"]
+                await delta_command(update, ctx)
+                self.assertIsInstance(engine.broker, DeltaBroker)
+                self.assertEqual(engine.broker.api_key, "test_key_direct")
+                self.assertIn("Connected Successfully", update.message.reply_text.call_args[0][0])
+
                 # Test /delta leverage 150
                 ctx.args = ["leverage", "150"]
                 await delta_command(update, ctx)
