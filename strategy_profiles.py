@@ -38,7 +38,7 @@ class StrategyProfile:
     scalp_sl_usd: float = 3.00      # $3.00 tight risk cut in USD
     poll_interval: int = 2          # Fast 2s polling in autotrade
     fast_poll_interval: int = 1     # 1s poll when monitoring positions
-    max_open_trades: int = 5        # Up to 5 slots
+    max_open_trades: int = 10       # Up to 10 slots
 
 
 DEFAULT_PROFILES = {
@@ -74,7 +74,7 @@ DEFAULT_PROFILES = {
         scalp_sl_usd=3.00,
         poll_interval=2,
         fast_poll_interval=1,
-        max_open_trades=5,
+        max_open_trades=10,
     ),
     "swing": StrategyProfile(
         name="swing",
@@ -190,7 +190,7 @@ def apply_profile(
     if engine is not None:
         engine.scalp_mode = getattr(p, "is_scalp", False)
         engine.fast_market_fill = getattr(p, "fast_market_fill", False)
-        engine.max_open_trades = getattr(p, "max_open_trades", 5)
+        engine.max_open_trades = getattr(p, "max_open_trades", 10)
         if getattr(p, "is_scalp", False):
             engine.scalp_tp_usd = getattr(p, "scalp_tp_usd", 2.50)
             engine.scalp_sl_usd = getattr(p, "scalp_sl_usd", 3.00)
@@ -199,6 +199,7 @@ def apply_profile(
 
     if config is not None:
         config.CURRENT_PROFILE = p.name
+        config.MAX_OPEN_TRADES = getattr(p, "max_open_trades", 10)
         if getattr(p, "is_scalp", False):
             config.SCALP_ENABLED = True
             config.SCALP_TAKE_PROFIT_USD = getattr(p, "scalp_tp_usd", 2.50)
@@ -218,6 +219,6 @@ def apply_profile(
             f"  - Micro TP: `{p.scalp_tp_pct:.2f}%` move or `${p.scalp_tp_usd:.2f}` USD profit\n"
             f"  - Micro SL: `{p.scalp_sl_pct:.2f}%` move or `${p.scalp_sl_usd:.2f}` USD loss\n"
             f"  - Polling: `{p.poll_interval}s` fast frequency | Market Fills: `Instant`\n"
-            f"  - Max Open Slots: `{p.max_open_trades}` concurrent trades"
+            f"  - Max Open Slots: `{p.max_open_trades}` concurrent trades (Multi-position Gold & BTC)"
         )
     return p, summary

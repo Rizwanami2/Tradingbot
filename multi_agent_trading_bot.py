@@ -778,7 +778,11 @@ def run_live(args=None):
                     send_telegram(msg)
 
                 # Check if we should evaluate for a new entry setup
-                if symbol not in engine.active_positions and symbol not in engine.pending_setups:
+                is_scalping = getattr(engine, "scalp_mode", False) or getattr(arb, "is_scalp", False)
+                max_trades = getattr(engine, "max_open_trades", 10) or 10
+                open_n = len(engine.active_positions) + len(engine.pending_setups)
+                can_open = (open_n < max_trades) if is_scalping else (symbol not in engine.active_positions and symbol not in engine.pending_setups and open_n < max_trades)
+                if can_open:
                     daily = data.get("daily")
                     if daily is None or getattr(daily, "empty", True):
                         daily = pd.DataFrame()

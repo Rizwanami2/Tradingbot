@@ -108,7 +108,7 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
 ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes", "on")
 
-MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 5)
+MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 10)
 ALLOWED_TRADING_SYMBOLS = {"BTCUSDT", "XAUUSD", "BTCUSD", "XAUTUSD", "PAXGUSDT", "GOLD", "XAU", "BTC"}
 
 

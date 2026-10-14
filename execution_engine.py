@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from risk_manager import RiskManager
 
@@ -71,6 +71,87 @@ class TradeOrder:
         return d
 
 
+class PositionDict(dict):
+    """
+    Intelligent collection for managing active trade positions and pending setups.
+    Allows multiple concurrent positions per symbol (Gold and BTC) up to max slots (10).
+    Seamlessly supports lookup/indexing by order ID ('ORD-...') or symbol ('XAUUSD', 'BTCUSDT').
+    Maintains 100% backward compatibility with legacy dict operations and tests.
+    """
+
+    def __contains__(self, key: object) -> bool:
+        if super().__contains__(key):
+            return True
+        key_str = str(key).upper()
+        for order in super().values():
+            if getattr(order, "symbol", "").upper() == key_str or getattr(order, "id", "") == key:
+                return True
+        return False
+
+    def __getitem__(self, key: str) -> TradeOrder:
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        key_str = str(key).upper()
+        matches = [o for o in super().values() if getattr(o, "symbol", "").upper() == key_str]
+        if matches:
+            return matches[-1]
+        for o in super().values():
+            if getattr(o, "id", "") == key:
+                return o
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, order: TradeOrder) -> None:
+        oid = getattr(order, "id", None)
+        sym = getattr(order, "symbol", None)
+        if not sym and str(key).isalpha():
+            try:
+                order.symbol = str(key).upper()
+            except Exception:
+                pass
+        store_key = oid if oid else str(key)
+        super().__setitem__(store_key, order)
+
+    def __delitem__(self, key: str) -> None:
+        if super().__contains__(key):
+            super().__delitem__(key)
+            return
+        key_str = str(key).upper()
+        to_del = [k for k, v in super().items() if getattr(v, "symbol", "").upper() == key_str or getattr(v, "id", "") == key]
+        if to_del:
+            for k in to_del:
+                super().__delitem__(k)
+            return
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def pop(self, key: str, *args) -> Any:
+        try:
+            val = self[key]
+            del self[key]
+            return val
+        except KeyError:
+            if args:
+                return args[0]
+            raise
+
+    def get_all(self, symbol: Optional[str] = None) -> List[TradeOrder]:
+        """Return all active orders matching symbol, or all orders if symbol is None."""
+        if symbol is None:
+            return list(super().values())
+        sym_u = str(symbol).upper()
+        return [o for o in super().values() if getattr(o, "symbol", "").upper() == sym_u]
+
+    def count_for_symbol(self, symbol: str) -> int:
+        """Count active orders for a symbol."""
+        sym_u = str(symbol).upper()
+        return sum(1 for o in super().values() if getattr(o, "symbol", "").upper() == sym_u)
+
+
 class ExecutionEngine:
     """
     Automated execution engine that monitors setup levels, triggers entries,
@@ -82,6 +163,7 @@ class ExecutionEngine:
         risk_manager: RiskManager,
         event_callback: Optional[Callable] = None,
         broker: Optional[object] = None,
+        max_open_trades: Optional[int] = None,
     ):
         self.risk_manager = risk_manager
         self.event_callback = event_callback
@@ -115,17 +197,20 @@ class ExecutionEngine:
                     self.broker = PaperBroker(initial_balance=self.risk_manager.state.equity)
                 except Exception:
                     self.broker = None
-        self.pending_setups: Dict[str, TradeOrder] = {}
-        self.active_positions: Dict[str, TradeOrder] = {}
+        self.pending_setups: PositionDict = PositionDict()
+        self.active_positions: PositionDict = PositionDict()
         self.trade_history: List[TradeOrder] = []
         self._order_counter: int = 0
         # Prevent duplicate orders after any ambiguous broker response.
         self.execution_halted: bool = False
-        try:
-            import config as _cfg_max
-            self.max_open_trades = int(getattr(_cfg_max, "MAX_OPEN_TRADES", 5) or 5)
-        except Exception:
-            self.max_open_trades = 5
+        if max_open_trades is not None:
+            self.max_open_trades = int(max_open_trades)
+        else:
+            try:
+                import config as _cfg_max
+                self.max_open_trades = int(getattr(_cfg_max, "MAX_OPEN_TRADES", 10) or 10)
+            except Exception:
+                self.max_open_trades = 10
         self.scalp_mode: bool = False
         self.fast_market_fill: bool = False
         self.scalp_tp_usd: float = 2.50
@@ -141,7 +226,7 @@ class ExecutionEngine:
         return len(self.active_positions) + len(self.pending_setups)
 
     def slots_available(self) -> int:
-        return max(0, int(getattr(self, "max_open_trades", 5)) - self.open_trade_count())
+        return max(0, int(getattr(self, "max_open_trades", 10)) - self.open_trade_count())
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -159,11 +244,26 @@ class ExecutionEngine:
         import config
         if hasattr(config, "is_trading_allowed") and not config.is_trading_allowed(symbol):
             raise ValueError(f"Trading {symbol} is disabled. Only Gold (XAUUSD) and Bitcoin (BTCUSDT) are permitted.")
-        already = symbol in self.active_positions or symbol in self.pending_setups
-        if not already and self.open_trade_count() >= int(getattr(self, "max_open_trades", 5)):
-            raise RuntimeError(
-                f"Max concurrent trades reached ({getattr(self, 'max_open_trades', 5)})."
-            )
+        
+        is_scalp_req = bool(sig.get("is_scalp") or getattr(self, "scalp_mode", False))
+        max_trades = int(getattr(self, "max_open_trades", 10) or 10)
+
+        # Check maximum concurrent open trades limit
+        if self.open_trade_count() >= max_trades:
+            if not is_scalp_req and symbol in self.pending_setups:
+                # In standard mode, re-registering existing pending symbol replaces it without consuming new slot
+                pass
+            else:
+                raise RuntimeError(
+                    f"Max concurrent trades reached ({max_trades})."
+                )
+
+        if not is_scalp_req and symbol in self.pending_setups:
+            try:
+                del self.pending_setups[symbol]
+            except Exception:
+                pass
+
         direction = sig["direction"].name if hasattr(sig["direction"], "name") else str(sig["direction"]).upper()
         entry = float(sig["entry"])
         stop = float(sig["stop"])
@@ -218,13 +318,13 @@ class ExecutionEngine:
             fast_market_fill=bool(sig.get("fast_market_fill") or getattr(self, "fast_market_fill", False)),
         )
 
-        self.pending_setups[symbol] = order
+        self.pending_setups[order.id] = order
         self._dispatch_event("SETUP_REGISTERED", order, f"Setup registered @ {entry:.2f}. Waiting for trigger.")
         return order
 
     def cancel_setup(self, symbol: str, reason: str = "User cancelled") -> Optional[TradeOrder]:
         """Manually cancels a pending setup before it executes."""
-        sym = symbol.upper()
+        sym = str(symbol).strip()
         if sym in self.pending_setups:
             setup = self.pending_setups[sym]
             setup.status = OrderStatus.CANCELLED
@@ -232,7 +332,7 @@ class ExecutionEngine:
             setup.closed_at = datetime.now(timezone.utc).isoformat()
             self.trade_history.append(setup)
             del self.pending_setups[sym]
-            msg = f"🚫 **SETUP CANCELLED** ({sym}): {reason}"
+            msg = f"🚫 **SETUP CANCELLED** ({setup.symbol}): {reason}"
             self._dispatch_event("SETUP_CANCELLED", setup, msg)
             return setup
         return None
@@ -253,9 +353,10 @@ class ExecutionEngine:
         # ----------------------------------------------------
         # 1. Check Pending Setup Execution & Invalidation
         # ----------------------------------------------------
-        just_executed = False
-        if sym in self.pending_setups:
-            setup = self.pending_setups[sym]
+        matching_setups = list(self.pending_setups.get_all(sym))
+        for setup in matching_setups:
+            if setup.id not in self.pending_setups and setup not in self.pending_setups.values():
+                continue
             setup.current_price = curr_price
 
             # Invalidate setup if market breaches stop loss before entry fill
@@ -270,7 +371,7 @@ class ExecutionEngine:
                 setup.close_reason = f"Setup invalidated: market breached stop loss ({setup.stop_loss:.2f}) prior to fill."
                 setup.closed_at = datetime.now(timezone.utc).isoformat()
                 self.trade_history.append(setup)
-                del self.pending_setups[sym]
+                self.pending_setups.pop(setup.id, None)
                 ev = {
                     "event": "SETUP_INVALIDATED",
                     "order": setup,
@@ -283,97 +384,104 @@ class ExecutionEngine:
                 }
                 events.append(ev)
                 self._dispatch_event(ev["event"], setup, ev["message"])
-            else:
-                should_execute = False
-                exec_price = setup.entry_level
+                continue
 
-                if getattr(self, "scalp_mode", False) or getattr(setup, "is_scalp", False) or getattr(setup, "fast_market_fill", False):
+            should_execute = False
+            exec_price = setup.entry_level
+
+            if getattr(self, "scalp_mode", False) or getattr(setup, "is_scalp", False) or getattr(setup, "fast_market_fill", False):
+                should_execute = True
+                exec_price = curr_price
+            # LONG TRIGGER: Price trades at or touches entry level
+            elif setup.direction == "LONG":
+                if low <= setup.entry_level <= high or curr_price <= setup.entry_level * 1.0008:
                     should_execute = True
-                    exec_price = curr_price
-                # LONG TRIGGER: Price trades at or touches entry level
-                elif setup.direction == "LONG":
-                    if low <= setup.entry_level <= high or curr_price <= setup.entry_level * 1.0008:
-                        should_execute = True
-                        exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
+                    exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
 
-                # SHORT TRIGGER: Price trades at or touches entry level
-                elif setup.direction == "SHORT":
-                    if low <= setup.entry_level <= high or curr_price >= setup.entry_level * 0.9992:
-                        should_execute = True
-                        exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
+            # SHORT TRIGGER: Price trades at or touches entry level
+            elif setup.direction == "SHORT":
+                if low <= setup.entry_level <= high or curr_price >= setup.entry_level * 0.9992:
+                    should_execute = True
+                    exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
 
-                if should_execute:
-                    # Never create a local OPEN position until the broker confirms a full fill.
+            if should_execute:
+                # Never create a local OPEN position until the broker confirms a full fill.
+                try:
+                    if getattr(self, "broker", None) is None:
+                        raise RuntimeError("No broker is configured; refusing local-only execution.")
+                    import config
+                    if getattr(config, "BROKER_MODE", "paper").lower() == "live":
+                        raise RuntimeError("Live entries are blocked until exchange-side SL/TP placement and verification are implemented.")
+                    side = "buy" if setup.direction == "LONG" else "sell"
+                    broker_order = self.broker.place_order(
+                        symbol=setup.symbol, side=side, qty=setup.lots, price=exec_price,
+                        stop_loss=setup.stop_loss, take_profit=setup.tp1,
+                    )
+                    broker_status = str(getattr(broker_order, "status", "")).lower()
+                    filled_qty = float(getattr(broker_order, "filled_qty", 0.0) or 0.0)
+                    actual_price = getattr(broker_order, "filled_price", None)
+                    if broker_status != "filled" or filled_qty + 1e-12 < setup.lots or actual_price is None or float(actual_price) <= 0:
+                        raise RuntimeError(f"Broker fill not confirmed (status={broker_status!r}, filled_qty={filled_qty}).")
+                    exec_price = float(actual_price)
+                except Exception as ex:
                     try:
-                        if getattr(self, "broker", None) is None:
-                            raise RuntimeError("No broker is configured; refusing local-only execution.")
-                        import config
-                        if getattr(config, "BROKER_MODE", "paper").lower() == "live":
-                            raise RuntimeError("Live entries are blocked until exchange-side SL/TP placement and verification are implemented.")
-                        side = "buy" if setup.direction == "LONG" else "sell"
-                        broker_order = self.broker.place_order(
-                            symbol=setup.symbol, side=side, qty=setup.lots, price=exec_price,
-                            stop_loss=setup.stop_loss, take_profit=setup.tp1,
-                        )
-                        broker_status = str(getattr(broker_order, "status", "")).lower()
-                        filled_qty = float(getattr(broker_order, "filled_qty", 0.0) or 0.0)
-                        actual_price = getattr(broker_order, "filled_price", None)
-                        if broker_status != "filled" or filled_qty + 1e-12 < setup.lots or actual_price is None or float(actual_price) <= 0:
-                            raise RuntimeError(f"Broker fill not confirmed (status={broker_status!r}, filled_qty={filled_qty}).")
-                        exec_price = float(actual_price)
-                    except Exception as ex:
-                        try:
-                            import config as _cfg_halt
-                            _hm = str(getattr(_cfg_halt, "BROKER_MODE", "paper")).lower()
-                        except Exception:
-                            _hm = "paper"
-                        if _hm == "live":
-                            self.execution_halted = True
-                        setup.status = OrderStatus.CANCELLED
-                        setup.close_reason = f"Execution failed: {ex}"
-                        setup.closed_at = datetime.now(timezone.utc).isoformat()
-                        self.trade_history.append(setup)
-                        self.pending_setups.pop(sym, None)
-                        ev = {
-                            "event": "BROKER_EXECUTION_FAILED", "order": setup, "price": curr_price,
-                            "message": ("EXECUTION HALTED: broker fill/protection was not confirmed. "
-                                        "No local OPEN position was created. Reconcile exchange orders and positions before restarting. "
-                                        f"Reason: {type(ex).__name__}: {ex}"),
-                        }
-                        events.append(ev)
-                        self._dispatch_event(ev["event"], setup, ev["message"])
-                    else:
-                        setup.status = OrderStatus.OPEN
-                        setup.executed_at = datetime.now(timezone.utc).isoformat()
-                        setup.executed_price = exec_price
-                        setup.current_price = exec_price
-                        setup.highest_price = exec_price
-                        setup.lowest_price = exec_price
-                        setup.remaining_size = setup.size
-                        setup.remaining_lots = setup.lots
-                        self.active_positions[sym] = setup
-                        del self.pending_setups[sym]
-                        just_executed = True
-                        ev = {
-                            "event": "TRADE_EXECUTED", "order": setup, "price": exec_price,
-                            "message": ((
-                                f"✅ **PAPER TRADE CONFIRMED**\n"
-                                f"`{setup.symbol}` **{setup.direction}** @ `${exec_price:,.4f}`\n"
-                                f"SL `${setup.stop_loss:,.2f}` | TP1 `${setup.tp1:,.2f}` | Lots `{setup.lots}`\n"
-                                f"_Paper mode — no real funds risked._"
-                            )),
-                        }
-                        events.append(ev)
-                        self._dispatch_event(ev["event"], setup, ev["message"])
+                        import config as _cfg_halt
+                        _hm = str(getattr(_cfg_halt, "BROKER_MODE", "paper")).lower()
+                    except Exception:
+                        _hm = "paper"
+                    if _hm == "live":
+                        self.execution_halted = True
+                    setup.status = OrderStatus.CANCELLED
+                    setup.close_reason = f"Execution failed: {ex}"
+                    setup.closed_at = datetime.now(timezone.utc).isoformat()
+                    self.trade_history.append(setup)
+                    self.pending_setups.pop(setup.id, None)
+                    ev = {
+                        "event": "BROKER_EXECUTION_FAILED", "order": setup, "price": curr_price,
+                        "message": ("EXECUTION HALTED: broker fill/protection was not confirmed. "
+                                    "No local OPEN position was created. Reconcile exchange orders and positions before restarting. "
+                                    f"Reason: {type(ex).__name__}: {ex}"),
+                    }
+                    events.append(ev)
+                    self._dispatch_event(ev["event"], setup, ev["message"])
+                else:
+                    setup.status = OrderStatus.OPEN
+                    setup.executed_at = datetime.now(timezone.utc).isoformat()
+                    setup.executed_price = exec_price
+                    setup.current_price = exec_price
+                    setup.highest_price = exec_price
+                    setup.lowest_price = exec_price
+                    setup.remaining_size = setup.size
+                    setup.remaining_lots = setup.lots
+                    setup._just_executed = True
+                    self.active_positions[setup.id] = setup
+                    self.pending_setups.pop(setup.id, None)
+                    ev = {
+                        "event": "TRADE_EXECUTED", "order": setup, "price": exec_price,
+                        "message": ((
+                            f"✅ **PAPER TRADE CONFIRMED**\n"
+                            f"`{setup.symbol}` **{setup.direction}** @ `${exec_price:,.4f}`\n"
+                            f"SL `${setup.stop_loss:,.2f}` | TP1 `${setup.tp1:,.2f}` | Lots `{setup.lots}`\n"
+                            f"_Paper mode — no real funds risked._"
+                        )),
+                    }
+                    events.append(ev)
+                    self._dispatch_event(ev["event"], setup, ev["message"])
+
         # ----------------------------------------------------
         # 2. Manage Open Positions
         # ----------------------------------------------------
-        if sym in self.active_positions:
-            pos = self.active_positions[sym]
+        matching_positions = list(self.active_positions.get_all(sym))
+        for pos in matching_positions:
+            if pos.id not in self.active_positions and pos not in self.active_positions.values():
+                continue
             pos.current_price = curr_price
             is_long = pos.direction == "LONG"
             entry = pos.executed_price or pos.entry_level
             initial_risk = abs(entry - pos.stop_loss)
+            just_executed = getattr(pos, "_just_executed", False)
+            if hasattr(pos, "_just_executed"):
+                delattr(pos, "_just_executed")
 
             if not just_executed:
                 pos.highest_price = max(pos.highest_price, high)
@@ -398,7 +506,6 @@ class ExecutionEngine:
                 except Exception:
                     pass
 
-
             try:
                 import config as _cfg_sc
                 scalp_cfg = bool(getattr(_cfg_sc, "SCALP_ENABLED", False))
@@ -408,6 +515,7 @@ class ExecutionEngine:
                 scalp_sl_pct = float(getattr(self, "scalp_sl_pct", None) or getattr(_cfg_sc, "SCALP_STOP_LOSS_PCT", 0.12) or 0)
             except Exception:
                 scalp_cfg, scalp_usd, scalp_pct, scalp_sl_usd, scalp_sl_pct = False, 2.5, 0.10, 3.0, 0.12
+
             scalp_on = getattr(self, "scalp_mode", False) or (
                 scalp_cfg and (
                     "scalp" in str(getattr(pos, "setup_reason", "")).lower()
@@ -415,6 +523,7 @@ class ExecutionEngine:
                     or (not pos.tp1 and not pos.tp2)
                 )
             )
+
             # 1. Micro Scalp Take Profit (Fast Capital Accumulation)
             if scalp_on and pos.unrealized_pnl > 0:
                 hit_pct = False
@@ -433,20 +542,20 @@ class ExecutionEngine:
                     except Exception:
                         pass
                     self.trade_history.append(pos)
-                    del self.active_positions[sym]
+                    self.active_positions.pop(pos.id, None)
                     if getattr(self, "broker", None):
                         try:
                             self.broker.close_position(sym, price=curr_price)
                         except Exception:
                             pass
                     msg = (
-                        f"⚡ **SCALP AUTO-CLOSE** `{sym}`\n"
+                        f"⚡ **SCALP AUTO-CLOSE** `{sym}` [#{pos.id}]\n"
                         f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
                         f"_Fast scalp profit target hit_"
                     )
                     events.append({"event": "SCALP_CLOSE", "order": pos, "price": curr_price, "message": msg})
                     self._dispatch_event("SCALP_CLOSE", pos, msg)
-                    return events
+                    continue
 
             # 2. Micro Scalp Stop Loss (Fast Loss Cut to Preserve Capital)
             if scalp_on and pos.unrealized_pnl < 0:
@@ -466,20 +575,20 @@ class ExecutionEngine:
                     except Exception:
                         pass
                     self.trade_history.append(pos)
-                    del self.active_positions[sym]
+                    self.active_positions.pop(pos.id, None)
                     if getattr(self, "broker", None):
                         try:
                             self.broker.close_position(sym, price=curr_price)
                         except Exception:
                             pass
                     msg = (
-                        f"🛡️ **SCALP STOP LOSS CUT** `{sym}`\n"
+                        f"🛡️ **SCALP STOP LOSS CUT** `{sym}` [#{pos.id}]\n"
                         f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
                         f"_Tight micro stop loss protection triggered_"
                     )
                     events.append({"event": "SCALP_SL", "order": pos, "price": curr_price, "message": msg})
                     self._dispatch_event("SCALP_SL", pos, msg)
-                    return events
+                    continue
 
             # (A) Check Liquidation barrier for leveraged positions
             if pos.liquidation_price and pos.leverage > 1.0:
@@ -491,9 +600,12 @@ class ExecutionEngine:
                     pos.status = OrderStatus.CLOSED
                     pos.closed_at = datetime.now(timezone.utc).isoformat()
                     pos.close_reason = f"Margin Liquidation Call ({pos.leverage:.0f}x)"
-                    self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=-1.0)
+                    try:
+                        self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=-1.0)
+                    except Exception:
+                        pass
                     self.trade_history.append(pos)
-                    del self.active_positions[sym]
+                    self.active_positions.pop(pos.id, None)
 
                     ev = {
                         "event": "TRADE_LIQUIDATED",
@@ -501,14 +613,14 @@ class ExecutionEngine:
                         "exit_price": pos.liquidation_price,
                         "final_pnl": pos.realized_pnl,
                         "message": (
-                            f"💥 **POSITION LIQUIDATED** ({pos.symbol})\n"
+                            f"💥 **POSITION LIQUIDATED** ({pos.symbol} [#{pos.id}])\n"
                             f"Liquidation Price Hit: `${pos.liquidation_price:,.2f}`\n"
                             f"Leverage: `{pos.leverage:.0f}x` | Margin Lost: `${pos.margin_required:,.2f}`"
                         ),
                     }
                     events.append(ev)
                     self._dispatch_event(ev["event"], pos, ev["message"])
-                    return events
+                    continue
 
             # (B) Check Progressive Auto Break-Even
             old_stop = pos.stop_loss
@@ -525,7 +637,7 @@ class ExecutionEngine:
                         "order": pos,
                         "new_stop": be_stop,
                         "message": (
-                            f"🛡️ **AUTO BREAK-EVEN LOCKED** ({pos.symbol})\n"
+                            f"🛡️ **AUTO BREAK-EVEN LOCKED** ({pos.symbol} [#{pos.id}])\n"
                             f"Stop Loss advanced: `${old_stop:,.2f}` ➔ `${be_stop:,.2f}`\n"
                             f"Stage: {be_reason}"
                         ),
@@ -566,7 +678,7 @@ class ExecutionEngine:
                     "exit_price": pos.tp1,
                     "realized_pnl": partial_pnl,
                     "message": (
-                        f"🎯 **TARGET 1 HIT (+1.5R)** ({pos.symbol})\n"
+                        f"🎯 **TARGET 1 HIT (+1.5R)** ({pos.symbol} [#{pos.id}])\n"
                         f"50% closed @ `${pos.tp1:,.2f}` | PnL: `+${partial_pnl:,.2f}`\n"
                         f"Stop Loss secured at Break-Even (`${pos.stop_loss:,.2f}`).\n"
                         f"Remaining lots: `{pos.remaining_lots}` trailing towards TP2."
@@ -575,13 +687,11 @@ class ExecutionEngine:
                 events.append(ev)
                 self._dispatch_event(ev["event"], pos, ev["message"])
 
-            
             # (C2) Structure-based trailing after TP1
-            if pos.partials_done >= 1 and sym in self.active_positions:
+            if pos.partials_done >= 1 and (pos.id in self.active_positions or pos in self.active_positions.values()):
                 try:
                     from execution_enhancements import apply_structure_trail
                     atr_proxy = abs((pos.executed_price or pos.entry_level) - pos.stop_loss) / 1.2
-                    # Build minimal OHLC window from recent highs/lows tracked on the position
                     import pandas as _pd
                     _df = _pd.DataFrame({
                         "high": [pos.highest_price, high],
@@ -589,7 +699,6 @@ class ExecutionEngine:
                         "close": [curr_price, curr_price],
                         "open": [curr_price, curr_price],
                     })
-                    # Prefer external candle history if caller attached it
                     hist = candle.get("_history") if isinstance(candle, dict) else None
                     if hist is not None and len(hist) >= 20:
                         _df = hist
@@ -597,10 +706,10 @@ class ExecutionEngine:
                     if trail_ev:
                         events.append(trail_ev)
                         self._dispatch_event(trail_ev["event"], pos, trail_ev["message"])
-                except Exception as _trail_ex:
+                except Exception:
                     pass
 
-# (D) Check TP2 (+2.5R)
+            # (D) Check TP2 (+2.5R)
             tp2_hit = (eval_high >= pos.tp2) if is_long else (eval_low <= pos.tp2)
             if pos.partials_done == 1 and pos.tp2 and tp2_hit:
                 close_fraction = self.risk_manager.config.tp2_close_pct  # 30%
@@ -629,7 +738,7 @@ class ExecutionEngine:
                     "exit_price": pos.tp2,
                     "realized_pnl": partial_pnl,
                     "message": (
-                        f"🚀 **TARGET 2 HIT (+2.5R)** ({pos.symbol})\n"
+                        f"🚀 **TARGET 2 HIT (+2.5R)** ({pos.symbol} [#{pos.id}])\n"
                         f"30% closed @ `${pos.tp2:,.2f}` | PnL: `+${partial_pnl:,.2f}`\n"
                         f"Remaining 20% (`{pos.remaining_lots}` lots) dynamic trailing active."
                     ),
@@ -648,7 +757,6 @@ class ExecutionEngine:
             # (F) Stop Loss / Break-Even / Exit Hit
             stop_tightened_in_candle = (pos.stop_loss != old_stop)
             if just_executed:
-                # Entry candle range must not force an instant stop-out after paper fill
                 stop_hit = (curr_price <= pos.stop_loss) if is_long else (curr_price >= pos.stop_loss)
             elif tp1_just_hit or stop_tightened_in_candle:
                 if is_long:
@@ -674,10 +782,13 @@ class ExecutionEngine:
                         print(f"[ExecutionEngine] Broker exit close: {ex}")
 
                 r_mult = pos.realized_pnl / (initial_risk * pos.size) if (initial_risk * pos.size) > 0 else 0.0
-                self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=r_mult)
+                try:
+                    self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=r_mult)
+                except Exception:
+                    pass
 
                 self.trade_history.append(pos)
-                del self.active_positions[sym]
+                self.active_positions.pop(pos.id, None)
 
                 ev = {
                     "event": "TRADE_CLOSED",
@@ -685,7 +796,7 @@ class ExecutionEngine:
                     "exit_price": exit_price,
                     "final_pnl": pos.realized_pnl,
                     "message": (
-                        f"🏁 **TRADE CLOSED** ({pos.symbol})\n"
+                        f"🏁 **TRADE CLOSED** ({pos.symbol} [#{pos.id}])\n"
                         f"Exit: `${exit_price:,.2f}` | Reason: {pos.close_reason}\n"
                         f"Total Realized PnL: `+${pos.realized_pnl:,.2f}`"
                         if pos.realized_pnl >= 0
@@ -698,42 +809,57 @@ class ExecutionEngine:
         return events
 
     def close_manually(self, symbol: str, current_price: float, reason: str = "Manual close") -> Optional[TradeOrder]:
-        """Manually close an active position immediately."""
-        sym = symbol.upper()
-        if sym not in self.active_positions:
+        """Manually close active position(s) immediately."""
+        key = str(symbol).strip()
+        if key not in self.active_positions:
             return None
 
-        pos = self.active_positions[sym]
-        is_long = pos.direction == "LONG"
-        entry = pos.executed_price or pos.entry_level
-        final_pnl = (current_price - entry) * pos.remaining_size if is_long else (entry - current_price) * pos.remaining_size
+        # Check if key is direct order ID in active_positions or a symbol
+        if key in self.active_positions.keys():
+            matching = [self.active_positions[key]]
+        else:
+            matching = self.active_positions.get_all(key)
 
-        pos.realized_pnl += final_pnl
-        pos.exit_price = current_price
-        pos.status = OrderStatus.CLOSED
-        pos.closed_at = datetime.now(timezone.utc).isoformat()
-        pos.close_reason = reason
+        if not matching:
+            return None
 
-        initial_risk = abs(entry - pos.stop_loss)
-        r_mult = pos.realized_pnl / (initial_risk * pos.size) if (initial_risk * pos.size) > 0 else 0.0
-        self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=r_mult)
+        last_closed = None
+        for pos in list(matching):
+            is_long = pos.direction == "LONG"
+            entry = pos.executed_price or pos.entry_level
+            final_pnl = (current_price - entry) * pos.remaining_size if is_long else (entry - current_price) * pos.remaining_size
 
-        self.trade_history.append(pos)
-        del self.active_positions[sym]
+            pos.realized_pnl += final_pnl
+            pos.exit_price = current_price
+            pos.status = OrderStatus.CLOSED
+            pos.closed_at = datetime.now(timezone.utc).isoformat()
+            pos.close_reason = reason
 
-        if getattr(self, "broker", None):
+            initial_risk = abs(entry - pos.stop_loss)
+            r_mult = pos.realized_pnl / (initial_risk * pos.size) if (initial_risk * pos.size) > 0 else 0.0
             try:
-                self.broker.close_position(sym, price=current_price)
-            except Exception as ex:
-                print(f"[ExecutionEngine] Broker manual close: {ex}")
+                self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=r_mult)
+            except Exception:
+                pass
 
-        msg = (
-            f"⏹️ **MANUAL CLOSE EXECUTED** ({sym})\n"
-            f"Exit: `${current_price:,.2f}` | PnL: `${pos.realized_pnl:+,.2f}`\n"
-            f"Reason: {reason}"
-        )
-        self._dispatch_event("MANUAL_CLOSE", pos, msg)
-        return pos
+            self.trade_history.append(pos)
+            self.active_positions.pop(pos.id, None)
+
+            if getattr(self, "broker", None):
+                try:
+                    self.broker.close_position(pos.symbol, price=current_price)
+                except Exception as ex:
+                    print(f"[ExecutionEngine] Broker manual close: {ex}")
+
+            msg = (
+                f"⏹️ **MANUAL CLOSE EXECUTED** ({pos.symbol} [#{pos.id}])\n"
+                f"Exit: `${current_price:,.2f}` | PnL: `${pos.realized_pnl:+,.2f}`\n"
+                f"Reason: {reason}"
+            )
+            self._dispatch_event("MANUAL_CLOSE", pos, msg)
+            last_closed = pos
+
+        return last_closed
 
     def get_current_price(self, symbol: str) -> Optional[float]:
         """Resolve the latest market/mark price for a symbol."""
@@ -746,13 +872,19 @@ class ExecutionEngine:
                     return float(bp)
         # 2. Check active positions or pending setups stored current_price
         if sym in self.active_positions:
-            cp = getattr(self.active_positions[sym], "current_price", None)
-            if cp and float(cp) > 0:
-                return float(cp)
+            try:
+                cp = getattr(self.active_positions[sym], "current_price", None)
+                if cp and float(cp) > 0:
+                    return float(cp)
+            except Exception:
+                pass
         if sym in self.pending_setups:
-            cp = getattr(self.pending_setups[sym], "current_price", None)
-            if cp and float(cp) > 0:
-                return float(cp)
+            try:
+                cp = getattr(self.pending_setups[sym], "current_price", None)
+                if cp and float(cp) > 0:
+                    return float(cp)
+            except Exception:
+                pass
         # 3. Fetch live spot price from realtime_prices
         try:
             from realtime_prices import fetch_spot_price
@@ -764,53 +896,62 @@ class ExecutionEngine:
                         self.broker.mark_price(sym, price)
                     except Exception:
                         pass
-                if sym in self.active_positions:
-                    self.active_positions[sym].current_price = price
-                if sym in self.pending_setups:
-                    self.pending_setups[sym].current_price = price
+                for p in self.active_positions.get_all(sym):
+                    p.current_price = price
+                for s in self.pending_setups.get_all(sym):
+                    s.current_price = price
                 return price
         except Exception:
             pass
         # 4. Fallback to executed_price or entry_level
         if sym in self.active_positions:
-            pos = self.active_positions[sym]
-            return float(pos.executed_price or pos.entry_level or 0.0)
+            try:
+                pos = self.active_positions[sym]
+                return float(pos.executed_price or pos.entry_level or 0.0)
+            except Exception:
+                pass
         if sym in self.pending_setups:
-            return float(self.pending_setups[sym].entry_level or 0.0)
+            try:
+                return float(self.pending_setups[sym].entry_level or 0.0)
+            except Exception:
+                pass
         return None
 
     def close_position(self, symbol: str, current_price: Optional[float] = None, reason: str = "Manual close") -> Optional[TradeOrder]:
         """Convenience method to close an active position immediately, resolving current price if omitted."""
-        sym = symbol.upper()
-        if sym not in self.active_positions:
+        key = str(symbol).strip()
+        if key not in self.active_positions:
             return None
         if current_price is None:
-            current_price = self.get_current_price(sym)
+            pos = self.active_positions[key]
+            current_price = self.get_current_price(pos.symbol)
             if current_price is None or current_price <= 0:
-                pos = self.active_positions[sym]
                 current_price = pos.executed_price or pos.entry_level
-        return self.close_manually(sym, current_price, reason=reason)
-
+        return self.close_manually(key, current_price, reason=reason)
 
     def close_all_positions(self, reason: str = "Close all") -> list:
         closed = []
-        for sym in list(self.active_positions.keys()):
+        for key in list(self.active_positions.keys()):
             try:
-                pos = self.close_position(sym, reason=reason)
+                pos = self.close_position(key, reason=reason)
                 if pos is not None:
-                    closed.append(pos)
+                    if isinstance(pos, list):
+                        closed.extend(pos)
+                    else:
+                        closed.append(pos)
             except Exception as ex:
-                print(f"[ExecutionEngine] close_all {sym}: {ex}")
+                print(f"[ExecutionEngine] close_all {key}: {ex}")
         return closed
 
     def format_positions_detail(self) -> str:
-        max_trades = int(getattr(self, "max_open_trades", 5) or 5)
+        max_trades = int(getattr(self, "max_open_trades", 10) or 10)
         slots = self.slots_available()
         lines = [f"📋 **Active Positions ({len(self.active_positions)}/{max_trades} active | {slots} slots free)**"]
         if not self.active_positions:
             lines.append("_No open active positions._")
         else:
-            for sym, pos in self.active_positions.items():
+            for key, pos in self.active_positions.items():
+                sym = getattr(pos, "symbol", str(key))
                 entry = float(pos.executed_price or pos.entry_level or 0)
                 curr_p = self.get_current_price(sym)
                 if curr_p is None or curr_p <= 0:
@@ -833,9 +974,10 @@ class ExecutionEngine:
 
                 entry_fmt = f"${entry:,.2f}" if entry >= 1.0 else f"${entry:,.4f}"
                 curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"
+                oid_str = f" [#{pos.id}]" if getattr(pos, "id", None) else ""
 
                 lines.append(
-                    f"\n{dir_icon} `{sym}` **{pos.direction}**\n"
+                    f"\n{dir_icon} `{sym}` **{pos.direction}**{oid_str}\n"
                     f"• **Entry:** `{entry_fmt}` | **Current Market:** `{curr_fmt}` | **PnL:** {pnl_icon} `${u:+,.2f}`{pnl_pct_str}\n"
                     f"• **SL:** `${float(pos.stop_loss):,.2f}` | **TP1:** `${float(pos.tp1):,.2f}` | **TP2:** `${float(pos.tp2):,.2f}`\n"
                     f"• **Lots:** `{pos.lots}` | **Lev:** `{float(pos.leverage or 1):.0f}x` | **Margin:** `${float(pos.margin_required or 0):,.2f}`"
@@ -844,14 +986,16 @@ class ExecutionEngine:
             lines.append(f"\n⏳ **Pending Setups ({len(self.pending_setups)}):**")
             for psym, pord in self.pending_setups.items():
                 pdir_icon = "🟢" if "LONG" in str(pord.direction).upper() else "🔴"
-                pcurr_p = self.get_current_price(psym)
+                sym_to_check = getattr(pord, "symbol", str(psym))
+                pcurr_p = self.get_current_price(sym_to_check)
                 market_str = ""
                 if pcurr_p and pcurr_p > 0:
                     pcurr_fmt = f"${pcurr_p:,.2f}" if pcurr_p >= 1.0 else f"${pcurr_p:,.4f}"
                     dist_pct = ((pord.entry_level - pcurr_p) / pcurr_p * 100.0)
                     market_str = f" | **Current Market:** `{pcurr_fmt}` ({dist_pct:+.2f}% to fill)"
+                poid_str = f" [#{pord.id}]" if getattr(pord, "id", None) else ""
                 lines.append(
-                    f"• {pdir_icon} `{psym}` **{pord.direction}** @ Entry `${pord.entry_level:,.2f}`{market_str} | SL `${pord.stop_loss:,.2f}` (Lots `{pord.lots}`)"
+                    f"• {pdir_icon} `{sym_to_check}` **{pord.direction}**{poid_str} @ Entry `${pord.entry_level:,.2f}`{market_str} | SL `${pord.stop_loss:,.2f}` (Lots `{pord.lots}`)"
                 )
 
         # Current Market live quotes summary

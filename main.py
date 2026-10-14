@@ -1385,7 +1385,11 @@ async def live_monitoring_worker(app):
                         except Exception:
                             pass
 
-                if autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups:
+                is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
+                max_trades = getattr(engine, "max_open_trades", 10) or 10
+                open_n = len(engine.active_positions) + len(engine.pending_setups)
+                can_open = (autotrade_active and open_n < max_trades) if is_scalping else (autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups and open_n < max_trades)
+                if can_open:
                     sig, why, votes = arbiter.decide(
                         df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr, symbol=symbol, on_demand=True
                     )

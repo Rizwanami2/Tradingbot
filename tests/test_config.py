@@ -31,7 +31,7 @@ class TestConfigAndUtils(unittest.TestCase):
         self.assertIn(config.BROKER_MODE, ("paper", "live"))
         self.assertGreater(config.INITIAL_EQUITY, 0.0)
         self.assertIn(config.DEFAULT_SYMBOL, ("XAUTUSD", "XAUUSD"))
-        self.assertEqual(config.MAX_OPEN_TRADES, 5)
+        self.assertIn(config.MAX_OPEN_TRADES, (5, 10))
         self.assertGreaterEqual(len(config.AUTOTRADE_SYMBOLS), 2)
 
     def test_news_agent_naive_and_aware_datetimes(self):

@@ -86,10 +86,14 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
 
         # Mock votes to ensure agreement
         with patch.object(self.arbiter.trend, "vote") as mock_trend, \
-             patch.object(self.arbiter.ind, "vote") as mock_ind:
+             patch.object(self.arbiter.ind, "vote") as mock_ind, \
+             patch.object(self.arbiter.liq, "vote") as mock_liq:
             from multi_agent_trading_bot import Vote
             mock_trend.return_value = Vote("TREND", Dir.LONG, 1.0, "Uptrend")
             mock_ind.return_value = Vote("INDICATORS", Dir.LONG, 1.0, "Bullish EMA")
+            mock_liq.return_value = Vote("LIQUIDITY", Dir.LONG, 1.0, "Support held")
+            if hasattr(self.arbiter, "mr") and self.arbiter.mr:
+                self.arbiter.mr.vote = MagicMock(return_value=Vote("MEAN-REVERSION", Dir.FLAT, 0.0, "Neutral"))
 
             sig, why, votes = self.arbiter.decide(
                 df1, None, None, None, None, self.risk_mgr, symbol="BTCUSDT", on_demand=True
@@ -220,6 +224,159 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         self.assertNotIn("XAUUSD", self.engine.active_positions)
         self.assertEqual(order.status, OrderStatus.CLOSED)
         self.assertIn("Scalp SL", order.close_reason)
+
+    def test_multi_position_scalp_gold_and_btc_up_to_ten(self):
+        self.engine.scalp_mode = True
+        self.engine.fast_market_fill = True
+        self.engine.max_open_trades = 10
+
+        self.assertEqual(self.engine.open_trade_count(), 0)
+        self.assertEqual(self.engine.slots_available(), 10)
+
+        # Register 5 Gold positions and 5 BTC positions (10 total slots filled)
+        gold_orders = []
+        btc_orders = []
+
+        for i in range(5):
+            g_sig = {
+                "symbol": "XAUUSD", "direction": "LONG", "entry": 2650.0 + i, "stop": 2646.0 + i,
+                "tp1": 2655.0 + i, "tp2": 2660.0 + i, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+                "margin_required": 50.0, "risk_amount": 8.0, "rr": 1.0, "is_scalp": True, "fast_market_fill": True,
+            }
+            order = self.engine.register_setup(g_sig, reason=f"Gold scalp #{i+1}")
+            gold_orders.append(order)
+
+            b_sig = {
+                "symbol": "BTCUSDT", "direction": "LONG", "entry": 65000.0 + i * 10, "stop": 64800.0 + i * 10,
+                "tp1": 65200.0 + i * 10, "tp2": 65400.0 + i * 10, "lots": 0.01, "size": 0.01, "leverage": 20.0,
+                "margin_required": 32.5, "risk_amount": 5.0, "rr": 1.0, "is_scalp": True, "fast_market_fill": True,
+            }
+            border = self.engine.register_setup(b_sig, reason=f"BTC scalp #{i+1}")
+            btc_orders.append(border)
+
+        self.assertEqual(self.engine.open_trade_count(), 10)
+        self.assertEqual(self.engine.slots_available(), 0)
+
+        # 11th order must be blocked by the 10 slots limit
+        extra_sig = {
+            "symbol": "XAUUSD", "direction": "LONG", "entry": 2660.0, "stop": 2656.0,
+            "tp1": 2665.0, "tp2": 2670.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+            "margin_required": 50.0, "risk_amount": 8.0, "rr": 1.0, "is_scalp": True,
+        }
+        with self.assertRaises(RuntimeError) as ctx:
+            self.engine.register_setup(extra_sig)
+        self.assertIn("Max concurrent trades reached (10)", str(ctx.exception))
+
+        # Fill all 5 Gold orders with a market candle
+        gcandle = {"open": 2652.0, "high": 2654.0, "low": 2650.0, "close": 2652.0}
+        gevents = self.engine.update_market_candle("XAUUSD", gcandle)
+        self.assertEqual(sum(1 for e in gevents if e["event"] == "TRADE_EXECUTED"), 5)
+
+        # Fill all 5 BTC orders with a market candle
+        bcandle = {"open": 65020.0, "high": 65050.0, "low": 65000.0, "close": 65020.0}
+        bevents = self.engine.update_market_candle("BTCUSDT", bcandle)
+        self.assertEqual(sum(1 for e in bevents if e["event"] == "TRADE_EXECUTED"), 5)
+
+        self.assertEqual(len(self.engine.active_positions), 10)
+        self.assertEqual(self.engine.active_positions.count_for_symbol("XAUUSD"), 5)
+        self.assertEqual(self.engine.active_positions.count_for_symbol("BTCUSDT"), 5)
+
+        # Verify format_positions_detail contains 10 active trades
+        detail = self.engine.format_positions_detail()
+        self.assertIn("10/10 active", detail)
+        self.assertIn("0 slots free", detail)
+
+    def test_multi_position_independent_scalp_tp_and_sl(self):
+        self.engine.scalp_mode = True
+        self.engine.scalp_tp_usd = 2.50
+        self.engine.scalp_sl_usd = 3.00
+        self.engine.max_open_trades = 10
+
+        # Create 2 active Gold positions at different entry levels
+        order1 = TradeOrder(
+            id="order-gold-1", symbol="XAUUSD", direction="LONG", entry_level=2650.0,
+            stop_loss=2640.0, tp1=2660.0, tp2=2670.0, tp3=None, lots=0.02, size=2.0,
+            leverage=20.0, margin_required=50.0, liquidation_price=2600.0, risk_amount=20.0,
+            rr_ratio=1.0, setup_reason="Scalp #1", status=OrderStatus.OPEN, executed_price=2650.0,
+            remaining_size=2.0, is_scalp=True,
+        )
+        order2 = TradeOrder(
+            id="order-gold-2", symbol="XAUUSD", direction="LONG", entry_level=2652.0,
+            stop_loss=2640.0, tp1=2660.0, tp2=2670.0, tp3=None, lots=0.02, size=2.0,
+            leverage=20.0, margin_required=50.0, liquidation_price=2600.0, risk_amount=20.0,
+            rr_ratio=1.0, setup_reason="Scalp #2", status=OrderStatus.OPEN, executed_price=2652.0,
+            remaining_size=2.0, is_scalp=True,
+        )
+        self.engine.active_positions[order1.id] = order1
+        self.engine.active_positions[order2.id] = order2
+        self.assertEqual(len(self.engine.active_positions), 2)
+
+        # Candle @ 2651.5:
+        # Order 1: (2651.5 - 2650.0) * 2.0 = +$3.00 >= $2.50 -> Hits Scalp TP!
+        # Order 2: (2651.5 - 2652.0) * 2.0 = -$1.00 > -$3.00 -> Small loss within SL limit -> stays open!
+        candle = {"open": 2651.0, "high": 2652.0, "low": 2651.0, "close": 2651.5}
+        events = self.engine.update_market_candle("XAUUSD", candle)
+
+        # Order 1 should have auto-closed on Scalp TP
+        self.assertTrue(any(e["event"] == "SCALP_CLOSE" and e["order"].id == "order-gold-1" for e in events))
+        self.assertEqual(order1.status, OrderStatus.CLOSED)
+        self.assertNotIn("order-gold-1", self.engine.active_positions)
+
+        # Order 2 should still be open
+        self.assertIn("order-gold-2", self.engine.active_positions)
+        self.assertEqual(len(self.engine.active_positions), 1)
+
+        # Next candle drops price to 2648.0:
+        # Order 2: (2648.0 - 2652.0) * 2.0 = -$8.00 <= -$3.00 -> Hits Scalp SL cut!
+        candle_sl = {"open": 2650.0, "high": 2650.0, "low": 2648.0, "close": 2648.0}
+        events_sl = self.engine.update_market_candle("XAUUSD", candle_sl)
+        self.assertTrue(any(e["event"] == "SCALP_SL" and e["order"].id == "order-gold-2" for e in events_sl))
+        self.assertEqual(order2.status, OrderStatus.CLOSED)
+        self.assertNotIn("order-gold-2", self.engine.active_positions)
+        self.assertEqual(len(self.engine.active_positions), 0)
+
+    def test_multi_position_close_by_order_id_and_symbol(self):
+        self.engine.scalp_mode = True
+        self.engine.max_open_trades = 10
+
+        o1 = TradeOrder(
+            id="btc-scalp-1", symbol="BTCUSDT", direction="LONG", entry_level=65000.0,
+            stop_loss=64500.0, tp1=66000.0, tp2=67000.0, tp3=None, lots=0.01, size=0.01,
+            leverage=20.0, margin_required=32.5, liquidation_price=60000.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="BTC Scalp 1", status=OrderStatus.OPEN, executed_price=65000.0,
+            remaining_size=0.01, is_scalp=True,
+        )
+        o2 = TradeOrder(
+            id="btc-scalp-2", symbol="BTCUSDT", direction="LONG", entry_level=65100.0,
+            stop_loss=64500.0, tp1=66000.0, tp2=67000.0, tp3=None, lots=0.01, size=0.01,
+            leverage=20.0, margin_required=32.5, liquidation_price=60000.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="BTC Scalp 2", status=OrderStatus.OPEN, executed_price=65100.0,
+            remaining_size=0.01, is_scalp=True,
+        )
+        o3 = TradeOrder(
+            id="btc-scalp-3", symbol="BTCUSDT", direction="LONG", entry_level=65200.0,
+            stop_loss=64500.0, tp1=66000.0, tp2=67000.0, tp3=None, lots=0.01, size=0.01,
+            leverage=20.0, margin_required=32.5, liquidation_price=60000.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="BTC Scalp 3", status=OrderStatus.OPEN, executed_price=65200.0,
+            remaining_size=0.01, is_scalp=True,
+        )
+        self.engine.active_positions[o1.id] = o1
+        self.engine.active_positions[o2.id] = o2
+        self.engine.active_positions[o3.id] = o3
+        self.assertEqual(len(self.engine.active_positions), 3)
+
+        # 1. Close specific position by order ID
+        closed1 = self.engine.close_position("btc-scalp-1", current_price=65100.0)
+        self.assertIsNotNone(closed1)
+        self.assertEqual(closed1.id, "btc-scalp-1")
+        self.assertEqual(len(self.engine.active_positions), 2)
+        self.assertNotIn("btc-scalp-1", self.engine.active_positions)
+
+        # 2. Close remaining positions by symbol "BTCUSDT"
+        closed_rem = self.engine.close_position("BTCUSDT", current_price=65250.0)
+        self.assertIsNotNone(closed_rem)
+        self.assertEqual(len(self.engine.active_positions), 0)
+        self.assertNotIn("BTCUSDT", self.engine.active_positions)
 
 
 class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):

@@ -371,6 +371,7 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertEqual(self.engine.slots_available(), 0)
 
     def test_max_open_trades_limit_five_concurrent(self):
+        self.engine.max_open_trades = 5
         self.assertEqual(self.engine.max_open_trades, 5)
         self.assertEqual(self.engine.slots_available(), 5)
 
@@ -410,6 +411,42 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertEqual(order6.symbol, "XAUUSDT")
         self.assertEqual(self.engine.open_trade_count(), 5)
         self.assertEqual(self.engine.slots_available(), 0)
+
+    def test_max_open_trades_limit_ten_concurrent(self):
+        self.engine.max_open_trades = 10
+        self.assertEqual(self.engine.max_open_trades, 10)
+        self.assertEqual(self.engine.slots_available(), 10)
+
+        for i in range(10):
+            sym = "XAUUSD" if i % 2 == 0 else "BTCUSDT"
+            sig = {
+                "symbol": sym,
+                "direction": "LONG",
+                "entry": 2650.0 if sym == "XAUUSD" else 65000.0,
+                "stop": 2640.0 if sym == "XAUUSD" else 64000.0,
+                "tp1": 2665.0 if sym == "XAUUSD" else 66500.0,
+                "tp2": 2675.0 if sym == "XAUUSD" else 67500.0,
+                "lots": 0.01,
+                "size": 1.0,
+                "leverage": 20.0,
+                "margin_required": 25.0,
+                "is_scalp": True,
+            }
+            self.engine.register_setup(sig)
+            self.assertEqual(self.engine.open_trade_count(), i + 1)
+
+        self.assertEqual(self.engine.open_trade_count(), 10)
+        self.assertEqual(self.engine.slots_available(), 0)
+
+        # 11th setup must be rejected
+        sig11 = {
+            "symbol": "XAUUSD", "direction": "LONG", "entry": 2650.0, "stop": 2640.0,
+            "tp1": 2665.0, "tp2": 2675.0, "lots": 0.01, "size": 1.0, "leverage": 20.0,
+            "margin_required": 25.0, "is_scalp": True,
+        }
+        with self.assertRaises(RuntimeError) as ctx:
+            self.engine.register_setup(sig11)
+        self.assertIn("Max concurrent trades reached (10)", str(ctx.exception))
 
     def test_disallowed_symbols_rejected(self):
         for sym in ("ETHUSDT", "SOLUSDT", "BNBUSDT", "EURUSD", "DOGEUSDT"):

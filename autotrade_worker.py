@@ -61,14 +61,16 @@ async def live_monitoring_worker(
     if not watchlist:
         watchlist = ["BTCUSDT", "XAUUSD"]
 
-    max_open = int(getattr(config, "MAX_OPEN_TRADES", 5) or 5)
+    max_open = int(getattr(config, "MAX_OPEN_TRADES", 10) or 10)
+    if getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False):
+        max_open = max(max_open, int(getattr(engine, "max_open_trades", 10) or 10), 10)
     try:
         engine.max_open_trades = max_open
     except Exception:
         pass
 
     feeds = {sym: MarketDataFeed(symbol=sym, source=config.DEFAULT_DATA_SOURCE) for sym in watchlist}
-    logger.info("Autotrade watchlist=%s max_open=%s (multi-symbol concurrent limit 5)", watchlist, max_open)
+    logger.info("Autotrade watchlist=%s max_open=%s (multi-symbol concurrent limit %s)", watchlist, max_open, max_open)
     write_runtime_status()
 
     while True:
@@ -110,13 +112,17 @@ async def live_monitoring_worker(
                             except Exception:
                                 pass
 
+                    is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
-                    can_open = (
-                        autotrade_active
-                        and symbol not in engine.active_positions
-                        and symbol not in engine.pending_setups
-                        and open_n < max_open
-                    )
+                    if is_scalping:
+                        can_open = autotrade_active and open_n < max_open
+                    else:
+                        can_open = (
+                            autotrade_active
+                            and symbol not in engine.active_positions
+                            and symbol not in engine.pending_setups
+                            and open_n < max_open
+                        )
                     if can_open:
                         sig, why, votes = arbiter.decide(
                             df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr,
