@@ -109,6 +109,7 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sig = res.get("signal") or {}
             direction = sig.get("direction")
             dname = direction.name if hasattr(direction, "name") else str(direction or "")
+            is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(eng, "is_scalp", False) or getattr(getattr(eng, "profile", None), "is_scalp", False)
             ok, reason, mult = brain.advise_signal(
                 direction=dname,
                 score=float(sig.get("score") or 0),
@@ -117,6 +118,7 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 conviction=float((sig.get("conviction") or {}).get("score") or 0) if isinstance(sig.get("conviction"), dict) else 0.0,
                 regime=str(sig.get("regime") or ""),
                 setup=f"{dname}|{sig.get('regime')}|{res.get('session')}",
+                is_scalp=is_scalp_sig,
             )
             if not ok:
                 res["blocked"] = True

@@ -122,6 +122,14 @@ def run_signal(
                         tp1 = sig["tp1"]
                     if tp2 > tp1:
                         sig["tp2"] = tp1 - risk_dist * 0.5
+                
+                is_scalp_sig = bool(sig.get("is_scalp"))
+                target_tp = tp1 if is_scalp_sig else (tp2 if tp2 else tp1)
+                computed_rr = round(abs(target_tp - entry) / risk_dist, 2) if risk_dist > 0 else 0.0
+                if not is_scalp_sig:
+                    sig["rr"] = max(float(sig.get("rr") or 0.0), computed_rr)
+                else:
+                    sig["rr"] = float(sig.get("rr") or computed_rr)
             except Exception:
                 pass
 
@@ -198,6 +206,7 @@ def run_signal(
                 except Exception:
                     conv_val = 0.6
             setup_tag = f"{dname.lower()}|{regime or 'unknown'}"
+            is_scalp_sig = bool(sig.get("is_scalp", False))
             ok, reason, size_mult = brain.advise_signal(
                 direction=dname,
                 score=score,
@@ -206,6 +215,7 @@ def run_signal(
                 conviction=conv_val,
                 regime=regime,
                 setup=setup_tag,
+                is_scalp=is_scalp_sig,
             )
             res["brain_allowed"] = ok
             res["brain_reason"] = reason

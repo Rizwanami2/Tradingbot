@@ -564,6 +564,7 @@ class AutonomousLearner:
         setup: str = "",
         hour: Optional[int] = None,
         weekday: Optional[int] = None,
+        is_scalp: bool = False,
     ) -> Tuple[bool, str, float]:
         """
         Returns (allow, reason, size_multiplier).
@@ -584,14 +585,24 @@ class AutonomousLearner:
         if setup and setup in k.banned_setups:
             return False, f"AUTO: banned setup ({k.banned_setups[setup]})", 0.0
 
-        if score and score < k.min_score:
-            return False, f"AUTO: score {score:.2f} < learned min {k.min_score:.2f}", 0.0
-        if rr and rr < k.min_rr:
-            return False, f"AUTO: R:R {rr:.2f} < learned min {k.min_rr:.2f}", 0.0
-        if agreement and agreement < k.min_agreement:
-            return False, f"AUTO: agreement {agreement} < learned min {k.min_agreement}", 0.0
-        if conviction and conviction < k.conviction_floor:
-            return False, f"AUTO: conviction {conviction:.0%} < floor {k.conviction_floor:.0%}", 0.0
+        # Adjust minimum thresholds for micro-scalps if scalp mode is active
+        min_score = min(1.0, k.min_score) if is_scalp else k.min_score
+        min_rr = 0.95 if is_scalp else k.min_rr
+        min_agreement = min(2, k.min_agreement) if is_scalp else k.min_agreement
+        conv_floor = min(0.45, k.conviction_floor) if is_scalp else k.conviction_floor
+
+        if score and score < min_score:
+            tag = "scalp score" if is_scalp else "score"
+            return False, f"AUTO: {tag} {score:.2f} < learned min {min_score:.2f}", 0.0
+        if rr and rr < min_rr:
+            tag = "scalp R:R" if is_scalp else "R:R"
+            return False, f"AUTO: {tag} {rr:.2f} < learned min {min_rr:.2f}", 0.0
+        if agreement and agreement < min_agreement:
+            tag = "scalp agreement" if is_scalp else "agreement"
+            return False, f"AUTO: {tag} {agreement} < learned min {min_agreement}", 0.0
+        if conviction and conviction < conv_floor:
+            tag = "scalp conviction" if is_scalp else "conviction"
+            return False, f"AUTO: {tag} {conviction:.0%} < floor {conv_floor:.0%}", 0.0
 
         size_mult = 1.0
         if regime and regime in k.size_mult_by_regime:
@@ -670,6 +681,7 @@ class AutonomousLearner:
             f"• Min R:R Ratio: `1:{k.min_rr:.2f}`",
             f"• Min Agent Agreement: `{k.min_agreement}` agents",
             f"• Conviction Floor: `{k.conviction_floor:.0%}`",
+            f"• Scalp Overrides: `RR ≥ 1:0.95 | Score ≥ 1.00 | Agree ≥ 2`",
             "",
             "🚫 *Learned Bans:*",
             f"• Banned UTC Hours: `{banned_hrs_str}`",

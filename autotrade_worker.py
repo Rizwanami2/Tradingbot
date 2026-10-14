@@ -145,6 +145,7 @@ async def live_monitoring_worker(
                                         conv_val = float(sig["conviction"])
                                     except Exception:
                                         conv_val = 0.6
+                                is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False)
                                 ok, reason, size_mult = brain.advise_signal(
                                     direction=dname,
                                     score=float(sig.get("score") or 0.0),
@@ -153,6 +154,7 @@ async def live_monitoring_worker(
                                     conviction=conv_val,
                                     regime=str(sig.get("regime") or ""),
                                     setup=f"{dname.lower()}|{sig.get('regime') or 'unknown'}",
+                                    is_scalp=is_scalp_sig,
                                 )
                                 if not ok:
                                     logger.info("Autotrade %s: vetoed by Autonomous Learner — %s", symbol, reason)

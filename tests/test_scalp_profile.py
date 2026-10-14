@@ -147,6 +147,54 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         self.assertNotIn("BTCUSDT", self.engine.pending_setups)
         self.assertEqual(self.engine.active_positions["BTCUSDT"].status, OrderStatus.OPEN)
 
+    def test_scalp_not_blocked_by_autonomous_learner_min_rr(self):
+        from autonomous_learner import AutonomousLearner
+        import tempfile
+        import os
+        from signal_pipeline import try_paper_execute
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mem_path = os.path.join(tmpdir, "test_scalp_learner.json")
+            brain = AutonomousLearner(memory_path=mem_path)
+            # Learned min_rr is tightened to 1.90
+            brain.knowledge.min_rr = 1.90
+
+            sig = {
+                "symbol": "BTCUSDT",
+                "direction": "LONG",
+                "entry": 83450.0,
+                "stop": 83350.0,
+                "tp1": 83550.0,
+                "tp2": 83600.0,
+                "lots": 0.05,
+                "size": 0.05,
+                "leverage": 20.0,
+                "margin_required": 208.6,
+                "risk_amount": 5.0,
+                "rr": 1.0,
+                "score": 1.5,
+                "is_scalp": True,
+                "fast_market_fill": True,
+            }
+
+            # Scalp signal passes learner
+            ok, reason, mult = brain.advise_signal(
+                direction="LONG",
+                score=sig["score"],
+                rr=sig["rr"],
+                agreement=2,
+                conviction=0.6,
+                is_scalp=sig["is_scalp"],
+            )
+            self.assertTrue(ok)
+            self.assertIn("pass learned filters", reason)
+
+            # Paper execution succeeds
+            self.engine.scalp_mode = True
+            ok_exec, note = try_paper_execute(self.engine, sig)
+            self.assertTrue(ok_exec)
+            self.assertNotIn("blocked by Autonomous Learner", note)
+
     def test_scalp_auto_close_on_small_profit(self):
         self.engine.scalp_mode = True
         self.engine.scalp_tp_usd = 2.50

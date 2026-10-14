@@ -591,6 +591,8 @@ class Arbiter:
 
         final_tp1 = tp1 if (getattr(self, "is_scalp", False) and tp1 is not None) else plan.tp1
         final_tp2 = tp2 if (getattr(self, "is_scalp", False) and tp2 is not None) else plan.tp2
+        target_tp_eval = final_tp1 if getattr(self, "is_scalp", False) else (final_tp2 or final_tp1)
+        rr_calc = round(abs(target_tp_eval - entry) / abs(entry - stop), 2) if abs(entry - stop) else 0
         sig = {
             "direction": direction,
             "entry": entry,
@@ -603,7 +605,7 @@ class Arbiter:
             "leverage": plan.leverage,
             "margin_required": plan.margin_required,
             "risk_amount": plan.risk_amount,
-            "rr": abs(final_tp1 - entry) / abs(entry - stop) if abs(entry - stop) else 0,
+            "rr": rr_calc,
             "score": score,
             "regime": regime,
             "reason": (

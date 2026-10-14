@@ -148,6 +148,25 @@ class TestFeaturePacks(unittest.TestCase):
             self.assertEqual(brain.knowledge.total_live_trades, 0)
             self.assertEqual(len(brain.knowledge.banned_setups), 0)
 
+            # Test scalp vs swing R:R filtering
+            brain.knowledge.min_rr = 1.90
+            brain.knowledge.min_score = 1.95
+            brain.knowledge.min_agreement = 4
+            # Non-scalp with rr=1.00 should be vetoed
+            ok_swing, reason_swing, _ = brain.advise_signal("LONG", score=2.0, rr=1.00, agreement=4, conviction=0.6, is_scalp=False)
+            self.assertFalse(ok_swing)
+            self.assertIn("R:R 1.00 < learned min 1.90", reason_swing)
+
+            # Scalp with rr=1.00 should PASS learned filters
+            ok_scalp, reason_scalp, _ = brain.advise_signal("LONG", score=1.2, rr=1.00, agreement=2, conviction=0.5, is_scalp=True)
+            self.assertTrue(ok_scalp)
+            self.assertIn("pass learned filters", reason_scalp)
+
+            # Scalp with poor R:R (e.g. 0.70) should be vetoed
+            ok_bad_scalp, reason_bad_scalp, _ = brain.advise_signal("LONG", score=1.2, rr=0.70, agreement=2, conviction=0.5, is_scalp=True)
+            self.assertFalse(ok_bad_scalp)
+            self.assertIn("scalp R:R 0.70 < learned min 0.95", reason_bad_scalp)
+
     def test_trade_journal_brain_wiring(self):
         import autonomous_learner
         with tempfile.TemporaryDirectory() as tmpdir:
