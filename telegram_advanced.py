@@ -20,14 +20,17 @@ logger = logging.getLogger("TelegramAdvanced")
 
 _MODES = {"single", "walkforward", "montecarlo", "multiagent", "sweep", "wf", "mc", "auto", "full", "all"}
 
+from telegram_brain import safe_reply
+
 
 async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         from advanced_integration import AdvancedEngine
         eng = AdvancedEngine()
-        await update.message.reply_text(eng.performance_report(), parse_mode="Markdown")
+        await safe_reply(update, eng.performance_report(), parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Performance error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /performance command: %s", e)
+        await safe_reply(update, f"Performance error: {e}", parse_mode=None)
 
 
 async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -37,14 +40,15 @@ async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         arg = (ctx.args[0].lower() if ctx.args else "status")
         if arg in ("on", "1", "true", "activate"):
             eng.activate_kill("Manual kill via Telegram")
-            await update.message.reply_text("🛑 **KILL SWITCH ON** — no new entries.", parse_mode="Markdown")
+            await safe_reply(update, "🛑 *KILL SWITCH ON* — no new entries.", parse_mode="Markdown")
         elif arg in ("off", "0", "false", "deactivate"):
             eng.deactivate_kill()
-            await update.message.reply_text("🟢 **Kill switch OFF.**", parse_mode="Markdown")
+            await safe_reply(update, "🟢 *Kill switch OFF.*", parse_mode="Markdown")
         else:
-            await update.message.reply_text(f"Status: `{eng.kill_status()}`", parse_mode="Markdown")
+            await safe_reply(update, f"Status: `{eng.kill_status()}`", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Kill error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /kill command: %s", e)
+        await safe_reply(update, f"Kill error: {e}", parse_mode=None)
 
 
 async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -52,8 +56,9 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         from strategy_profiles import load_profiles, apply_profile, CURRENT_PROFILE
         profiles = load_profiles()
         if not ctx.args:
-            await update.message.reply_text(
-                f"📋 **Strategy Profiles** (Active: `{CURRENT_PROFILE}`)\n"
+            await safe_reply(
+                update,
+                f"📋 *Strategy Profiles* (Active: `{CURRENT_PROFILE}`)\n"
                 f"• Available: `{', '.join(profiles.keys())}`\n"
                 f"• Usage: `/profile scalp` or `/profile balanced`\n"
                 f"💡 _Tip: Use `/profile scalp` for rapid micro-scalping with small SL/TP & fast capital gains._",
@@ -62,7 +67,7 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         name = ctx.args[0].lower()
         if name not in profiles:
-            await update.message.reply_text(f"Unknown `{name}`. Available: {', '.join(profiles.keys())}")
+            await safe_reply(update, f"Unknown `{name}`. Available: {', '.join(profiles.keys())}", parse_mode="Markdown")
             return
         try:
             from main import arbiter, risk_mgr, engine
@@ -70,9 +75,10 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             p, summary = apply_profile(name, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
         except Exception:
             p, summary = apply_profile(name)
-        await update.message.reply_text(summary, parse_mode="Markdown")
+        await safe_reply(update, summary, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Profile error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /profile command: %s", e)
+        await safe_reply(update, f"Profile error: {e}", parse_mode=None)
 
 
 async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +118,8 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     except Exception as e:
-        await update.message.reply_text(f"Eval failed: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /asignal command: %s", e)
+        await safe_reply(update, f"Eval failed: {e}", parse_mode=None)
         return
 
     price = float(res.get("price") or 0)
@@ -121,7 +128,7 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for v in votes:
         d = v.get("direction", "FLAT")
         icon = "🟢" if d == "LONG" else ("🔴" if d == "SHORT" else "⚪")
-        lines.append(f"{icon} **{v.get('agent')}:** {d} — {v.get('reason', '')}")
+        lines.append(f"{icon} *{v.get('agent')}:* {d} — {v.get('reason', '')}")
 
     meta = []
     if res.get("session"):
@@ -136,22 +143,22 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         direction = sig.get("direction")
         dname = direction.name if hasattr(direction, "name") else str(direction)
         box = (
-            f"\n🎯 **SETUP {dname}**\n"
+            f"\n🎯 *SETUP {dname}*\n"
             f"• Entry `${sig.get('entry', 0):,.2f}` | SL `${sig.get('stop', 0):,.2f}`\n"
             f"• TP1 `${sig.get('tp1', 0):,.2f}` | TP2 `${sig.get('tp2', 0):,.2f}`\n"
             f"• Lots `{sig.get('lots')}` | Lev `{sig.get('leverage', 1):.0f}x`\n"
             f"• R:R `1:{sig.get('rr', 0):.1f}` | `{sig.get('profile')}` / `{sig.get('regime')}`\n"
         )
     else:
-        box = "\n🛡️ **No trade** — blocked or no consensus.\n"
+        box = "\n🛡️ *No trade* — blocked or no consensus.\n"
 
     msg = (
-        f"📊 **Advanced Signal — {sym}**\nMark `${price:,.2f}`\n"
+        f"📊 *Advanced Signal — {sym}*\nMark `${price:,.2f}`\n"
         + (" | ".join(meta) + "\n" if meta else "")
-        + "\n**Votes:**\n" + "\n".join(lines)
+        + "\n*Votes:*\n" + "\n".join(lines)
         + f"\n\n⚡ `{res.get('status')}`\n" + box
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await safe_reply(update, msg, parse_mode="Markdown")
 
 
 async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -174,8 +181,9 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         symbol = args[0].upper()
 
     if mode == "auto":
-        await update.message.reply_text(
-            f"⏳ **Auto backtest suite** — `{symbol}` — {bars} bars\n"
+        await safe_reply(
+            update,
+            f"⏳ *Auto backtest suite* — `{symbol}` — {bars} bars\n"
             f"Running: single + multiagent + walk-forward + Monte Carlo + sweep…",
             parse_mode="Markdown",
         )
@@ -192,13 +200,14 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 do_sweep=True,
             )
             text = report.text(max_len=3800)
-            await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
+            await safe_reply(update, f"```\n{text}\n```", parse_mode="Markdown")
         except Exception as e:
             logger.exception("auto backtest failed")
-            await update.message.reply_text(f"Auto backtest error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
+            await safe_reply(update, f"Auto backtest error: {type(e).__name__}: {e}", parse_mode=None)
         return
 
-    await update.message.reply_text(
+    await safe_reply(
+        update,
         f"⏳ Backtest `{mode}` — {symbol} — {bars} bars…", parse_mode="Markdown")
     try:
         from advanced_backtest import (
@@ -229,10 +238,10 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if len(text) > 4000:
             text = text[:3900] + "\n…(truncated)"
-        await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
+        await safe_reply(update, f"```\n{text}\n```", parse_mode="Markdown")
     except Exception as e:
         logger.exception("abacktest failed")
-        await update.message.reply_text(f"Backtest error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
+        await safe_reply(update, f"Backtest error: {type(e).__name__}: {e}", parse_mode=None)
 
 
 def register_all_advanced(application) -> None:

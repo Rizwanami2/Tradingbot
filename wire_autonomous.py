@@ -26,10 +26,12 @@ async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Read-only view of autonomous self-learning state."""
     try:
         from autonomous_learner import get_brain
+        from telegram_brain import safe_reply
         text = get_brain(auto_bootstrap=False).summary()
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await safe_reply(update, text, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Brain error: `{e}`", parse_mode="Markdown")
+        from telegram_brain import safe_reply
+        await safe_reply(update, f"Brain error: {e}", parse_mode=None)
 '''
 
 
@@ -64,7 +66,8 @@ def main():
                 "        from telegram.ext import CommandHandler as _CH\n"
                 "        async def brain_command(update, ctx):\n"
                 "            from autonomous_learner import get_brain\n"
-                "            await update.message.reply_text(get_brain(auto_bootstrap=False).summary(), parse_mode=\"Markdown\")\n"
+                "            from telegram_brain import safe_reply\n"
+                "            await safe_reply(update, get_brain(auto_bootstrap=False).summary(), parse_mode=\"Markdown\")\n"
                 "        app.add_handler(_CH(\"brain\", brain_command))\n"
                 "        print(\"Registered /brain\")\n"
                 "    except Exception as _be:\n"

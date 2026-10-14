@@ -154,6 +154,53 @@ class TestFeaturePacks(unittest.TestCase):
             rep = ab.report()
             self.assertIn("A/B Paper Books", rep)
 
+    def test_telegram_brain_safe_reply_and_summary(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from telegram_brain import brain_command, safe_reply
+        from telegram.error import BadRequest
+
+        # Check summary formatting
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test_mem.json")
+            brain = AutonomousLearner(memory_path=path)
+            brain.knowledge.improvement_log.append("Test entry with bans_setup=0 and `range`")
+            summary = brain.summary()
+            self.assertIn("Autonomous Learner", summary)
+            self.assertIn("• `Test entry with bans_setup=0 and 'range'`", summary)
+
+        # Test safe_reply normal call
+        async def run_async_tests():
+            update = MagicMock()
+            update.message = MagicMock()
+            update.message.reply_text = AsyncMock()
+
+            await safe_reply(update, "Hello *world*", parse_mode="Markdown")
+            self.assertEqual(update.message.reply_text.call_count, 1)
+            self.assertEqual(update.message.reply_text.call_args[1].get("parse_mode"), "Markdown")
+
+            # Test safe_reply fallback on entity parsing failure
+            update2 = MagicMock()
+            update2.message = MagicMock()
+            async def failing_reply(text, parse_mode=None):
+                if parse_mode == "Markdown":
+                    raise BadRequest("Can't parse entities: can't find end of the entity starting at byte offset 529")
+                return "ok"
+
+            update2.message.reply_text = AsyncMock(side_effect=failing_reply)
+            await safe_reply(update2, "Invalid _markdown", parse_mode="Markdown")
+            self.assertEqual(update2.message.reply_text.call_count, 2)
+            self.assertIsNone(update2.message.reply_text.call_args_list[1][1].get("parse_mode"))
+
+            # Test brain_command executes cleanly
+            update3 = MagicMock()
+            update3.message = MagicMock()
+            update3.message.reply_text = AsyncMock()
+            await brain_command(update3, None)
+            self.assertGreaterEqual(update3.message.reply_text.call_count, 1)
+
+        asyncio.run(run_async_tests())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -468,7 +468,7 @@ class AutonomousLearner:
         }
         self._log_improve(
             f"Bootstrap done: n={summary['trades']} exp={summary['expectancy']} "
-            f"flaws={summary['flaws']} bans_setup={summary['banned_setups']}"
+            f"flaws={summary['flaws']} bans={summary['banned_setups']}"
         )
         self._save()
         return summary
@@ -609,7 +609,7 @@ class AutonomousLearner:
     def summary(self) -> str:
         k = self.knowledge
         lines = [
-            "🧠 **Autonomous Learner**",
+            "🧠 *Autonomous Learner*",
             f"History trades: `{k.total_history_trades}` | Live: `{k.total_live_trades}`",
             f"Last bootstrap: `{k.last_bootstrap or 'never'}`",
             f"Filters: score≥`{k.min_score:.2f}` RR≥`{k.min_rr:.2f}` "
@@ -618,9 +618,10 @@ class AutonomousLearner:
             f"Regime size mults: `{k.size_mult_by_regime}`",
         ]
         if k.improvement_log:
-            lines.append("**Recent self-corrections:**")
+            lines.append("*Recent self-corrections:*")
             for e in k.improvement_log[-5:]:
-                lines.append(f"• {e}")
+                clean_e = str(e).replace("`", "'")
+                lines.append(f"• `{clean_e}`")
         return "\n".join(lines)
 
 

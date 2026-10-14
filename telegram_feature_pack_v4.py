@@ -36,49 +36,56 @@ def _get():
     return _pack
 
 
+from telegram_brain import safe_reply
+
+
 async def digest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(_get().digest(), parse_mode="Markdown")
+        await safe_reply(update, _get().digest(), parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Digest error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /digest command: %s", e)
+        await safe_reply(update, f"Digest error: {e}", parse_mode=None)
 
 
 async def replay_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("Usage: `/replay TRADE_ID`", parse_mode="Markdown")
+        await safe_reply(update, "Usage: `/replay TRADE_ID`", parse_mode="Markdown")
         return
     try:
         text = _get().replay(ctx.args[0])
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await safe_reply(update, text, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Replay error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /replay command: %s", e)
+        await safe_reply(update, f"Replay error: {e}", parse_mode=None)
 
 
 async def export_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         csv_text = _get().export_csv()
-        # Telegram message limit — send head
         if len(csv_text) > 3500:
             csv_text = csv_text[:3400] + "\n…(truncated)"
-        await update.message.reply_text(f"```\n{csv_text}\n```", parse_mode="Markdown")
+        await safe_reply(update, f"```\n{csv_text}\n```", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Export error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /export command: %s", e)
+        await safe_reply(update, f"Export error: {e}", parse_mode=None)
 
 
 async def setups_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         pack = _get()
         text = pack.edge.setup_report() + "\n\n" + pack.edge.calibration_report()
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await safe_reply(update, text, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Setups error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /setups command: %s", e)
+        await safe_reply(update, f"Setups error: {e}", parse_mode=None)
 
 
 async def abooks_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(_get().ab.report(), parse_mode="Markdown")
+        await safe_reply(update, _get().ab.report(), parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"A/B error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /abooks command: %s", e)
+        await safe_reply(update, f"A/B error: {e}", parse_mode=None)
 
 
 async def quality_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -91,14 +98,15 @@ async def quality_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         data = feed.multi_tf(limit_1m=120)
         df = data.get("1m") if data else None
         if df is None or df.empty:
-            await update.message.reply_text("No data")
+            await safe_reply(update, "No data", parse_mode=None)
             return
         q = evaluate_signal_quality(df, "LONG", spread=0.0)
         icon = "✅" if q.allowed else "❌"
-        msg = f"{icon} **Quality {sym}** score=`{q.score:.2f}`\n" + "\n".join(f"• {r}" for r in q.reasons)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        msg = f"{icon} *Quality {sym}* score=`{q.score:.2f}`\n" + "\n".join(f"• `{str(r).replace('`', \"'\")}`" for r in q.reasons)
+        await safe_reply(update, msg, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Quality error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /quality command: %s", e)
+        await safe_reply(update, f"Quality error: {e}", parse_mode=None)
 
 
 async def heal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -106,11 +114,12 @@ async def heal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         h = _get().health
         if ctx.args and ctx.args[0].lower() in ("reset", "ok", "clear"):
             h.record_ok()
-            await update.message.reply_text("🟢 Health counter reset.")
+            await safe_reply(update, "🟢 Health counter reset.", parse_mode=None)
         else:
-            await update.message.reply_text(h.status())
+            await safe_reply(update, h.status(), parse_mode=None)
     except Exception as e:
-        await update.message.reply_text(f"Heal error: `{e}`", parse_mode="Markdown")
+        logger.exception("Error in /heal command: %s", e)
+        await safe_reply(update, f"Heal error: {e}", parse_mode=None)
 
 
 def register_feature_pack_v4(application) -> None:
