@@ -26,6 +26,7 @@ autonomous_state.json
 ops_health.json
 ab_books.json
 learning_edge.json
+performance_stats.json
 data_cache/
 *.jsonl
 *.log

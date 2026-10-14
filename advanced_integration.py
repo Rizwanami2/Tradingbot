@@ -302,8 +302,17 @@ class AdvancedEngine:
         except Exception:
             pass
 
-    def performance_report(self) -> str:
+    def performance_report(self, subcommand: str = "summary") -> str:
+        sub = str(subcommand or "summary").lower()
+        if sub in ("agents", "ranking", "rankings"):
+            return self.perf.agent_report()
+        elif sub in ("trades", "history", "recent", "closed"):
+            return self.perf.recent_trades_report()
+        elif sub in ("reset", "clear"):
+            self.perf.reset()
+            return "🧹 *Performance Stats Reset*\nAll closed trade history has been cleared."
         return self.perf.telegram_report()
+
 
     def kill_status(self) -> str:
         active, msg = self.kill.is_active(

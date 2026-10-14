@@ -1022,7 +1022,8 @@ def run_cli_interactive():
             try:
                 from advanced_integration import AdvancedEngine
                 eng = AdvancedEngine()
-                print(eng.performance_report())
+                sub = parts[1].lower() if len(parts) > 1 else "summary"
+                print(eng.performance_report(sub))
             except Exception as e:
                 print(f"Performance error: {e}")
         elif name == "profile":
@@ -1180,6 +1181,14 @@ def main():
         from telegram_brain import brain_command, relearn_command
         app.add_handler(CommandHandler("brain", brain_command))
         app.add_handler(CommandHandler("relearn", relearn_command))
+    except Exception:
+        pass
+    try:
+        from telegram_advanced import abacktest_command, performance_command, profile_command, kill_command
+        app.add_handler(CommandHandler(["performance", "perf"], performance_command))
+        app.add_handler(CommandHandler("profile", profile_command))
+        app.add_handler(CommandHandler("kill", kill_command))
+        app.add_handler(CommandHandler(["abacktest", "auto_backtest"], abacktest_command))
     except Exception:
         pass
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message))

@@ -1769,7 +1769,8 @@ def run_cli_interactive():
             try:
                 from advanced_integration import AdvancedEngine
                 eng = AdvancedEngine()
-                print(eng.performance_report())
+                sub = parts[1].lower() if len(parts) > 1 else "summary"
+                print(eng.performance_report(sub))
             except Exception as e:
                 print(f"Performance error: {e}")
         elif name == "profile":

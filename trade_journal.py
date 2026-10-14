@@ -228,6 +228,26 @@ class TradeJournal:
         except Exception as err:
             print(f"[TradeJournal] brain learn error: {err}")
 
+        try:
+            from performance_analytics import PerformanceTracker, TradeRecord
+            tracker = PerformanceTracker()
+            tracker.record_trade(TradeRecord(
+                id=str(e.id),
+                symbol=str(e.symbol),
+                direction=str(e.direction),
+                entry=float(e.entry),
+                exit=float(e.exit_price if e.exit_price is not None else e.entry),
+                r_multiple=float(e.r_multiple or 0.0),
+                pnl=float(e.pnl or 0.0),
+                agents=list(e.agents or []),
+                regime=str(e.regime or ""),
+                session=str(e.session or ""),
+                closed_at=str(e.closed_at or datetime.now(timezone.utc).isoformat()),
+            ))
+        except Exception as err:
+            print(f"[TradeJournal] performance tracker error: {err}")
+
+
     def open_summary(self) -> List[Dict[str, Any]]:
         return [asdict(e) for e in self.open.values()]
 

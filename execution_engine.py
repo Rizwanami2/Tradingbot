@@ -222,12 +222,18 @@ class ExecutionEngine:
         """Clear execution halt state so setups can be registered again."""
         self.execution_halted = False
 
-    def _notify_brain_close(self, pos: TradeOrder, r_mult: float) -> None:
+    def _notify_trade_closed(self, pos: TradeOrder, r_mult: float) -> None:
+        won = pos.realized_pnl > 0
+        setup = f"{pos.direction.lower()}|{pos.symbol.lower()}"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        closed_at = getattr(pos, "closed_at", None) or now_iso
+        entry_px = float(pos.executed_price or pos.entry_level or 0.0)
+        exit_px = float(pos.exit_price or entry_px)
+
+        # 1. Update Autonomous Learner
         try:
             from autonomous_learner import get_brain
             brain = get_brain(auto_bootstrap=False)
-            won = pos.realized_pnl > 0
-            setup = f"{pos.direction.lower()}|{pos.symbol.lower()}"
             brain.on_trade_closed(
                 r_multiple=float(r_mult),
                 won=bool(won),
@@ -239,6 +245,43 @@ class ExecutionEngine:
             )
         except Exception:
             pass
+
+        # 2. Update Performance Tracker
+        try:
+            from performance_analytics import PerformanceTracker, TradeRecord
+            tracker = PerformanceTracker()
+            tracker.record_trade(TradeRecord(
+                id=str(pos.id),
+                symbol=str(pos.symbol),
+                direction=str(pos.direction),
+                entry=entry_px,
+                exit=exit_px,
+                r_multiple=float(r_mult),
+                pnl=float(pos.realized_pnl),
+                agents=[],
+                regime="",
+                session="",
+                closed_at=closed_at,
+            ))
+        except Exception:
+            pass
+
+        # 3. Update Trade Journal
+        try:
+            from trade_journal import TradeJournal
+            journal = TradeJournal()
+            journal.record_close(
+                trade_id=str(pos.id),
+                exit_price=exit_px,
+                r_multiple=float(r_mult),
+                pnl=float(pos.realized_pnl),
+                auto_learn=False,
+            )
+        except Exception:
+            pass
+
+    _notify_brain_close = _notify_trade_closed
+
 
     def open_trade_count(self) -> int:
         return len(self.active_positions) + len(self.pending_setups)

@@ -27,10 +27,23 @@ async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         from advanced_integration import AdvancedEngine
         eng = AdvancedEngine()
-        await safe_reply(update, eng.performance_report(), parse_mode="Markdown")
+        args = list(getattr(ctx, "args", []) or [])
+        sub = args[0].lower() if args else "summary"
+        if sub in ("help", "commands"):
+            msg = (
+                "📊 *Performance Commands:*\n"
+                "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
+                "• `/performance agents` — Agent contribution rankings\n"
+                "• `/performance trades` — Recent closed trades log\n"
+                "• `/performance reset` — Clear performance history"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown")
+        else:
+            await safe_reply(update, eng.performance_report(sub), parse_mode="Markdown")
     except Exception as e:
         logger.exception("Error in /performance command: %s", e)
         await safe_reply(update, f"Performance error: {e}", parse_mode=None)
+
 
 
 async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
