@@ -62,6 +62,8 @@ class TradeOrder:
     lowest_price: float = 0.0
     be_stage: int = 0  # 0: initial, 1: +0.1R locked, 2: full BE
     close_reason: str = ""
+    is_scalp: bool = False
+    fast_market_fill: bool = False
 
     def to_dict(self) -> Dict:
         d = asdict(self)
@@ -125,6 +127,11 @@ class ExecutionEngine:
         except Exception:
             self.max_open_trades = 5
         self.scalp_mode: bool = False
+        self.fast_market_fill: bool = False
+        self.scalp_tp_usd: float = 2.50
+        self.scalp_sl_usd: float = 3.00
+        self.scalp_tp_pct: float = 0.10
+        self.scalp_sl_pct: float = 0.12
 
     def reset_halt(self) -> None:
         """Clear execution halt state so setups can be registered again."""
@@ -207,6 +214,8 @@ class ExecutionEngine:
             highest_price=entry,
             lowest_price=entry,
             current_price=float(sig.get("current_price") or entry),
+            is_scalp=bool(sig.get("is_scalp") or getattr(self, "scalp_mode", False)),
+            fast_market_fill=bool(sig.get("fast_market_fill") or getattr(self, "fast_market_fill", False)),
         )
 
         self.pending_setups[symbol] = order
@@ -278,8 +287,11 @@ class ExecutionEngine:
                 should_execute = False
                 exec_price = setup.entry_level
 
+                if getattr(self, "scalp_mode", False) or getattr(setup, "is_scalp", False) or getattr(setup, "fast_market_fill", False):
+                    should_execute = True
+                    exec_price = curr_price
                 # LONG TRIGGER: Price trades at or touches entry level
-                if setup.direction == "LONG":
+                elif setup.direction == "LONG":
                     if low <= setup.entry_level <= high or curr_price <= setup.entry_level * 1.0008:
                         should_execute = True
                         exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
@@ -390,10 +402,12 @@ class ExecutionEngine:
             try:
                 import config as _cfg_sc
                 scalp_cfg = bool(getattr(_cfg_sc, "SCALP_ENABLED", False))
-                scalp_usd = float(getattr(_cfg_sc, "SCALP_TAKE_PROFIT_USD", 5.0) or 0)
-                scalp_pct = float(getattr(_cfg_sc, "SCALP_TAKE_PROFIT_PCT", 0.15) or 0)
+                scalp_usd = float(getattr(self, "scalp_tp_usd", None) or getattr(_cfg_sc, "SCALP_TAKE_PROFIT_USD", 2.5) or 0)
+                scalp_pct = float(getattr(self, "scalp_tp_pct", None) or getattr(_cfg_sc, "SCALP_TAKE_PROFIT_PCT", 0.10) or 0)
+                scalp_sl_usd = float(getattr(self, "scalp_sl_usd", None) or getattr(_cfg_sc, "SCALP_STOP_LOSS_USD", 3.0) or 0)
+                scalp_sl_pct = float(getattr(self, "scalp_sl_pct", None) or getattr(_cfg_sc, "SCALP_STOP_LOSS_PCT", 0.12) or 0)
             except Exception:
-                scalp_cfg, scalp_usd, scalp_pct = False, 5.0, 0.15
+                scalp_cfg, scalp_usd, scalp_pct, scalp_sl_usd, scalp_sl_pct = False, 2.5, 0.10, 3.0, 0.12
             scalp_on = getattr(self, "scalp_mode", False) or (
                 scalp_cfg and (
                     "scalp" in str(getattr(pos, "setup_reason", "")).lower()
@@ -401,6 +415,7 @@ class ExecutionEngine:
                     or (not pos.tp1 and not pos.tp2)
                 )
             )
+            # 1. Micro Scalp Take Profit (Fast Capital Accumulation)
             if scalp_on and pos.unrealized_pnl > 0:
                 hit_pct = False
                 if scalp_pct > 0 and entry > 0:
@@ -431,6 +446,39 @@ class ExecutionEngine:
                     )
                     events.append({"event": "SCALP_CLOSE", "order": pos, "price": curr_price, "message": msg})
                     self._dispatch_event("SCALP_CLOSE", pos, msg)
+                    return events
+
+            # 2. Micro Scalp Stop Loss (Fast Loss Cut to Preserve Capital)
+            if scalp_on and pos.unrealized_pnl < 0:
+                hit_sl_pct = False
+                if scalp_sl_pct > 0 and entry > 0:
+                    move_pct = abs(curr_price - entry) / entry * 100.0
+                    hit_sl_pct = move_pct >= scalp_sl_pct
+                hit_sl_usd = scalp_sl_usd > 0 and pos.unrealized_pnl <= -scalp_sl_usd
+                if hit_sl_usd or hit_sl_pct:
+                    pos.exit_price = curr_price
+                    pos.realized_pnl = pos.unrealized_pnl
+                    pos.status = OrderStatus.CLOSED
+                    pos.closed_at = datetime.now(timezone.utc).isoformat()
+                    pos.close_reason = f"Scalp SL (${pos.realized_pnl:+.2f})"
+                    try:
+                        self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=-1.0)
+                    except Exception:
+                        pass
+                    self.trade_history.append(pos)
+                    del self.active_positions[sym]
+                    if getattr(self, "broker", None):
+                        try:
+                            self.broker.close_position(sym, price=curr_price)
+                        except Exception:
+                            pass
+                    msg = (
+                        f"🛡️ **SCALP STOP LOSS CUT** `{sym}`\n"
+                        f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
+                        f"_Tight micro stop loss protection triggered_"
+                    )
+                    events.append({"event": "SCALP_SL", "order": pos, "price": curr_price, "message": msg})
+                    self._dispatch_event("SCALP_SL", pos, msg)
                     return events
 
             # (A) Check Liquidation barrier for leveraged positions

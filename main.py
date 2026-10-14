@@ -88,6 +88,11 @@ except Exception as _broker_err:
     print("[boot] broker:", _broker_err)
     _broker = None
 engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)
+try:
+    from strategy_profiles import apply_profile
+    apply_profile(getattr(config, "CURRENT_PROFILE", "scalp"), arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+except Exception as _p_boot_err:
+    print("[boot] profile init:", _p_boot_err)
 
 # Bot runtime state. Monitoring is off by default until explicitly enabled.
 autotrade_active: bool = config.AUTOTRADE_ENABLED
@@ -432,6 +437,7 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"📊 **System & Portfolio Status**\n"
         f"• **Autotrade:** {auto_status} (Cap: `{summary['active_positions_count']}/{max_trades}` active | `{slots}` slots free)\n"
+        f"• **Strategy Profile:** `{getattr(config, 'CURRENT_PROFILE', 'scalp').upper()}`\n"
         f"• **Watchlist:** `{symbols_str}`\n"
         f"• **Equity:** `${summary['equity']:,.2f}` | **Leverage:** `{summary['leverage']:.0f}x`\n"
         f"• **Active Positions:** `{summary['active_positions_count']}` | **Pending Setups:** `{summary['pending_setups_count']}`\n"
@@ -636,12 +642,30 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
     max_trades = getattr(engine, "max_open_trades", 5)
     symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
-    if arg in ("on", "1", "true", "enable"):
+    if arg in ("scalp", "spam") or (len(ctx.args) > 1 and ctx.args[1].lower() in ("scalp", "spam")):
+        try:
+            from strategy_profiles import apply_profile
+            apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+        except Exception:
+            pass
+        autotrade_active = True
+        engine.reset_halt()
+        await update.message.reply_text(
+            f"⚡ **RAPID SCALP AUTOTRADE ACTIVATED**\n"
+            f"• **Execution Mode:** `{broker_mode}`\n"
+            f"• **Strategy Profile:** `SCALP` (High-frequency micro-scalping)\n"
+            f"• **Micro Targets:** TP `{getattr(config, 'SCALP_TAKE_PROFIT_PCT', 0.10):.2f}%` / `${getattr(config, 'SCALP_TAKE_PROFIT_USD', 2.50):.2f}` | SL `{getattr(config, 'SCALP_STOP_LOSS_PCT', 0.12):.2f}%` / `${getattr(config, 'SCALP_STOP_LOSS_USD', 3.00):.2f}`\n"
+            f"• **Execution:** Instant Market Fill & 1-2s Polling\n"
+            f"• **Active Limit:** `{max_trades}` concurrent trades | Watchlist: `{symbols_str}`",
+            parse_mode="Markdown",
+        )
+    elif arg in ("on", "1", "true", "enable"):
         autotrade_active = True
         engine.reset_halt()
         await update.message.reply_text(
             f"🟢 **Autotrade ACTIVATED**\n"
             f"• **Execution Mode:** `{broker_mode}`\n"
+            f"• **Strategy Profile:** `{getattr(config, 'CURRENT_PROFILE', 'scalp').upper()}`\n"
             f"• **Active Trade Limit:** `{max_trades}` concurrent positions\n"
             f"• **Active Watchlist:** `{symbols_str}`",
             parse_mode="Markdown",
@@ -1466,7 +1490,16 @@ def run_cli_interactive():
         elif name == "autotrade":
             arg = parts[1].lower() if len(parts) > 1 else ""
             broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
-            if arg in ("on", "1", "true", "enable"):
+            if arg in ("scalp", "spam") or (len(parts) > 2 and parts[2].lower() in ("scalp", "spam")):
+                try:
+                    from strategy_profiles import apply_profile
+                    apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+                except Exception:
+                    pass
+                autotrade_active = True
+                engine.reset_halt()
+                print(f"Autotrade ON in RAPID SCALP SPAM MODE ({broker_mode} mode)")
+            elif arg in ("on", "1", "true", "enable"):
                 autotrade_active = True
                 engine.reset_halt()
                 print(f"Autotrade ON ({broker_mode} mode)")
@@ -1475,7 +1508,8 @@ def run_cli_interactive():
                 print("Autotrade OFF")
             else:
                 st = "ON" if autotrade_active else "OFF"
-                print(f"Autotrade is {st} ({broker_mode}). Use: autotrade on|off")
+                prof = getattr(config, "CURRENT_PROFILE", "scalp").upper()
+                print(f"Autotrade is {st} ({broker_mode}, profile={prof}). Use: autotrade on|off|scalp")
         elif name == "close":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             try:
@@ -1539,19 +1573,18 @@ def run_cli_interactive():
                 print(f"Performance error: {e}")
         elif name == "profile":
             try:
-                from strategy_profiles import load_profiles
+                from strategy_profiles import load_profiles, apply_profile, CURRENT_PROFILE
                 profiles = load_profiles()
                 if len(parts) > 1:
                     pname = parts[1].lower()
                     if pname in profiles:
-                        p = profiles[pname]
-                        print(f"Profile: {p.name} ({p.description})\n"
-                              f"• Score >= {p.min_score} | Agree >= {p.min_agreement} | RR >= {p.min_rr}\n"
-                              f"• Risk {p.base_risk_pct}% | Max lev {p.max_leverage}x")
+                        p, summary = apply_profile(pname, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+                        clean_summary = summary.replace("**", "").replace("*", "").replace("`", "").replace("_", "")
+                        print(f"Profile: {p.name} ({p.description})\n" + clean_summary)
                     else:
-                        print(f"Unknown profile '{pname}'. Available: {', '.join(profiles.keys())}")
+                        print(f"Unknown profile '{pname}'. Available profiles: {', '.join(profiles.keys())}")
                 else:
-                    print(f"Available profiles: {', '.join(profiles.keys())}")
+                    print(f"Available profiles: {', '.join(profiles.keys())} (Active: {CURRENT_PROFILE})")
             except Exception as e:
                 print(f"Profile error: {e}")
         elif name in ("ask", "chat"):

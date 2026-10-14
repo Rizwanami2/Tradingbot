@@ -291,7 +291,9 @@ def attach_plan_to_signal(sig: Dict[str, Any], plan: EntryPlan) -> Dict[str, Any
     try:
         mark = float(plan.mark)
         best = float(plan.best_entry)
-        if abs(best - mark) / max(mark, 1e-9) < 0.01:
+        if sig.get("is_scalp") or sig.get("fast_market_fill"):
+            out["entry"] = mark or float(out.get("entry") or best)
+        elif abs(best - mark) / max(mark, 1e-9) < 0.01:
             out["entry"] = best
         else:
             out["entry"] = float(out.get("entry") or mark)

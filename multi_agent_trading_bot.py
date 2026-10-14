@@ -448,9 +448,37 @@ class Arbiter:
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
 
-    def __init__(self, require_killzone: bool = False, allow_asian: bool = False):
-        self.require_killzone = require_killzone
-        self.allow_asian = allow_asian
+    def __init__(self, require_killzone: Optional[bool] = None, allow_asian: Optional[bool] = None):
+        self.require_killzone = require_killzone if require_killzone is not None else False
+        self.allow_asian = allow_asian if allow_asian is not None else True
+        self.is_scalp = False
+        self.fast_market_fill = False
+        self.scalp_sl_pct = 0.12
+        self.scalp_tp_pct = 0.10
+        self.scalp_tp_usd = 2.50
+        self.scalp_sl_usd = 3.00
+        self.strict_htf = False
+        try:
+            import config
+            prof_name = getattr(config, "CURRENT_PROFILE", "scalp")
+            from strategy_profiles import get_profile
+            prof = get_profile(prof_name)
+            self.WEIGHTS = dict(prof.weights)
+            self.MIN_AGREEMENT = prof.min_agreement
+            self.MIN_SCORE = prof.min_score
+            if require_killzone is None:
+                self.require_killzone = prof.require_killzone
+            if allow_asian is None:
+                self.allow_asian = prof.allow_asian
+            self.strict_htf = prof.strict_htf
+            self.is_scalp = getattr(prof, "is_scalp", False)
+            self.scalp_sl_pct = getattr(prof, "scalp_sl_pct", 0.12)
+            self.scalp_tp_pct = getattr(prof, "scalp_tp_pct", 0.10)
+            self.scalp_tp_usd = getattr(prof, "scalp_tp_usd", 2.50)
+            self.scalp_sl_usd = getattr(prof, "scalp_sl_usd", 3.00)
+            self.fast_market_fill = getattr(prof, "fast_market_fill", False)
+        except Exception:
+            pass
         self.trend = TrendAgent()
         self.liq = LiquidityAgent()
         self.ind = IndicatorAgent()
@@ -527,13 +555,28 @@ class Arbiter:
             return None, msg, votes
 
         entry = float(df1["close"].iloc[-1])
-        atr_val = atr(df1) or entry * 0.002
-        min_stop_dist = entry * 0.003
-        stop_dist = max(atr_val * 1.5, min_stop_dist)
-        if direction == Dir.LONG:
-            stop = entry - stop_dist
+        if getattr(self, "is_scalp", False):
+            sl_pct = float(getattr(self, "scalp_sl_pct", 0.12)) / 100.0
+            tp_pct = float(getattr(self, "scalp_tp_pct", 0.10)) / 100.0
+            atr_val = atr(df1) or (entry * 0.001)
+            stop_dist = min(max(atr_val * 0.5, entry * (sl_pct * 0.6)), entry * (sl_pct * 1.5))
+            if direction == Dir.LONG:
+                stop = entry - stop_dist
+                tp1 = entry + stop_dist * 1.0
+                tp2 = entry + stop_dist * 1.5
+            else:
+                stop = entry + stop_dist
+                tp1 = entry - stop_dist * 1.0
+                tp2 = entry - stop_dist * 1.5
         else:
-            stop = entry + stop_dist
+            atr_val = atr(df1) or entry * 0.002
+            min_stop_dist = entry * 0.003
+            stop_dist = max(atr_val * 1.5, min_stop_dist)
+            if direction == Dir.LONG:
+                stop = entry - stop_dist
+            else:
+                stop = entry + stop_dist
+            tp1 = tp2 = None
 
         plan = risk_mgr.position_size(entry=entry, stop=stop, symbol=symbol)
         if plan.lots <= 0:
@@ -546,25 +589,37 @@ class Arbiter:
             except Exception:
                 pass
 
+        final_tp1 = tp1 if (getattr(self, "is_scalp", False) and tp1 is not None) else plan.tp1
+        final_tp2 = tp2 if (getattr(self, "is_scalp", False) and tp2 is not None) else plan.tp2
         sig = {
             "direction": direction,
             "entry": entry,
             "stop": stop,
-            "tp1": plan.tp1,
-            "tp2": plan.tp2,
+            "tp1": final_tp1,
+            "tp2": final_tp2,
             "tp3": getattr(plan, "tp3", None),
             "lots": plan.lots,
             "size": plan.size,
             "leverage": plan.leverage,
             "margin_required": plan.margin_required,
             "risk_amount": plan.risk_amount,
-            "rr": abs(plan.tp1 - entry) / abs(entry - stop) if abs(entry - stop) else 0,
+            "rr": abs(final_tp1 - entry) / abs(entry - stop) if abs(entry - stop) else 0,
             "score": score,
             "regime": regime,
-            "reason": f"Consensus {direction.name} score={score:.2f}",
+            "reason": (
+                f"Scalp {direction.name} score={score:.2f} (micro SL/TP)"
+                if getattr(self, "is_scalp", False)
+                else f"Consensus {direction.name} score={score:.2f}"
+            ),
             "symbol": symbol,
+            "is_scalp": bool(getattr(self, "is_scalp", False)),
+            "fast_market_fill": bool(getattr(self, "fast_market_fill", False)),
         }
-        status_msg = f"SETUP {direction.name} score={score:.2f}"
+        status_msg = (
+            f"⚡ SCALP {direction.name} score={score:.2f} (micro SL/TP)"
+            if getattr(self, "is_scalp", False)
+            else f"SETUP {direction.name} score={score:.2f}"
+        )
         if session_warn:
             status_msg += f" ({session_warn})"
         return sig, status_msg, votes

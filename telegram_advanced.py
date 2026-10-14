@@ -49,24 +49,28 @@ async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        from strategy_profiles import load_profiles
+        from strategy_profiles import load_profiles, apply_profile, CURRENT_PROFILE
         profiles = load_profiles()
         if not ctx.args:
             await update.message.reply_text(
-                f"Profiles: `{', '.join(profiles.keys())}`\nUsage: `/profile swing`", parse_mode="Markdown")
+                f"📋 **Strategy Profiles** (Active: `{CURRENT_PROFILE}`)\n"
+                f"• Available: `{', '.join(profiles.keys())}`\n"
+                f"• Usage: `/profile scalp` or `/profile balanced`\n"
+                f"💡 _Tip: Use `/profile scalp` for rapid micro-scalping with small SL/TP & fast capital gains._",
+                parse_mode="Markdown",
+            )
             return
         name = ctx.args[0].lower()
         if name not in profiles:
             await update.message.reply_text(f"Unknown `{name}`. Available: {', '.join(profiles.keys())}")
             return
-        p = profiles[name]
-        await update.message.reply_text(
-            f"📋 **{p.name}**\n{p.description}\n"
-            f"• Score ≥ `{p.min_score}` | Agree ≥ `{p.min_agreement}` | RR ≥ `{p.min_rr}`\n"
-            f"• Risk `{p.base_risk_pct}%` | Max lev `{p.max_leverage}x`\n"
-            f"• Killzone `{p.require_killzone}` | Strict HTF `{p.strict_htf}`",
-            parse_mode="Markdown",
-        )
+        try:
+            from main import arbiter, risk_mgr, engine
+            import config
+            p, summary = apply_profile(name, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+        except Exception:
+            p, summary = apply_profile(name)
+        await update.message.reply_text(summary, parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"Profile error: `{e}`", parse_mode="Markdown")
 

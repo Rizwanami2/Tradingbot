@@ -41,10 +41,13 @@ MT5_PATH=
 MT5_MAGIC=112233
 MT5_GATEWAY_URL=
 
-# Fast Scalp TP Settings
+# Strategy Profile & Micro-Scalping Settings
+BOT_PROFILE=scalp
 BOT_SCALP=true
-BOT_SCALP_TP_USD=5.0
-BOT_SCALP_TP_PCT=0.15
+BOT_SCALP_TP_USD=2.5
+BOT_SCALP_TP_PCT=0.10
+BOT_SCALP_SL_USD=3.0
+BOT_SCALP_SL_PCT=0.12
 BOT_NEWS=true
 ```
 
@@ -62,7 +65,7 @@ BOT_NEWS=true
 
 ### ⚡ Execution & Positions (Active Limit: 5)
 - `/positions` — Open active trades, pending setups & real-time PnL
-- `/autotrade on|off` — Multi-symbol autotrading (up to 5 concurrent active trades)
+- `/autotrade on|off|scalp` — Multi-symbol autotrading (standard or rapid micro-scalping up to 5 concurrent active trades)
 - `/close [SYM|all]` — Instantly close position(s)
 - `/cancel [SYM]` — Cancel pending order setup
 - `/closed` — Recently closed trades history & realized PnL
@@ -75,7 +78,7 @@ BOT_NEWS=true
 - `/alpaca [status|live|positions]` — Alpaca REST broker (paper & live trading)
 
 ### 🛡️ Risk & Safety Management
-- `/status` — Portfolio equity, drawdown & active slot capacity
+- `/status` — Portfolio equity, drawdown, active slot capacity & strategy profile
 - `/health` — Real-time telemetry & background worker heartbeat
 - `/risk` — Risk tier report, margin capacity & lot sizing
 - `/leverage [1-20]` — Set maximum account leverage ceiling
@@ -85,7 +88,7 @@ BOT_NEWS=true
 - `/backtest [bars] [SYM]` — Fast backtest engine
 - `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)
 - `/performance` — Detailed trade metrics, win rate & Sharpe ratio
-- `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)
+- `/profile [name]` — View or activate strategy profile (`scalp`, `swing`, `balanced`, `gold_only`, `crypto`)
 
 ### 🧠 Autonomous AI & Standings
 - `/brain` — Autonomous learner knowledge & win rates

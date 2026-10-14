@@ -130,7 +130,14 @@ async def live_monitoring_worker(
                             except RuntimeError as reg_err:
                                 logger.info("Autotrade %s: register blocked — %s", symbol, reg_err)
                                 continue
+                            is_scalp_order = getattr(engine, "scalp_mode", False) or getattr(order, "is_scalp", False)
                             alert = (
+                                f"⚡ **NEW SCALP SETUP** ({open_n + 1}/{max_open})\n"
+                                f"`{symbol}` **{order.direction}** @ `${order.entry_level:,.2f}`\n"
+                                f"Micro SL `${order.stop_loss:,.2f}` | Micro TP `${order.tp1:,.2f}`\n"
+                                f"Lots `{order.lots}` | Lev `{order.leverage:.0f}x`\n"
+                                f"_{order.setup_reason}_"
+                            ) if is_scalp_order else (
                                 f"⚡ **NEW MULTI-AGENT SETUP** ({open_n + 1}/{max_open})\n"
                                 f"`{symbol}` **{order.direction}**\n"
                                 f"Entry `${order.entry_level:,.2f}` | SL `${order.stop_loss:,.2f}`\n"
@@ -168,9 +175,13 @@ async def live_monitoring_worker(
             logger.error("Monitoring worker error: %s", e)
 
         write_runtime_status()
-        sleep_interval = (
-            config.FAST_POLL_INTERVAL
-            if (engine.active_positions or engine.pending_setups)
-            else config.POLL_INTERVAL
-        )
+        is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
+        if is_scalping:
+            sleep_interval = 1 if (engine.active_positions or engine.pending_setups) else 2
+        else:
+            sleep_interval = (
+                config.FAST_POLL_INTERVAL
+                if (engine.active_positions or engine.pending_setups)
+                else config.POLL_INTERVAL
+            )
         await asyncio.sleep(sleep_interval)
