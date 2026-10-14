@@ -21,7 +21,7 @@ Educational only. Not financial advice.
 """
 
 from dataclasses import dataclass, asdict
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Any
 from enum import Enum
 from datetime import date
 import json
@@ -330,6 +330,107 @@ class RiskManager:
         if s.equity > 0 and (-s.weekly_pnl / s.equity * 100) >= cfg.max_weekly_loss_pct:
             return False, "weekly loss limit hit"
         return True, "ok"
+
+    def reset_daily_risk(self) -> Dict[str, Any]:
+        """
+        Manually reset daily loss counter, consecutive losses, and restore trading status.
+        """
+        self._check_period_reset()
+        self.state.daily_pnl = 0.0
+        self.state.consecutive_losses = 0
+        if self.state.peak_equity > 0:
+            dd = (self.state.peak_equity - self.state.equity) / self.state.peak_equity
+            if dd >= self.config.dd_hard_at:
+                self.state.peak_equity = max(self.state.equity, 0.0)
+                self.state.mode = RiskMode.NORMAL.value
+            elif dd >= self.config.dd_reduce_at:
+                self.state.mode = RiskMode.REDUCED.value
+            else:
+                self.state.mode = RiskMode.NORMAL.value
+        else:
+            self.state.peak_equity = max(self.state.equity, 0.0)
+            self.state.mode = RiskMode.NORMAL.value
+        if getattr(self.state, "rf", 1.0) < 1.0:
+            self.state.rf = 1.0
+        self._save_state()
+        can, why = self.can_trade()
+        return {
+            "daily_pnl": self.state.daily_pnl,
+            "weekly_pnl": self.state.weekly_pnl,
+            "consecutive_losses": self.state.consecutive_losses,
+            "equity": self.state.equity,
+            "peak_equity": self.state.peak_equity,
+            "mode": self.state.mode,
+            "rf": getattr(self.state, "rf", 1.0),
+            "can_trade": can,
+            "reason": why,
+        }
+
+    def reset_weekly_risk(self) -> Dict[str, Any]:
+        """
+        Manually reset weekly loss counter, daily loss counter, consecutive losses, and restore trading status.
+        """
+        self._check_period_reset()
+        self.state.daily_pnl = 0.0
+        self.state.weekly_pnl = 0.0
+        self.state.consecutive_losses = 0
+        if self.state.peak_equity > 0:
+            dd = (self.state.peak_equity - self.state.equity) / self.state.peak_equity
+            if dd >= self.config.dd_hard_at:
+                self.state.peak_equity = max(self.state.equity, 0.0)
+                self.state.mode = RiskMode.NORMAL.value
+            elif dd >= self.config.dd_reduce_at:
+                self.state.mode = RiskMode.REDUCED.value
+            else:
+                self.state.mode = RiskMode.NORMAL.value
+        else:
+            self.state.peak_equity = max(self.state.equity, 0.0)
+            self.state.mode = RiskMode.NORMAL.value
+        if getattr(self.state, "rf", 1.0) < 1.0:
+            self.state.rf = 1.0
+        self._save_state()
+        can, why = self.can_trade()
+        return {
+            "daily_pnl": self.state.daily_pnl,
+            "weekly_pnl": self.state.weekly_pnl,
+            "consecutive_losses": self.state.consecutive_losses,
+            "equity": self.state.equity,
+            "peak_equity": self.state.peak_equity,
+            "mode": self.state.mode,
+            "rf": getattr(self.state, "rf", 1.0),
+            "can_trade": can,
+            "reason": why,
+        }
+
+    def reset_all_risk(self, new_equity: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Full manual risk reset: clears daily & weekly losses, consecutive losses,
+        resets peak_equity to current equity (clearing historical drawdown lock),
+        sets mode to normal, and resets RF to 1.0.
+        """
+        self._check_period_reset()
+        if new_equity is not None and new_equity > 0:
+            self.state.equity = float(new_equity)
+        self.state.peak_equity = max(self.state.equity, 0.0)
+        self.state.daily_pnl = 0.0
+        self.state.weekly_pnl = 0.0
+        self.state.consecutive_losses = 0
+        self.state.win_streak = 0
+        self.state.mode = RiskMode.NORMAL.value
+        self.state.rf = 1.0
+        self._save_state()
+        can, why = self.can_trade()
+        return {
+            "equity": self.state.equity,
+            "peak_equity": self.state.peak_equity,
+            "daily_pnl": self.state.daily_pnl,
+            "weekly_pnl": self.state.weekly_pnl,
+            "consecutive_losses": self.state.consecutive_losses,
+            "mode": self.state.mode,
+            "rf": self.state.rf,
+            "can_trade": can,
+            "reason": why,
+        }
 
     def calc_lots(self, risk_amount: float, stop_distance: float) -> Tuple[float, float, float]:
         p = self.profile

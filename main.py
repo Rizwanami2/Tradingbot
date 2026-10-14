@@ -281,6 +281,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+            "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
+            "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
             "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
             "• `/kill [on|off]` — Emergency execution stop circuit breaker"
         )
@@ -334,6 +336,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+            "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
+            "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
             "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
             "• `/kill [on|off]` — Emergency execution stop circuit breaker\n\n"
             "📈 **Backtesting & Research:**\n"
@@ -459,19 +463,191 @@ async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_equity: Optional[float] = None) -> str:
+    """
+    Manually reset daily or weekly risk management limits, loss streaks, circuit breakers,
+    and optionally restart automated trading.
+    """
+    global autotrade_active
+    s_scope = (scope or "all").lower().strip()
+    if s_scope in ("day", "daily", "d"):
+        res = risk_mgr.reset_daily_risk()
+        scope_title = "DAILY"
+        try:
+            from risk_tiers import RiskTiers
+            RiskTiers().reset_daily()
+        except Exception:
+            pass
+        try:
+            from telegram_feature_pack import _get_pack
+            _get_pack().risk_tiers.reset_daily()
+        except Exception:
+            pass
+        try:
+            from risk_advanced import RiskAdvanced
+            RiskAdvanced().reset_daily()
+        except Exception:
+            pass
+    elif s_scope in ("week", "weekly", "w"):
+        res = risk_mgr.reset_weekly_risk()
+        scope_title = "WEEKLY"
+        try:
+            from risk_tiers import RiskTiers
+            RiskTiers().reset_weekly()
+        except Exception:
+            pass
+        try:
+            from telegram_feature_pack import _get_pack
+            _get_pack().risk_tiers.reset_weekly()
+        except Exception:
+            pass
+        try:
+            from risk_advanced import RiskAdvanced
+            RiskAdvanced().reset_daily()
+        except Exception:
+            pass
+    else:
+        res = risk_mgr.reset_all_risk(new_equity=new_equity)
+        scope_title = "ALL"
+        try:
+            from risk_tiers import RiskTiers
+            RiskTiers().reset_all()
+        except Exception:
+            pass
+        try:
+            from telegram_feature_pack import _get_pack
+            _get_pack().risk_tiers.reset_all()
+        except Exception:
+            pass
+        try:
+            from risk_advanced import RiskAdvanced
+            RiskAdvanced().reset_all(equity=risk_mgr.state.equity)
+        except Exception:
+            pass
+
+    # Clear engine broker halt state
+    engine.reset_halt()
+
+    # Clear KillSwitch
+    try:
+        from kill_switch import KillSwitch
+        KillSwitch().deactivate()
+    except Exception:
+        pass
+    try:
+        from advanced_integration import AdvancedEngine
+        AdvancedEngine().deactivate_kill()
+    except Exception:
+        pass
+
+    # Synchronize risk_advanced_state.json equity & peak so AdvancedEngine drawdown doesn't re-trip
+    try:
+        from risk_advanced import RiskAdvanced
+        ra = RiskAdvanced()
+        ra.equity = float(risk_mgr.state.equity)
+        ra.equity_peak = float(risk_mgr.state.equity)
+        ra._save()
+    except Exception:
+        pass
+
+    if restart_autotrade:
+        autotrade_active = True
+        auto_note = "• **Autotrade:** 🟢 ACTIVE (monitoring resumed)"
+    else:
+        st = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+        auto_note = f"• **Autotrade:** {st} (Use `/autotrade on` or `/risk restart` to resume)"
+
+    s = risk_mgr.state
+    can_trade, can_why = risk_mgr.can_trade()
+    trade_status = "🟢 UNBLOCKED" if can_trade else f"⚠️ PAUSED ({can_why})"
+    rf_val = getattr(s, "rf", 1.0)
+
+    lines = [
+        f"🔄 **Risk Management Reset — {scope_title}**",
+        f"• **Trading Status:** {trade_status}",
+        f"• **Account Equity:** `${s.equity:,.2f}` | **Peak:** `${s.peak_equity:,.2f}`",
+        f"• **Daily PnL:** `${s.daily_pnl:+,.2f}` | **Weekly PnL:** `${s.weekly_pnl:+,.2f}`",
+        f"• **Consecutive Losses:** `{s.consecutive_losses}` (Streak reset)",
+        f"• **Risk Mode:** 🟢 `{s.mode.upper()}` | **Risk Factor (RF):** `{rf_val:.2f}`",
+        f"• **Circuit Breakers:** 🟢 Cleared (Engine halt lifted, Kill switch deactivated)",
+        auto_note,
+    ]
+    return "\n".join(lines)
+
+
+async def resetrisk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Direct alias to reset risk limits: /resetrisk [daily|weekly|all] [restart]"""
+    args = ctx.args or []
+    args_lower = [a.lower() for a in args]
+    is_restart = any(a in ("restart", "start") for a in args_lower)
+    if "daily" in args_lower:
+        scope = "daily"
+    elif "weekly" in args_lower:
+        scope = "weekly"
+    else:
+        scope = "all"
+    new_eq = None
+    for a in args:
+        try:
+            val = float(a)
+            if val > 0:
+                new_eq = val
+                break
+        except ValueError:
+            pass
+    msg = reset_risk_limits(scope=scope, restart_autotrade=is_restart, new_equity=new_eq)
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
 async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    args = ctx.args or []
+    args_lower = [a.lower() for a in args]
+
+    # Check for reset / restart subcommands
+    has_reset = any(a in ("reset", "clear", "restart", "start") for a in args_lower)
+    is_restart = any(a in ("restart", "start") for a in args_lower)
+
+    if has_reset or (args and args[0].lower() in ("daily", "weekly", "all")):
+        if "daily" in args_lower:
+            scope = "daily"
+        elif "weekly" in args_lower:
+            scope = "weekly"
+        else:
+            scope = "all"
+
+        new_eq = None
+        for a in args:
+            try:
+                val = float(a)
+                if val > 0:
+                    new_eq = val
+                    break
+            except ValueError:
+                pass
+
+        msg = reset_risk_limits(scope=scope, restart_autotrade=is_restart, new_equity=new_eq)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+
+    # Normal risk report when no reset argument is provided
     s = risk_mgr.state
     risk_pct, reason = risk_mgr.current_risk_pct()
     max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
+    can, why = risk_mgr.can_trade()
+    trade_st = "🟢 Ready" if can else f"⚠️ Blocked ({why})"
     msg = (
         f"🛡️ **Institutional Risk Controls**\n"
         f"• **Risk/Trade:** `{risk_pct:.2f}%` ({reason})\n"
+        f"• **Trading Status:** {trade_st}\n"
         f"• **Max Concurrent Trades:** `{max_trades}` active slots\n"
         f"• **Account Equity:** `${s.equity:,.2f}` | **Mode:** {mode_icon} `{s.mode.upper()}`\n"
+        f"• **Today PnL:** `${s.daily_pnl:+,.2f}` | **Week PnL:** `${s.weekly_pnl:+,.2f}`\n"
+        f"• **Consecutive Losses:** `{s.consecutive_losses}`\n"
         f"• **Max Daily Loss:** `{risk_mgr.config.max_daily_loss_pct:.1f}%` | **Weekly:** `{risk_mgr.config.max_weekly_loss_pct:.1f}%`\n"
         f"• **Margin Utilization Cap:** `{risk_mgr.config.max_margin_utilization_pct:.0f}%`\n"
-        f"• {_safe_summary()}\n"
+        f"• {_safe_summary()}\n\n"
+        f"💡 _Commands: `/risk reset [daily|weekly|all]` | `/risk restart` | `/resetrisk`_"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -1484,8 +1660,29 @@ def run_cli_interactive():
                     print(f"{v.direction.name}: {v.reason}")
             except Exception as e:
                 print(f"News error: {e}")
-        elif name == "risk":
-            print(risk_mgr.summary())
+        elif name in ("risk", "resetrisk", "riskreset"):
+            if len(parts) == 1 and name == "risk":
+                print(risk_mgr.summary())
+            else:
+                args = parts[1:]
+                args_lower = [a.lower() for a in args]
+                is_restart = any(a in ("restart", "start") for a in args_lower)
+                if "daily" in args_lower:
+                    scope = "daily"
+                elif "weekly" in args_lower:
+                    scope = "weekly"
+                else:
+                    scope = "all"
+                new_eq = None
+                for a in args:
+                    try:
+                        val = float(a)
+                        if val > 0:
+                            new_eq = val
+                            break
+                    except ValueError:
+                        pass
+                print(reset_risk_limits(scope=scope, restart_autotrade=is_restart, new_equity=new_eq))
         elif name == "positions":
             if hasattr(engine, "format_positions_detail"):
                 print(engine.format_positions_detail())
@@ -1844,9 +2041,48 @@ def run_cli_interactive():
         elif name == "digest":
             try:
                 from telegram_feature_pack_v4 import _get
-                print(_get().daily_digest())
+                print(_get().digest())
             except Exception as e:
                 print(f"Digest error: {e}")
+        elif name == "replay":
+            if len(parts) > 1:
+                try:
+                    from telegram_feature_pack_v4 import _get
+                    print(_get().replay(parts[1]))
+                except Exception as e:
+                    print(f"Replay error: {e}")
+            else:
+                print("Usage: replay <TRADE_ID>")
+        elif name == "export":
+            try:
+                from telegram_feature_pack_v4 import _get
+                print(_get().export_csv())
+            except Exception as e:
+                print(f"Export error: {e}")
+        elif name == "setups":
+            try:
+                from telegram_feature_pack_v4 import _get
+                pack = _get()
+                print(pack.edge.setup_report() + "\n\n" + pack.edge.calibration_report())
+            except Exception as e:
+                print(f"Setups error: {e}")
+        elif name == "abooks":
+            try:
+                from telegram_feature_pack_v4 import _get
+                print(_get().ab.report())
+            except Exception as e:
+                print(f"A/B error: {e}")
+        elif name == "heal":
+            try:
+                from telegram_feature_pack_v4 import _get
+                h = _get().health
+                if len(parts) > 1 and parts[1].lower() in ("reset", "ok", "clear"):
+                    h.record_ok()
+                    print("Health counter reset.")
+                else:
+                    print(h.status())
+            except Exception as e:
+                print(f"Heal error: {e}")
         elif name == "brain":
             try:
                 from autonomous_learner import get_brain
@@ -1901,7 +2137,8 @@ def main():
                 BotCommand("closed", "Recently closed trades history & PnL"),
                 BotCommand("status", "Portfolio equity & margin capacity"),
                 BotCommand("health", "System health & background worker telemetry"),
-                BotCommand("risk", "Risk tier report & lot sizing"),
+                BotCommand("risk", "Risk tier report, sizing & reset"),
+                BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
                 BotCommand("leverage", "Set or view leverage ceiling (1-20x)"),
                 BotCommand("kill", "Emergency execution circuit breaker switch"),
                 BotCommand("news", "Macro calendar & economic sentiment"),
@@ -1978,6 +2215,7 @@ def main():
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("risk", risk_command))
+    app.add_handler(CommandHandler(["resetrisk", "riskreset"], resetrisk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
     try:
         from telegram_advanced import kill_command

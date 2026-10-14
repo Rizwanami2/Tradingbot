@@ -108,6 +108,21 @@ class RiskAdvanced:
         self.daily_count[d] = self.daily_count.get(d, 0) + 1
         self._save()
 
+    def reset_daily(self):
+        """Reset daily trade count for today so new trades are unblocked."""
+        d = self._today()
+        self.daily_count[d] = 0
+        self._save()
+
+    def reset_all(self, equity: Optional[float] = None):
+        """Reset all daily trade counts, open positions, and drawdown peak to current equity."""
+        if equity is not None and equity > 0:
+            self.equity = float(equity)
+        self.daily_count.clear()
+        self.equity_peak = max(self.equity, 0.0)
+        self.open.clear()
+        self._save()
+
     # ---- correlation ----
     def correlation_ok(self, symbol: str, direction: str) -> Tuple[bool, str]:
         sector = _sector_of(symbol)

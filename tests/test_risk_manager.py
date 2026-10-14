@@ -149,5 +149,61 @@ class TestRiskManager(unittest.TestCase):
                 os.remove(temp_path)
 
 
+    def test_risk_management_reset(self):
+        # 1. Test consecutive losses block & reset
+        self.rm.state.consecutive_losses = 5
+        can, why = self.rm.can_trade()
+        self.assertFalse(can)
+        self.assertIn("consecutive losses", why)
+
+        res = self.rm.reset_daily_risk()
+        self.assertEqual(res["consecutive_losses"], 0)
+        self.assertEqual(self.rm.state.consecutive_losses, 0)
+        self.assertTrue(res["can_trade"])
+
+        # 2. Test daily loss limit block & reset
+        self.rm.state.daily_pnl = -500.0  # -5% > max_daily_loss_pct (3%)
+        can, why = self.rm.can_trade()
+        self.assertFalse(can)
+        self.assertIn("daily loss limit", why)
+
+        res = self.rm.reset_daily_risk()
+        self.assertEqual(res["daily_pnl"], 0.0)
+        self.assertEqual(self.rm.state.daily_pnl, 0.0)
+        can_after, _ = self.rm.can_trade()
+        self.assertTrue(can_after)
+
+        # 3. Test weekly loss limit block & reset
+        self.rm.state.weekly_pnl = -800.0  # -8% > max_weekly_loss_pct (6%)
+        can, why = self.rm.can_trade()
+        self.assertFalse(can)
+        self.assertIn("weekly loss limit", why)
+
+        res = self.rm.reset_weekly_risk()
+        self.assertEqual(res["weekly_pnl"], 0.0)
+        self.assertEqual(self.rm.state.weekly_pnl, 0.0)
+        can_after_w, _ = self.rm.can_trade()
+        self.assertTrue(can_after_w)
+
+        # 4. Test all risk reset
+        self.rm.state.peak_equity = 15000.0
+        self.rm.state.equity = 1000.0
+        self.rm.state.daily_pnl = -200.0
+        self.rm.state.weekly_pnl = -500.0
+        self.rm.state.consecutive_losses = 4
+        self.rm.state.mode = "recovery"
+        self.rm.state.rf = 0.5
+
+        res_all = self.rm.reset_all_risk(new_equity=5000.0)
+        self.assertEqual(res_all["equity"], 5000.0)
+        self.assertEqual(res_all["peak_equity"], 5000.0)
+        self.assertEqual(res_all["daily_pnl"], 0.0)
+        self.assertEqual(res_all["weekly_pnl"], 0.0)
+        self.assertEqual(res_all["consecutive_losses"], 0)
+        self.assertEqual(res_all["mode"], "normal")
+        self.assertEqual(res_all["rf"], 1.0)
+        self.assertTrue(res_all["can_trade"])
+
+
 if __name__ == "__main__":
     unittest.main()

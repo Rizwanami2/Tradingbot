@@ -93,6 +93,28 @@ class RiskTiers:
         self.open_risk_r.pop(trade_id, None)
         self._save()
 
+    def reset_daily(self):
+        """Reset daily R loss counter so daily limit circuits clear."""
+        d = self._today()
+        if d in self.history:
+            self.history[d].pnl_r = max(0.0, self.history[d].pnl_r)
+        self._save()
+
+    def reset_weekly(self):
+        """Reset weekly R loss counters for the past 7 days so weekly circuits clear."""
+        today = datetime.now(timezone.utc).date()
+        for i in range(7):
+            d = (today.fromordinal(today.toordinal() - i)).isoformat()
+            if d in self.history:
+                self.history[d].pnl_r = max(0.0, self.history[d].pnl_r)
+        self._save()
+
+    def reset_all(self):
+        """Reset all tier history and open risk."""
+        self.history.clear()
+        self.open_risk_r.clear()
+        self._save()
+
     def daily_pnl_r(self) -> float:
         b = self.history.get(self._today())
         return b.pnl_r if b else 0.0
