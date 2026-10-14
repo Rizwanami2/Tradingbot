@@ -124,6 +124,91 @@ class TestFeaturePacks(unittest.TestCase):
             summary = brain.summary()
             self.assertIn("Autonomous Learner", summary)
 
+            # Test set_enabled toggle
+            brain.knowledge.banned_setups["LONG|bad"] = "test ban"
+            ok, reason, mult = brain.advise_signal(setup="LONG|bad")
+            self.assertFalse(ok)
+            brain.set_enabled(False)
+            ok, reason, mult = brain.advise_signal(setup="LONG|bad")
+            self.assertTrue(ok)
+            self.assertIn("disabled", reason)
+            brain.set_enabled(True)
+
+            # Test format_rules and format_flaws
+            rules_str = brain.format_rules()
+            self.assertIn("Rules & Active Filters", rules_str)
+            self.assertIn("Min Score", rules_str)
+
+            flaws_str = brain.format_flaws()
+            self.assertIn("Flaw Mining", flaws_str)
+
+            # Test reset_memory
+            res = brain.reset_memory()
+            self.assertEqual(res["status"], "reset")
+            self.assertEqual(brain.knowledge.total_live_trades, 0)
+            self.assertEqual(len(brain.knowledge.banned_setups), 0)
+
+    def test_trade_journal_brain_wiring(self):
+        import autonomous_learner
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jpath = os.path.join(tmpdir, "journal.json")
+            mpath = os.path.join(tmpdir, "brain.json")
+            test_brain = AutonomousLearner(memory_path=mpath)
+            old_brain = autonomous_learner._brain
+            autonomous_learner._brain = test_brain
+            try:
+                journal = TradeJournal(path=jpath)
+                tid = journal.record_open(
+                    symbol="XAUUSD", direction="LONG", entry=2000.0,
+                    stop=1990.0, tp1=2020.0, size=0.1, risk_amount=10.0,
+                    regime="trend", session="LONDON", agents=["TREND"],
+                )
+                journal.record_close(trade_id=tid, exit_price=2015.0, auto_learn=True)
+                self.assertEqual(test_brain.knowledge.total_live_trades, 1)
+                self.assertGreater(len(test_brain._trade_log), 0)
+            finally:
+                autonomous_learner._brain = old_brain
+
+    def test_telegram_brain_subcommands(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from telegram_brain import brain_command, relearn_command
+
+        update = MagicMock()
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        ctx = MagicMock()
+        # Test /brain status
+        ctx.args = ["status"]
+        asyncio.run(brain_command(update, ctx))
+        self.assertTrue(update.message.reply_text.called)
+
+        # Test /brain rules
+        ctx.args = ["rules"]
+        asyncio.run(brain_command(update, ctx))
+        self.assertTrue(update.message.reply_text.called)
+
+        # Test /brain flaws
+        ctx.args = ["flaws"]
+        asyncio.run(brain_command(update, ctx))
+        self.assertTrue(update.message.reply_text.called)
+
+        # Test /brain on / off
+        ctx.args = ["off"]
+        asyncio.run(brain_command(update, ctx))
+        ctx.args = ["on"]
+        asyncio.run(brain_command(update, ctx))
+
+        # Test /brain reset
+        ctx.args = ["reset"]
+        asyncio.run(brain_command(update, ctx))
+
+        # Test /relearn
+        ctx.args = ["XAUUSD", "1.0"]
+        asyncio.run(relearn_command(update, ctx))
+
+
     def test_signal_quality(self):
         df = _sample_ohlcv(50)
         res = evaluate_signal_quality(df, direction="LONG", spread=0.1)

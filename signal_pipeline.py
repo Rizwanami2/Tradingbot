@@ -177,6 +177,55 @@ def run_signal(
     except Exception as _h2_err:
         res["history_2y_error"] = str(_h2_err)
 
+    try:
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        sig = res.get("signal")
+        if sig:
+            d = sig.get("direction")
+            dname = d.name if hasattr(d, "name") else str(d)
+            regime = str(sig.get("regime") or "")
+            score = float(sig.get("score") or 0.0)
+            rr = float(sig.get("rr") or 0.0)
+            votes = res.get("votes") or []
+            agree = len([v for v in votes if str(v.get("direction", "")).upper() == dname.upper()])
+            conv_val = 0.6
+            if isinstance(sig.get("conviction"), dict):
+                conv_val = float(sig["conviction"].get("score", 0.6) or 0.6)
+            elif sig.get("conviction") is not None:
+                try:
+                    conv_val = float(sig["conviction"])
+                except Exception:
+                    conv_val = 0.6
+            setup_tag = f"{dname.lower()}|{regime or 'unknown'}"
+            ok, reason, size_mult = brain.advise_signal(
+                direction=dname,
+                score=score,
+                rr=rr,
+                agreement=agree,
+                conviction=conv_val,
+                regime=regime,
+                setup=setup_tag,
+            )
+            res["brain_allowed"] = ok
+            res["brain_reason"] = reason
+            res["brain_size_mult"] = size_mult
+            if not ok:
+                sig["vetoed"] = True
+                sig["veto_reason"] = reason
+                res["status"] = f"{res.get('status', '')} | 🧠 Brain Veto: {reason}"
+            else:
+                if size_mult < 1.0:
+                    cur_lots = float(sig.get("lots") or 0.0)
+                    cur_size = float(sig.get("size") or 0.0)
+                    if cur_lots > 0:
+                        sig["lots"] = max(0.01, round(cur_lots * size_mult, 4))
+                    if cur_size > 0:
+                        sig["size"] = max(0.01, round(cur_size * size_mult, 4))
+                    res["status"] = f"{res.get('status', '')} | 🧠 Sized {size_mult:.0%} by Brain"
+    except Exception as _b_err:
+        pass
+
     res["symbol"] = sym
     res["equity"] = eq
     res["leverage"] = risk.get_leverage()
@@ -210,8 +259,15 @@ def format_signal_message(res: Dict[str, Any]) -> str:
             slev = float(sig.get("leverage") or lev)
         except Exception:
             entry = stop = tp1 = tp2 = lots = margin = rr = slev = 0.0
+        
+        veto_banner = ""
+        if sig.get("vetoed"):
+            clean_vr = str(sig.get("veto_reason", "Brain Veto")).replace("`", "'")
+            veto_banner = f"⚠️ *VETOED BY AUTONOMOUS LEARNER:* `{clean_vr}`\n"
+
         sig_box = (
-            f"\n🎯 **TRADE SETUP ({dir_icon}):**\n"
+            f"\n{veto_banner}"
+            f"🎯 **TRADE SETUP ({dir_icon}):**\n"
             f"• **Entry:** `${entry:,.2f}`\n"
             f"• **Stop Loss:** `${stop:,.2f}`\n"
             f"• **Target 1:** `${tp1:,.2f}` | **Target 2:** `${tp2:,.2f}`\n"
@@ -219,6 +275,7 @@ def format_signal_message(res: Dict[str, Any]) -> str:
             f"• **Margin:** `${margin:,.2f}` | **R:R:** `1:{rr:.1f}`\n"
             f"• **Equity:** `${float(res.get('equity') or 0):,.2f}` (paper)\n"
         )
+
     else:
         sig_box = "\n🛡️ **Stay Flat.** Waiting for confluence.\n"
 
@@ -286,6 +343,8 @@ def format_signal_message(res: Dict[str, Any]) -> str:
 def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float] = None) -> Tuple[bool, str]:
     if not sig or not engine:
         return False, "No signal or engine"
+    if sig.get("vetoed"):
+        return False, f"Paper execution blocked by Autonomous Learner: {sig.get('veto_reason', 'Vetoed')}"
     try:
         order = engine.register_setup(sig, reason=sig.get("reason", "Multi-Agent Consensus"))
     except Exception as e:

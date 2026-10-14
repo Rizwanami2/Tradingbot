@@ -202,6 +202,32 @@ class TradeJournal:
         except Exception as err:
             print(f"[TradeJournal] agent_stats error: {err}")
 
+        try:
+            from autonomous_learner import get_brain
+            brain = get_brain(auto_bootstrap=False)
+            h = None
+            wd = None
+            if e.closed_at:
+                try:
+                    dt = datetime.fromisoformat(e.closed_at.replace("Z", "+00:00"))
+                    h = dt.hour
+                    wd = dt.weekday()
+                except Exception:
+                    pass
+            brain.on_trade_closed(
+                r_multiple=float(e.r_multiple or 0.0),
+                won=bool(e.won),
+                setup=f"{e.direction.lower()}|{e.regime or 'unknown'}|{e.session or 'unknown'}",
+                regime=e.regime or "",
+                session=e.session or "",
+                hour=h,
+                weekday=wd,
+                agents=e.agents or [],
+                conf=float(conf or e.conviction or 0.6),
+            )
+        except Exception as err:
+            print(f"[TradeJournal] brain learn error: {err}")
+
     def open_summary(self) -> List[Dict[str, Any]]:
         return [asdict(e) for e in self.open.values()]
 

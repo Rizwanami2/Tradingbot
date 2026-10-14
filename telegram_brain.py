@@ -1,7 +1,8 @@
-"""Optional read-only /brain command for autonomous learner status."""
+"""Autonomous Learner Telegram & CLI Interface."""
 from __future__ import annotations
 
 import logging
+from typing import Any, List
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
@@ -30,10 +31,104 @@ _safe_reply = safe_reply
 
 
 async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /brain and subcommands:
+    /brain [status]
+    /brain reset
+    /brain relearn [SYM] [YEARS]
+    /brain rules
+    /brain flaws
+    /brain on | off
+    /brain help
+    """
     try:
         from autonomous_learner import get_brain
-        text = get_brain(auto_bootstrap=False).summary()
-        await safe_reply(update, text, parse_mode="Markdown")
+        brain = get_brain(auto_bootstrap=False)
+        args: List[str] = list(getattr(ctx, "args", []) or [])
+        subcmd = args[0].lower() if args else "status"
+
+        if subcmd in ("status", "info"):
+            text = brain.summary()
+            await safe_reply(update, text, parse_mode="Markdown")
+
+        elif subcmd in ("reset", "clear"):
+            res = brain.reset_memory()
+            msg = (
+                "🧹 *Autonomous Learner Memory Reset*\n"
+                "• All learned bans, weak regimes, and agent weights have been reset.\n"
+                f"• Baseline restored: Min score `≥{res['min_score']:.2f}`, "
+                f"RR `≥1:{res['min_rr']:.2f}`, Agreement `≥{res['min_agreement']}`, "
+                f"Conviction `≥{res['conviction_floor']:.0%}`\n"
+                "• Trade logs cleared. Fresh learning cycle started."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown")
+
+        elif subcmd in ("relearn", "train", "bootstrap"):
+            sym = args[1].upper() if len(args) > 1 else "XAUUSD"
+            years = 5.0
+            if len(args) > 2:
+                try:
+                    years = max(0.5, min(5.0, float(args[2])))
+                except ValueError:
+                    pass
+            await safe_reply(update, f"⏳ Re-learning from {sym} history (up to {years:.1f}y)...", parse_mode=None)
+            res = brain.bootstrap(symbol=sym, years=years)
+            rep = (
+                f"✅ *Autonomous Retraining Complete ({sym})*\n"
+                f"• Replayed Trades: `{res.get('trades', 0)}`\n"
+                f"• Replay Expectancy: `{res.get('expectancy', 0.0):+.3f}R`\n"
+                f"• Flaws Mined: `{res.get('flaws', 0)}`\n"
+                f"• Active Banned Setups: `{res.get('banned_setups', 0)}`\n"
+                f"• Banned UTC Hours: `{res.get('banned_hours', [])}`\n"
+                f"• Filter Thresholds: score `≥{res.get('min_score', 1.8):.2f}` | RR `≥{res.get('min_rr', 1.8):.2f}`\n"
+                f"_Learned knowledge persisted to memory._"
+            )
+            await safe_reply(update, rep, parse_mode="Markdown")
+
+        elif subcmd in ("rules", "filters", "rule"):
+            text = brain.format_rules()
+            await safe_reply(update, text, parse_mode="Markdown")
+
+        elif subcmd in ("flaws", "flaw", "sanctions"):
+            text = brain.format_flaws()
+            await safe_reply(update, text, parse_mode="Markdown")
+
+        elif subcmd in ("on", "enable", "start", "1", "true"):
+            brain.set_enabled(True)
+            msg = (
+                "🟢 *Autonomous Learner Filter Activated*\n"
+                "• Live signals are actively checked against learned filters.\n"
+                "• Banned setups, weak hours, and low expectancy patterns will be vetoed.\n"
+                "• Regime size multipliers are active."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown")
+
+        elif subcmd in ("off", "disable", "pause", "stop", "0", "false"):
+            brain.set_enabled(False)
+            msg = (
+                "🔴 *Autonomous Learner Filter Paused*\n"
+                "• Live signal vetoing is disabled (signals will pass through unblocked).\n"
+                "• Autonomous learner will continue logging trade outcomes in background."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown")
+
+        elif subcmd in ("help", "commands"):
+            msg = (
+                "🧠 *Autonomous Learner Commands:*\n"
+                "• `/brain` or `/brain status` — Overall status, memory & win rates\n"
+                "• `/brain rules` — Active learned thresholds, bans & agent weights\n"
+                "• `/brain flaws` — Detected flaws and current sanctions\n"
+                "• `/brain on` / `/brain off` — Enable or pause active signal filtering\n"
+                "• `/brain relearn [SYM] [YEARS]` — Bootstrap memory from up to 5Y data\n"
+                "• `/brain reset` — Clear memory & restore clean baseline defaults"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown")
+
+        else:
+            # Fall back to summary with usage hint
+            text = brain.summary() + "\n\n_Subcommands: `/brain status`, `/brain rules`, `/brain flaws`, `/brain relearn`, `/brain reset`, `/brain on|off`_"
+            await safe_reply(update, text, parse_mode="Markdown")
+
     except Exception as e:
         logger.exception("Error in /brain command: %s", e)
         await safe_reply(update, f"Brain error: {e}", parse_mode=None)
@@ -41,14 +136,31 @@ async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def relearn_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Force a fresh 5y bootstrap (optional; not required for normal operation)."""
-    await safe_reply(update, "⏳ Re-learning from history (up to 5y)...", parse_mode=None)
+    sym = "XAUUSD"
+    years = 5.0
+    if ctx.args:
+        sym = ctx.args[0].upper()
+        if len(ctx.args) > 1:
+            try:
+                years = max(0.5, min(5.0, float(ctx.args[1])))
+            except ValueError:
+                pass
+
+    await safe_reply(update, f"⏳ Re-learning from {sym} history (up to {years:.1f}y)...", parse_mode=None)
     try:
         from autonomous_learner import get_brain
-        sym = ctx.args[0].upper() if ctx.args else "XAUUSD"
-        summary = get_brain(auto_bootstrap=False).bootstrap(symbol=sym, years=5.0)
-        await safe_reply(
-            update, f"✅ Bootstrap done\n```\n{summary}\n```", parse_mode="Markdown"
+        res = get_brain(auto_bootstrap=False).bootstrap(symbol=sym, years=years)
+        rep = (
+            f"✅ *Autonomous Retraining Complete ({sym})*\n"
+            f"• Replayed Trades: `{res.get('trades', 0)}`\n"
+            f"• Replay Expectancy: `{res.get('expectancy', 0.0):+.3f}R`\n"
+            f"• Flaws Mined: `{res.get('flaws', 0)}`\n"
+            f"• Active Banned Setups: `{res.get('banned_setups', 0)}`\n"
+            f"• Banned UTC Hours: `{res.get('banned_hours', [])}`\n"
+            f"• Filter Thresholds: score `≥{res.get('min_score', 1.8):.2f}` | RR `≥{res.get('min_rr', 1.8):.2f}`\n"
+            f"_Learned knowledge persisted to memory._"
         )
+        await safe_reply(update, rep, parse_mode="Markdown")
     except Exception as e:
         logger.exception("Error in /relearn command: %s", e)
         await safe_reply(update, f"Relearn error: {e}", parse_mode=None)

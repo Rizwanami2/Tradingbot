@@ -289,6 +289,18 @@ class AdvancedEngine:
             r_multiple=r_multiple, pnl=pnl, agents=agents, regime=regime, session=session,
         ))
         self.portfolio.remove(symbol)
+        try:
+            from autonomous_learner import get_brain
+            get_brain(auto_bootstrap=False).on_trade_closed(
+                r_multiple=float(r_multiple),
+                won=bool(r_multiple > 0),
+                setup=f"{direction.lower()}|{regime or 'unknown'}|{session or 'unknown'}",
+                regime=regime,
+                session=session,
+                agents=agents,
+            )
+        except Exception:
+            pass
 
     def performance_report(self) -> str:
         return self.perf.telegram_report()

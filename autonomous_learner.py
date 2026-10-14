@@ -70,6 +70,7 @@ class Knowledge:
     size_mult_by_regime: Dict[str, float] = field(default_factory=dict)
     total_history_trades: int = 0
     total_live_trades: int = 0
+    enabled: bool = True
     last_bootstrap: str = ""
     last_correction: str = ""
     improvement_log: List[str] = field(default_factory=list)
@@ -131,6 +132,7 @@ class AutonomousLearner:
                     size_mult_by_regime=k.get("size_mult_by_regime", {}),
                     total_history_trades=int(k.get("total_history_trades", 0)),
                     total_live_trades=int(k.get("total_live_trades", 0)),
+                    enabled=bool(k.get("enabled", True)),
                     last_bootstrap=k.get("last_bootstrap", ""),
                     last_correction=k.get("last_correction", ""),
                     improvement_log=k.get("improvement_log", [])[-50:],
@@ -568,6 +570,9 @@ class AutonomousLearner:
         Call on every candidate signal — fully automatic filter.
         """
         k = self.knowledge
+        if not getattr(k, "enabled", True):
+            return True, "AUTO: brain filtering is disabled", 1.0
+
         now = datetime.now(timezone.utc)
         hour = hour if hour is not None else now.hour
         weekday = weekday if weekday is not None else now.weekday()
@@ -594,6 +599,152 @@ class AutonomousLearner:
 
         return True, "AUTO: pass learned filters", size_mult
 
+    def set_enabled(self, enabled: bool) -> bool:
+        """Enable or pause autonomous learned signal filtering."""
+        self.knowledge.enabled = bool(enabled)
+        state_str = "ENABLED" if self.knowledge.enabled else "PAUSED"
+        self._log_improve(f"Learner signal filtering {state_str}")
+        self._save()
+        return self.knowledge.enabled
+
+    def reset_memory(self) -> Dict[str, Any]:
+        """Reset learned memory, filters, and bans back to clean default baseline."""
+        self.knowledge = Knowledge(
+            agent_weights=dict(self.DEFAULT_WEIGHTS),
+            min_score=1.8,
+            min_rr=1.8,
+            min_agreement=3,
+            conviction_floor=0.55,
+            enabled=True,
+            total_history_trades=0,
+            total_live_trades=0,
+            last_bootstrap="",
+            last_correction=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            improvement_log=[f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}] Memory reset to clean baseline"],
+        )
+        self._trade_log.clear()
+        self._save()
+        return {
+            "status": "reset",
+            "enabled": self.knowledge.enabled,
+            "min_score": self.knowledge.min_score,
+            "min_rr": self.knowledge.min_rr,
+            "min_agreement": self.knowledge.min_agreement,
+            "conviction_floor": self.knowledge.conviction_floor,
+            "banned_setups": 0,
+            "banned_hours": [],
+            "banned_weekdays": [],
+        }
+
+    def get_rules(self) -> Dict[str, Any]:
+        """Return structured dictionary of active learned filters and rules."""
+        k = self.knowledge
+        return {
+            "enabled": getattr(k, "enabled", True),
+            "min_score": k.min_score,
+            "min_rr": k.min_rr,
+            "min_agreement": k.min_agreement,
+            "conviction_floor": k.conviction_floor,
+            "banned_hours": list(k.banned_hours),
+            "banned_weekdays": list(k.banned_weekdays),
+            "banned_setups": dict(k.banned_setups),
+            "weak_regimes": dict(k.weak_regimes),
+            "size_mult_by_regime": dict(k.size_mult_by_regime),
+            "agent_weights": dict(k.agent_weights),
+        }
+
+    def format_rules(self) -> str:
+        """User-friendly markdown report of active rules and thresholds."""
+        k = self.knowledge
+        status_icon = "🟢 ACTIVE" if getattr(k, "enabled", True) else "🔴 PAUSED"
+        weekday_map = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+        banned_wd_str = ", ".join(f"{d} ({weekday_map.get(d, '?')})" for d in k.banned_weekdays) or "None"
+        banned_hrs_str = ", ".join(f"{h:02d}:00 UTC" for h in k.banned_hours) or "None"
+
+        lines = [
+            "📜 *Autonomous Learner Rules & Active Filters*",
+            f"• Filter Gate: `{status_icon}`",
+            "",
+            "🎯 *Learned Thresholds:*",
+            f"• Min Score: `{k.min_score:.2f}`",
+            f"• Min R:R Ratio: `1:{k.min_rr:.2f}`",
+            f"• Min Agent Agreement: `{k.min_agreement}` agents",
+            f"• Conviction Floor: `{k.conviction_floor:.0%}`",
+            "",
+            "🚫 *Learned Bans:*",
+            f"• Banned UTC Hours: `{banned_hrs_str}`",
+            f"• Banned Weekdays: `{banned_wd_str}`",
+            f"• Banned Setups: `{len(k.banned_setups)} active`",
+        ]
+        if k.banned_setups:
+            for s, reason in list(k.banned_setups.items())[:8]:
+                clean_r = str(reason).replace("`", "'")
+                lines.append(f"  - `{s}`: _{clean_r}_")
+            if len(k.banned_setups) > 8:
+                lines.append(f"  - _...and {len(k.banned_setups) - 8} more_")
+
+        lines.append("")
+        lines.append("⚖️ *Regime Multipliers:*")
+        if k.size_mult_by_regime:
+            for reg, mult in sorted(k.size_mult_by_regime.items()):
+                lines.append(f"• `{reg}`: `{mult:.2f}x`")
+        else:
+            lines.append("• _Standard 1.00x across all regimes_")
+
+        lines.append("")
+        lines.append("🤖 *Agent Weights:*")
+        sorted_weights = sorted(k.agent_weights.items(), key=lambda x: x[1], reverse=True)
+        for agent, weight in sorted_weights:
+            lines.append(f"• `{agent}`: `{weight:.2f}`")
+
+        return "\n".join(lines)
+
+    def get_flaws(self) -> List[Flaw]:
+        """Mine flaws from accumulated trade history and live trades."""
+        if not self._trade_log:
+            return []
+        return self._mine_flaws(self._trade_log, min_n=3)
+
+    def format_flaws(self) -> str:
+        """User-friendly markdown report of mined flaws and corrective actions."""
+        k = self.knowledge
+        flaws = self.get_flaws()
+        lines = [
+            "🔍 *Autonomous Learner Flaw Mining & Memory*",
+            f"Logged Trades: `{len(self._trade_log)}` (History: `{k.total_history_trades}`, Live: `{k.total_live_trades}`)",
+            "",
+        ]
+        if flaws:
+            lines.append(f"*Active Mined Flaws ({len(flaws)}):*")
+            for f in flaws[:10]:
+                icon = "🚫" if f.action == "ban" else "⚠️"
+                lines.append(
+                    f"• {icon} [{f.kind.upper()}] `{f.key}`: "
+                    f"n={f.trades}, exp={f.expectancy:+.2f}R, WR={f.winrate:.1f}% -> `{f.action.upper()}` ({f.detail})"
+                )
+            if len(flaws) > 10:
+                lines.append(f"• _...and {len(flaws) - 10} more flaws_")
+        else:
+            lines.append("• _No active critical statistical flaws detected in current sample._")
+
+        if k.banned_setups or k.banned_hours or k.banned_weekdays or k.weak_regimes:
+            lines.append("")
+            lines.append("*Current Active Flaw Sanctions:*")
+            if k.banned_hours:
+                lines.append(f"• Banned UTC Hours: `{k.banned_hours}`")
+            if k.banned_weekdays:
+                lines.append(f"• Banned Weekdays: `{k.banned_weekdays}`")
+            if k.weak_regimes:
+                lines.append(f"• Weak Regimes: `{k.weak_regimes}`")
+            if k.banned_setups:
+                lines.append(f"• Banned Setups ({len(k.banned_setups)}):")
+                for s, r in list(k.banned_setups.items())[:6]:
+                    clean_r = str(r).replace("`", "'")
+                    lines.append(f"  - `{s}`: _{clean_r}_")
+                if len(k.banned_setups) > 6:
+                    lines.append(f"  - _...and {len(k.banned_setups) - 6} more_")
+        return "\n".join(lines)
+
     def get_agent_weights(self) -> Dict[str, float]:
         return dict(self.knowledge.agent_weights)
 
@@ -608,21 +759,28 @@ class AutonomousLearner:
 
     def summary(self) -> str:
         k = self.knowledge
+        status_icon = "🟢 ACTIVE" if getattr(k, "enabled", True) else "🔴 PAUSED"
         lines = [
             "🧠 *Autonomous Learner*",
+            f"Status: `{status_icon}`",
             f"History trades: `{k.total_history_trades}` | Live: `{k.total_live_trades}`",
             f"Last bootstrap: `{k.last_bootstrap or 'never'}`",
             f"Filters: score≥`{k.min_score:.2f}` RR≥`{k.min_rr:.2f}` "
             f"conv≥`{k.conviction_floor:.0%}` agree≥`{k.min_agreement}`",
-            f"Banned setups: `{len(k.banned_setups)}` | hours: `{k.banned_hours}` | wd: `{k.banned_weekdays}`",
-            f"Regime size mults: `{k.size_mult_by_regime}`",
+            f"Banned: setups=`{len(k.banned_setups)}` | hours=`{k.banned_hours}` | wd=`{k.banned_weekdays}`",
         ]
+        if k.size_mult_by_regime:
+            lines.append(f"Regime size mults: `{k.size_mult_by_regime}`")
+        if k.agent_weights:
+            w_str = ", ".join(f"{a}:{w:.2f}" for a, w in sorted(k.agent_weights.items(), key=lambda x: -x[1])[:5])
+            lines.append(f"Top agents: `{w_str}`")
         if k.improvement_log:
             lines.append("*Recent self-corrections:*")
             for e in k.improvement_log[-5:]:
                 clean_e = str(e).replace("`", "'")
                 lines.append(f"• `{clean_e}`")
         return "\n".join(lines)
+
 
 
 # Module-level singleton for zero-command use

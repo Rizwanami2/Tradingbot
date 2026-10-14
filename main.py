@@ -2086,14 +2086,44 @@ def run_cli_interactive():
         elif name == "brain":
             try:
                 from autonomous_learner import get_brain
-                print(get_brain(auto_bootstrap=False).summary())
+                brain = get_brain(auto_bootstrap=False)
+                sub = parts[1].lower() if len(parts) > 1 else "status"
+                if sub in ("status", "info"):
+                    print(brain.summary())
+                elif sub in ("reset", "clear"):
+                    res = brain.reset_memory()
+                    print(f"Autonomous Learner memory reset to baseline. (min_score={res['min_score']}, min_rr={res['min_rr']})")
+                elif sub in ("rules", "filters"):
+                    print(brain.format_rules())
+                elif sub in ("flaws", "sanctions"):
+                    print(brain.format_flaws())
+                elif sub in ("on", "enable", "start", "1", "true"):
+                    brain.set_enabled(True)
+                    print("Autonomous Learner signal filtering: ENABLED")
+                elif sub in ("off", "disable", "pause", "stop", "0", "false"):
+                    brain.set_enabled(False)
+                    print("Autonomous Learner signal filtering: PAUSED")
+                elif sub in ("relearn", "train"):
+                    sym = parts[2].upper() if len(parts) > 2 else "XAUUSD"
+                    years = float(parts[3]) if len(parts) > 3 and parts[3].replace('.', '', 1).isdigit() else 5.0
+                    print(f"Retraining Autonomous Learner on {sym} ({years:.1f}y)...")
+                    summary = brain.bootstrap(symbol=sym, years=years)
+                    print(f"Bootstrap complete: {summary}")
+                elif sub in ("help", "commands"):
+                    print("brain [status|rules|flaws|relearn [SYM] [YEARS]|reset|on|off]")
+                else:
+                    print(brain.summary())
             except Exception as e:
                 print(f"Brain error: {e}")
         elif name == "relearn":
             try:
                 from autonomous_learner import get_brain
+                brain = get_brain(auto_bootstrap=False)
                 sym = parts[1].upper() if len(parts) > 1 else "XAUUSD"
-                print(get_brain(auto_bootstrap=False).bootstrap(symbol=sym, years=5.0))
+                years = float(parts[2]) if len(parts) > 2 and parts[2].replace('.', '', 1).isdigit() else 5.0
+                print(f"Retraining Autonomous Learner on {sym} ({years:.1f}y)...")
+                summary = brain.bootstrap(symbol=sym, years=years)
+                print(f"Bootstrap complete: {summary}")
             except Exception as e:
                 print(f"Relearn error: {e}")
         else:

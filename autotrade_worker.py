@@ -132,6 +132,40 @@ async def live_monitoring_worker(
                             logger.info("Autotrade %s: no setup — %s", symbol, why)
                         else:
                             try:
+                                from autonomous_learner import get_brain
+                                brain = get_brain(auto_bootstrap=False)
+                                d = sig.get("direction")
+                                dname = d.name if hasattr(d, "name") else str(d)
+                                agree = len([v for v in (votes or []) if str(getattr(v, "direction", v.get("direction", "") if isinstance(v, dict) else "")).upper() == dname.upper()])
+                                conv_val = 0.6
+                                if isinstance(sig.get("conviction"), dict):
+                                    conv_val = float(sig["conviction"].get("score", 0.6) or 0.6)
+                                elif sig.get("conviction") is not None:
+                                    try:
+                                        conv_val = float(sig["conviction"])
+                                    except Exception:
+                                        conv_val = 0.6
+                                ok, reason, size_mult = brain.advise_signal(
+                                    direction=dname,
+                                    score=float(sig.get("score") or 0.0),
+                                    rr=float(sig.get("rr") or 0.0),
+                                    agreement=agree,
+                                    conviction=conv_val,
+                                    regime=str(sig.get("regime") or ""),
+                                    setup=f"{dname.lower()}|{sig.get('regime') or 'unknown'}",
+                                )
+                                if not ok:
+                                    logger.info("Autotrade %s: vetoed by Autonomous Learner — %s", symbol, reason)
+                                    continue
+                                if size_mult < 1.0:
+                                    if sig.get("lots"):
+                                        sig["lots"] = max(0.01, round(float(sig["lots"]) * size_mult, 4))
+                                    if sig.get("size"):
+                                        sig["size"] = max(0.01, round(float(sig["size"]) * size_mult, 4))
+                            except Exception as _b_err:
+                                logger.debug("Autotrade brain check error: %s", _b_err)
+
+                            try:
                                 order = engine.register_setup(sig, reason=sig.get("reason", ""))
                             except RuntimeError as reg_err:
                                 logger.info("Autotrade %s: register blocked — %s", symbol, reg_err)

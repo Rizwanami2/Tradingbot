@@ -1074,10 +1074,53 @@ def run_cli_interactive():
                     print(f"{icon} Signal Quality {sym} (score={q.score:.2f}):\n" + "\n".join(f"• {r}" for r in q.reasons))
             except Exception as e:
                 print(f"Quality check failed: {e}")
+        elif name == "brain":
+            try:
+                from autonomous_learner import get_brain
+                brain = get_brain(auto_bootstrap=False)
+                sub = parts[1].lower() if len(parts) > 1 else "status"
+                if sub in ("status", "info"):
+                    print(brain.summary())
+                elif sub in ("reset", "clear"):
+                    res = brain.reset_memory()
+                    print(f"Autonomous Learner memory reset to baseline. (min_score={res['min_score']}, min_rr={res['min_rr']})")
+                elif sub in ("rules", "filters"):
+                    print(brain.format_rules())
+                elif sub in ("flaws", "sanctions"):
+                    print(brain.format_flaws())
+                elif sub in ("on", "enable", "start", "1", "true"):
+                    brain.set_enabled(True)
+                    print("Autonomous Learner signal filtering: ENABLED")
+                elif sub in ("off", "disable", "pause", "stop", "0", "false"):
+                    brain.set_enabled(False)
+                    print("Autonomous Learner signal filtering: PAUSED")
+                elif sub in ("relearn", "train"):
+                    sym = parts[2].upper() if len(parts) > 2 else "XAUUSD"
+                    years = float(parts[3]) if len(parts) > 3 and parts[3].replace('.', '', 1).isdigit() else 5.0
+                    print(f"Retraining Autonomous Learner on {sym} ({years:.1f}y)...")
+                    summary = brain.bootstrap(symbol=sym, years=years)
+                    print(f"Bootstrap complete: {summary}")
+                elif sub in ("help", "commands"):
+                    print("brain [status|rules|flaws|relearn [SYM] [YEARS]|reset|on|off]")
+                else:
+                    print(brain.summary())
+            except Exception as e:
+                print(f"Brain error: {e}")
+        elif name == "relearn":
+            try:
+                from autonomous_learner import get_brain
+                brain = get_brain(auto_bootstrap=False)
+                sym = parts[1].upper() if len(parts) > 1 else "XAUUSD"
+                years = float(parts[2]) if len(parts) > 2 and parts[2].replace('.', '', 1).isdigit() else 5.0
+                print(f"Retraining Autonomous Learner on {sym} ({years:.1f}y)...")
+                summary = brain.bootstrap(symbol=sym, years=years)
+                print(f"Bootstrap complete: {summary}")
+            except Exception as e:
+                print(f"Relearn error: {e}")
         elif name == "help":
-            print("Commands: signal [SYM], backtest [BARS] [SYM], status, health, levels [SYM], price [SYM], news [SYM], quality [SYM], risk, leverage [LEV], positions, performance, kill [on|off], profile [NAME], autotrade on|off, close [SYM], cancel [SYM], ask [TEXT], reset, exit")
+            print("Commands: signal [SYM], backtest [BARS] [SYM], status, health, levels [SYM], price [SYM], news [SYM], quality [SYM], risk, leverage [LEV], positions, performance, kill [on|off], profile [NAME], autotrade on|off, close [SYM], cancel [SYM], brain [status|rules|flaws|relearn|reset|on|off], relearn [SYM], ask [TEXT], reset, exit")
         else:
-            print("Commands: signal, single, backtest, status, health, levels, price, news, quality, risk, leverage, positions, performance, kill, profile, autotrade on|off, close, cancel, ask, reset, exit")
+            print("Commands: signal, single, backtest, status, health, levels, price, news, quality, risk, leverage, positions, performance, kill, profile, autotrade on|off, close, cancel, brain, relearn, ask, reset, exit")
 
 
 def main():
@@ -1104,6 +1147,12 @@ def main():
             print("Advanced commands registered")
         except Exception as adv_err:
             print(f"Advanced commands not loaded: {adv_err}")
+        try:
+            from telegram_brain import register_brain
+            register_brain(application)
+            print("Autonomous Learner commands registered")
+        except Exception as brain_err:
+            print(f"Brain commands not loaded: {brain_err}")
 
     app = ApplicationBuilder().token(token).post_init(on_post_init).build()
     app.add_handler(CommandHandler("start", start_command))
@@ -1127,10 +1176,17 @@ def main():
     app.add_handler(CommandHandler("autotrade", autotrade_command))
     app.add_handler(CommandHandler("backtest", backtest_command))
     app.add_handler(CommandHandler("reset", reset_command))
+    try:
+        from telegram_brain import brain_command, relearn_command
+        app.add_handler(CommandHandler("brain", brain_command))
+        app.add_handler(CommandHandler("relearn", relearn_command))
+    except Exception:
+        pass
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message))
 
     print("Trading Bot is running. Press Ctrl+C to terminate.")
     app.run_polling()
+
 
 
 if __name__ == "__main__":

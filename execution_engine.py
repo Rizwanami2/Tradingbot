@@ -222,6 +222,24 @@ class ExecutionEngine:
         """Clear execution halt state so setups can be registered again."""
         self.execution_halted = False
 
+    def _notify_brain_close(self, pos: TradeOrder, r_mult: float) -> None:
+        try:
+            from autonomous_learner import get_brain
+            brain = get_brain(auto_bootstrap=False)
+            won = pos.realized_pnl > 0
+            setup = f"{pos.direction.lower()}|{pos.symbol.lower()}"
+            brain.on_trade_closed(
+                r_multiple=float(r_mult),
+                won=bool(won),
+                setup=setup,
+                regime="",
+                session="",
+                agents=[],
+                conf=0.6,
+            )
+        except Exception:
+            pass
+
     def open_trade_count(self) -> int:
         return len(self.active_positions) + len(self.pending_setups)
 
@@ -541,6 +559,7 @@ class ExecutionEngine:
                         self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=0.0)
                     except Exception:
                         pass
+                    self._notify_brain_close(pos, 0.5)
                     self.trade_history.append(pos)
                     self.active_positions.pop(pos.id, None)
                     if getattr(self, "broker", None):
@@ -574,6 +593,7 @@ class ExecutionEngine:
                         self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=-1.0)
                     except Exception:
                         pass
+                    self._notify_brain_close(pos, -1.0)
                     self.trade_history.append(pos)
                     self.active_positions.pop(pos.id, None)
                     if getattr(self, "broker", None):
@@ -604,6 +624,7 @@ class ExecutionEngine:
                         self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=-1.0)
                     except Exception:
                         pass
+                    self._notify_brain_close(pos, -1.0)
                     self.trade_history.append(pos)
                     self.active_positions.pop(pos.id, None)
 
@@ -787,6 +808,7 @@ class ExecutionEngine:
                 except Exception:
                     pass
 
+                self._notify_brain_close(pos, r_mult)
                 self.trade_history.append(pos)
                 self.active_positions.pop(pos.id, None)
 
@@ -842,6 +864,7 @@ class ExecutionEngine:
             except Exception:
                 pass
 
+            self._notify_brain_close(pos, r_mult)
             self.trade_history.append(pos)
             self.active_positions.pop(pos.id, None)
 
