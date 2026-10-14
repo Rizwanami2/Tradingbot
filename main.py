@@ -67,10 +67,19 @@ async def _to_thread(func, *args, **kwargs):
     return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*cryptography.*")
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
+    stream=sys.stdout,
+    force=True,
 )
+for _noisy in ("httpx", "httpcore", "telegram", "telegram.ext", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 logger = logging.getLogger("TradingBot")
 
 gemini = GeminiClient()
@@ -2420,8 +2429,26 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message))
 
 
+    async def global_telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        err = getattr(context, "error", None)
+        if not err:
+            return
+        err_str = str(err)
+        if "Conflict" in err_str or "terminated by other getUpdates" in err_str:
+            logger.warning("Telegram conflict: another bot instance is polling with this token. Pausing briefly...")
+        elif "NetworkError" in err_str or "TimedOut" in err_str or "httpx" in err_str:
+            logger.warning("Telegram network glitch (non-fatal): %s", err)
+        else:
+            logger.error("Telegram error caught: %s", err)
+
+    app.add_error_handler(global_telegram_error_handler)
+
     print("Trading Bot is running. Press Ctrl+C to terminate.")
-    app.run_polling()
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except Exception as poll_err:
+        logger.error("Telegram polling terminated: %s", poll_err)
+        raise
 
 
 if __name__ == "__main__":

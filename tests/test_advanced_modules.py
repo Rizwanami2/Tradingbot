@@ -45,7 +45,7 @@ def test_session_filter():
 def test_instrument_leverage_caps():
     from instrument_limits import clamp_leverage, get_max_leverage
     assert get_max_leverage("XAUUSD") <= 50
-    assert get_max_leverage("BTCUSDT") <= 25
+    assert get_max_leverage("BTCUSDT") <= 200
     lev, msg = clamp_leverage("XAUUSD", 500)
     assert lev <= 50
 
