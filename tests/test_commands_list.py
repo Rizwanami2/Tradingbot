@@ -18,6 +18,12 @@ from main import (
     risk_command,
     resetrisk_command,
     risk_mgr,
+    status_command,
+    health_command,
+    leverage_command,
+    cancel_command,
+    positions_command,
+    autotrade_command,
 )
 from execution_engine import TradeOrder, OrderStatus
 
@@ -259,6 +265,75 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Risk Management Reset — DAILY", out)
         self.assertIn("Risk Management Reset — WEEKLY", out)
         self.assertIn("Daily Digest", out)
+
+    async def test_status_command(self):
+        self.ctx.args = []
+        await status_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("System & Portfolio Status", text)
+
+    async def test_health_command(self):
+        self.ctx.args = []
+        await health_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Health Telemetry", text)
+
+    async def test_leverage_command(self):
+        self.ctx.args = []
+        await leverage_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Current leverage:", text)
+
+        self.ctx.args = ["15"]
+        await leverage_command(self.update, self.ctx)
+        text2 = self.message.reply_text.call_args[0][0]
+        self.assertIn("Leverage set to `15x`", text2)
+
+    async def test_cancel_command(self):
+        self.ctx.args = ["BTCUSDT"]
+        await cancel_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("No pending setup for `BTCUSDT`", text)
+
+    async def test_positions_command(self):
+        self.ctx.args = []
+        await positions_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertTrue("Positions" in text or "Active" in text or "Open" in text)
+
+    async def test_autotrade_command(self):
+        self.ctx.args = ["on"]
+        await autotrade_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Autotrade ACTIVATED", text)
+
+        self.ctx.args = ["off"]
+        await autotrade_command(self.update, self.ctx)
+        text_off = self.message.reply_text.call_args[0][0]
+        self.assertIn("Autotrade PAUSED", text_off)
+
+    async def test_fp4_commands(self):
+        from telegram_feature_pack_v4 import digest_command, export_command, setups_command, abooks_command, heal_command
+        self.ctx.args = []
+        await digest_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        self.assertIn("Daily Digest", self.message.reply_text.call_args[0][0])
+
+        await export_command(self.update, self.ctx)
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
+
+        await setups_command(self.update, self.ctx)
+        self.assertIn("Setups", self.message.reply_text.call_args[0][0])
+
+        await abooks_command(self.update, self.ctx)
+        self.assertIn("A/B", self.message.reply_text.call_args[0][0])
+
+        await heal_command(self.update, self.ctx)
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
 
 if __name__ == "__main__":
