@@ -1,6 +1,6 @@
 # TradingBot — Multi-Agent Institutional Trading Assistant
 
-Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)**, **Bitcoin (BTCUSDT)**, **Ethereum (ETHUSDT)**, **Solana (SOLUSDT)**, and **BNB (BNBUSDT)** powered by 7-agent consensus, best-entry zones, 2-year market structure, and **MetaTrader 5 (MT5) / Paper execution**.
+Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **Bitcoin (BTCUSDT)** powered by 7-agent consensus, best-entry zones, 2-year market structure, and **MetaTrader 5 (MT5) / Paper execution**.
 
 ## Features
 
@@ -27,7 +27,7 @@ BOT_BROKER_MODE=paper
 BOT_EQUITY=1000
 BOT_LEVERAGE=20
 BOT_AUTOTRADE=true
-BOT_AUTOTRADE_SYMBOLS=BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,BNBUSDT
+BOT_AUTOTRADE_SYMBOLS=BTCUSDT,XAUUSD
 BOT_MAX_OPEN_TRADES=5
 BOT_DATA_SOURCE=ccxt
 

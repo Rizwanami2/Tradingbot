@@ -109,13 +109,27 @@ ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
 ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes", "on")
 
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 5)
+ALLOWED_TRADING_SYMBOLS = {"BTCUSDT", "XAUUSD", "BTCUSD", "XAUTUSD", "PAXGUSDT", "GOLD", "XAU", "BTC"}
+
+
+def is_trading_allowed(symbol: str) -> bool:
+    """Returns True only if the symbol corresponds to Gold or Bitcoin."""
+    s = (symbol or "").strip().upper().replace("/", "").replace("-", "").replace(":", "").replace("_", "")
+    if any(x in s for x in ("BTC", "BITCOIN", "XBT")):
+        return True
+    if any(x in s for x in ("XAU", "GOLD", "PAXG", "XAUT")):
+        return True
+    return False
+
+
 _AUTOTRADE_SYMBOLS_RAW = os.getenv(
     "BOT_AUTOTRADE_SYMBOLS",
-    "BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,BNBUSDT",
+    "BTCUSDT,XAUUSD",
 )
 AUTOTRADE_SYMBOLS = [
-    s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip()
-] or ["BTCUSDT", "XAUUSD", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+    s for s in (s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip())
+    if is_trading_allowed(s)
+] or ["BTCUSDT", "XAUUSD"]
 
 SCALP_TAKE_PROFIT_USD = _safe_float(os.getenv("BOT_SCALP_TP_USD"), 5.0)
 SCALP_TAKE_PROFIT_PCT = _safe_float(os.getenv("BOT_SCALP_TP_PCT"), 0.15)

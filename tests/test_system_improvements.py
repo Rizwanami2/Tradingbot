@@ -32,8 +32,10 @@ class TestSystemImprovements(unittest.TestCase):
 
     def test_risk_manager_instrument_profiles(self):
         self.assertIn("XAUTUSD", INSTRUMENTS)
-        self.assertIn("PAXGUSDT", INSTRUMENTS)
-        self.assertIn("SOLUSDT", INSTRUMENTS)
+        self.assertIn("BTCUSDT", INSTRUMENTS)
+        self.assertNotIn("SOLUSDT", INSTRUMENTS)
+        self.assertNotIn("ETHUSDT", INSTRUMENTS)
+        self.assertNotIn("BNBUSDT", INSTRUMENTS)
         self.assertEqual(INSTRUMENTS["XAUTUSD"]["contract_size"], 1)
         self.assertEqual(INSTRUMENTS["PAXGUSDT"]["contract_size"], 1)
 

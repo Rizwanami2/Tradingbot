@@ -25,10 +25,6 @@ LEVERAGE_CAPS: Dict[str, float] = {
     # Crypto
     "BTCUSD": 25.0,
     "BTCUSDT": 25.0,
-    "ETHUSD": 20.0,
-    "ETHUSDT": 20.0,
-    "SOLUSD": 15.0,
-    "SOLUSDT": 15.0,
     "DEFAULT": 20.0,
 }
 
@@ -39,8 +35,6 @@ RISK_CAPS: Dict[str, float] = {
     "GOLD": 0.40,
     "BTCUSD": 0.30,
     "BTCUSDT": 0.30,
-    "ETHUSD": 0.30,
-    "ETHUSDT": 0.30,
     "DEFAULT": 0.50,
 }
 
@@ -49,7 +43,7 @@ def get_max_leverage(symbol: str) -> float:
     sym = symbol.upper().replace("/", "").replace("-", "")
     if sym in LEVERAGE_CAPS:
         return LEVERAGE_CAPS[sym]
-    if "BTC" in sym or "ETH" in sym or "SOL" in sym:
+    if "BTC" in sym:
         return 20.0
     if "XAU" in sym or "GOLD" in sym:
         return 50.0

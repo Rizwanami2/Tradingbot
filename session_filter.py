@@ -29,7 +29,7 @@ ASIAN_SESSION = (time(0, 0), time(7, 0))
 
 
 FOREX_FIAT_SYMBOLS = ("XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF")
-CRYPTO_MARKERS = ("BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK", "USDT")
+CRYPTO_MARKERS = ("BTC", "BITCOIN", "XBT", "USDT")
 
 
 def is_crypto_symbol(symbol: Optional[str]) -> bool:

@@ -93,7 +93,7 @@ Alpaca provides commission-free US stock and ETF trading with instant API access
 
 ### Key Features:
 - Stocks & ETFs: `AAPL`, `TSLA`, `NVDA`, `SPY`, `QQQ`, etc.
-- Crypto: `BTC/USD`, `ETH/USD`, `SOL/USD`.
+- Crypto: `BTC/USD`.
 - Built-in bracket orders with stop-loss and take-profit bounds.
 
 ### Connecting via Telegram:

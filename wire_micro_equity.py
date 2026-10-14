@@ -45,7 +45,7 @@ def main() -> None:
             '                p["pip_value_per_lot"] = 0.01\n'
             '                p["min_lot"] = 0.01\n'
             '                p["lot_step"] = 0.01\n'
-            '            if any(x in sym for x in ("BTC", "ETH", "SOL", "BNB")):\n'
+            '            if any(x in sym for x in ("BTC", "BITCOIN", "XBT")):\n'
             '                p["min_lot"] = min(float(p.get("min_lot", 0.001)), 0.001)\n'
             '                p["lot_step"] = min(float(p.get("lot_step", 0.001)), 0.001)\n'
             '        if eq < 200 and p.get("contract_size", 100) == 1:\n'

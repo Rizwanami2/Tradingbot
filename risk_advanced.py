@@ -28,7 +28,7 @@ class CorrPosition:
 # simple static correlation groups (can be replaced by live matrix later)
 CORR_GROUPS = {
     "metals": ["XAU", "GOLD", "XAG", "SILVER"],
-    "crypto": ["BTC", "ETH", "SOL"],
+    "crypto": ["BTC"],
     "fx_euro": ["EUR", "GBP", "CHF"],
     "fx_risk": ["AUD", "NZD"],
     "fx_safe": ["JPY", "USD"],

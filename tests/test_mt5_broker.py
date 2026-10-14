@@ -24,17 +24,16 @@ class TestMT5Broker(unittest.TestCase):
         # Basic alias resolution
         self.assertEqual(resolve_mt5_symbol("GOLD"), "XAUUSD")
         self.assertEqual(resolve_mt5_symbol("XAU"), "XAUUSD")
+        self.assertEqual(resolve_mt5_symbol("XAUT"), "XAUUSD")
+        self.assertEqual(resolve_mt5_symbol("PAXG"), "XAUUSD")
         self.assertEqual(resolve_mt5_symbol("BTCUSDT"), "BTCUSD")
-        self.assertEqual(resolve_mt5_symbol("ETHUSDT"), "ETHUSD")
-        self.assertEqual(resolve_mt5_symbol("SOLUSDT"), "SOLUSD")
-        self.assertEqual(resolve_mt5_symbol("BNBUSDT"), "BNBUSD")
+        self.assertEqual(resolve_mt5_symbol("BTC"), "BTCUSD")
         self.assertEqual(resolve_mt5_symbol("EURUSD"), "EURUSD")
 
     def test_resolve_mt5_symbol_with_broker_suffixes(self):
-        broker_symbols = ["XAUUSD.m", "BTCUSD.raw", "ETHUSD_i", "EURUSD.pro"]
+        broker_symbols = ["XAUUSD.m", "BTCUSD.raw", "EURUSD.pro"]
         self.assertEqual(resolve_mt5_symbol("GOLD", broker_symbols), "XAUUSD.m")
         self.assertEqual(resolve_mt5_symbol("BTCUSDT", broker_symbols), "BTCUSD.raw")
-        self.assertEqual(resolve_mt5_symbol("ETH", broker_symbols), "ETHUSD_i")
         self.assertEqual(resolve_mt5_symbol("EURUSD", broker_symbols), "EURUSD.pro")
 
     def test_mt5_paper_order_lifecycle(self):

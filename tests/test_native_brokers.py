@@ -174,7 +174,7 @@ class TestNativeBrokers(unittest.TestCase):
     def test_alpaca_symbol_resolution(self):
         self.assertEqual(resolve_alpaca_symbol("AAPL"), "AAPL")
         self.assertEqual(resolve_alpaca_symbol("BTCUSDT"), "BTC/USD")
-        self.assertEqual(resolve_alpaca_symbol("ETHUSD"), "ETH/USD")
+        self.assertEqual(resolve_alpaca_symbol("LTCUSD"), "LTC/USD")
         self.assertEqual(resolve_alpaca_symbol("BTC/USD"), "BTC/USD")
 
     def test_alpaca_fail_closed_missing_credentials(self):

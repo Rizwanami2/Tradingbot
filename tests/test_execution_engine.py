@@ -337,9 +337,9 @@ class TestExecutionEngine(unittest.TestCase):
             "margin_required": 32.5, "risk_amount": 10.0, "rr": 1.5,
         }
         sig3 = {
-            "symbol": "ETHUSDT", "direction": "LONG", "entry": 3500.0, "stop": 3400.0,
-            "tp1": 3650.0, "tp2": 3750.0, "lots": 0.1, "size": 0.1, "leverage": 20.0,
-            "margin_required": 17.5, "risk_amount": 10.0, "rr": 1.5,
+            "symbol": "XAUTUSD", "direction": "LONG", "entry": 2650.0, "stop": 2640.0,
+            "tp1": 2665.0, "tp2": 2675.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+            "margin_required": 53.0, "risk_amount": 20.0, "rr": 1.5,
         }
 
         self.engine.register_setup(sig1)
@@ -366,7 +366,7 @@ class TestExecutionEngine(unittest.TestCase):
 
         # Now 3rd setup can be registered
         order3 = self.engine.register_setup(sig3)
-        self.assertEqual(order3.symbol, "ETHUSDT")
+        self.assertEqual(order3.symbol, "XAUTUSD")
         self.assertEqual(self.engine.open_trade_count(), 2)
         self.assertEqual(self.engine.slots_available(), 0)
 
@@ -377,9 +377,9 @@ class TestExecutionEngine(unittest.TestCase):
         signals = [
             {"symbol": "XAUUSD", "direction": "LONG", "entry": 2650.0, "stop": 2640.0, "tp1": 2665.0, "tp2": 2675.0, "lots": 0.02, "size": 2.0, "leverage": 20.0, "margin_required": 53.0, "risk_amount": 20.0, "rr": 1.5},
             {"symbol": "BTCUSDT", "direction": "LONG", "entry": 65000.0, "stop": 64000.0, "tp1": 66500.0, "tp2": 67500.0, "lots": 0.01, "size": 0.01, "leverage": 20.0, "margin_required": 32.5, "risk_amount": 10.0, "rr": 1.5},
-            {"symbol": "ETHUSDT", "direction": "LONG", "entry": 3500.0, "stop": 3400.0, "tp1": 3650.0, "tp2": 3750.0, "lots": 0.1, "size": 0.1, "leverage": 20.0, "margin_required": 17.5, "risk_amount": 10.0, "rr": 1.5},
-            {"symbol": "SOLUSDT", "direction": "LONG", "entry": 180.0, "stop": 175.0, "tp1": 190.0, "tp2": 195.0, "lots": 1.0, "size": 1.0, "leverage": 20.0, "margin_required": 9.0, "risk_amount": 5.0, "rr": 2.0},
-            {"symbol": "BNBUSDT", "direction": "LONG", "entry": 590.0, "stop": 580.0, "tp1": 610.0, "tp2": 620.0, "lots": 0.5, "size": 0.5, "leverage": 20.0, "margin_required": 14.75, "risk_amount": 5.0, "rr": 2.0},
+            {"symbol": "XAUTUSD", "direction": "LONG", "entry": 2650.0, "stop": 2640.0, "tp1": 2665.0, "tp2": 2675.0, "lots": 0.02, "size": 2.0, "leverage": 20.0, "margin_required": 53.0, "risk_amount": 20.0, "rr": 1.5},
+            {"symbol": "BTCUSD", "direction": "LONG", "entry": 65000.0, "stop": 64000.0, "tp1": 66500.0, "tp2": 67500.0, "lots": 0.01, "size": 0.01, "leverage": 20.0, "margin_required": 32.5, "risk_amount": 10.0, "rr": 1.5},
+            {"symbol": "PAXGUSDT", "direction": "LONG", "entry": 2650.0, "stop": 2640.0, "tp1": 2665.0, "tp2": 2675.0, "lots": 0.02, "size": 2.0, "leverage": 20.0, "margin_required": 53.0, "risk_amount": 20.0, "rr": 1.5},
         ]
 
         for i, s in enumerate(signals):
@@ -391,7 +391,7 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertEqual(self.engine.slots_available(), 0)
 
         # 6th setup must be rejected
-        sig6 = {"symbol": "XRPUSDT", "direction": "LONG", "entry": 0.60, "stop": 0.58, "tp1": 0.65, "tp2": 0.70, "lots": 100.0, "size": 100.0, "leverage": 20.0, "margin_required": 3.0, "risk_amount": 2.0, "rr": 2.5}
+        sig6 = {"symbol": "XAUUSDT", "direction": "LONG", "entry": 2650.0, "stop": 2640.0, "tp1": 2665.0, "tp2": 2675.0, "lots": 0.02, "size": 2.0, "leverage": 20.0, "margin_required": 53.0, "risk_amount": 20.0, "rr": 1.5}
         with self.assertRaises(RuntimeError) as ctx:
             self.engine.register_setup(sig6)
         self.assertIn("Max concurrent trades reached (5)", str(ctx.exception))
@@ -402,14 +402,24 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertIn("slots", detail.lower())
 
         # Cancel one setup and verify a 5th trade slot opens
-        self.engine.cancel_setup("SOLUSDT", reason="test freeing slot")
+        self.engine.cancel_setup("XAUTUSD", reason="test freeing slot")
         self.assertEqual(self.engine.open_trade_count(), 4)
         self.assertEqual(self.engine.slots_available(), 1)
 
         order6 = self.engine.register_setup(sig6)
-        self.assertEqual(order6.symbol, "XRPUSDT")
+        self.assertEqual(order6.symbol, "XAUUSDT")
         self.assertEqual(self.engine.open_trade_count(), 5)
         self.assertEqual(self.engine.slots_available(), 0)
+
+    def test_disallowed_symbols_rejected(self):
+        for sym in ("ETHUSDT", "SOLUSDT", "BNBUSDT", "EURUSD", "DOGEUSDT"):
+            sig = {
+                "symbol": sym, "direction": "LONG", "entry": 100.0, "stop": 95.0,
+                "tp1": 110.0, "tp2": 115.0, "lots": 0.01, "size": 0.01, "leverage": 20.0,
+            }
+            with self.assertRaises(ValueError) as ctx:
+                self.engine.register_setup(sig)
+            self.assertIn("disabled", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

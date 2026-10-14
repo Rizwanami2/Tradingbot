@@ -138,7 +138,7 @@ def test_session_filter_crypto_weekend():
     assert ok_forex is False
     ok_crypto, _ = is_tradeable_session(sunday_ts, symbol="BTCUSDT")
     assert ok_crypto is True
-    info_btc = get_session_info(sunday_ts, symbol="ETHUSDT")
+    info_btc = get_session_info(sunday_ts, symbol="BTCUSD")
     assert info_btc.is_tradeable is True
     assert info_btc.name == "CRYPTO_24_7"
 

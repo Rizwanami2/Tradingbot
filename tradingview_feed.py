@@ -34,7 +34,7 @@ def resolve_tv_params(symbol: str) -> Tuple[str, str, str]:
         return "XAGUSD", "OANDA", "cfd"
 
     # Crypto
-    if any(c in s for c in ("BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "AVAX")):
+    if any(c in s for c in ("BTC", "BITCOIN", "XBT")):
         pair = s
         if not (pair.endswith("USDT") or pair.endswith("USD")):
             pair += "USDT"
@@ -196,10 +196,6 @@ def _fetch_real_ohlcv(symbol: str, limit: int = 600) -> Optional[pd.DataFrame]:
     binance_sym = None
     if sym in ("BTCUSD", "BTCUSDT", "BTC"):
         binance_sym = "BTCUSDT"
-    elif sym in ("ETHUSD", "ETHUSDT", "ETH"):
-        binance_sym = "ETHUSDT"
-    elif sym in ("SOLUSD", "SOLUSDT", "SOL"):
-        binance_sym = "SOLUSDT"
     elif sym in ("XAUUSD", "XAUTUSD", "GOLD", "PAXGUSD", "PAXGUSDT"):
         binance_sym = "PAXGUSDT"
     elif sym.endswith("USDT") or sym.endswith("BUSD"):

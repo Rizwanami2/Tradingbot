@@ -31,14 +31,12 @@ TIMEOUT = 8
 
 def _norm_symbol(symbol: str) -> str:
     s = symbol.upper().replace("/", "").replace("-", "").replace(":", "").strip()
-    if s in ("BTC", "BTCUSD"):
+    if s in ("BTC", "BTCUSD", "XBT"):
         return "BTCUSDT"
-    if s in ("ETH", "ETHUSD"):
-        return "ETHUSDT"
-    if s in ("XAU", "GOLD", "XAUTUSD", "XAUUSD", "PAXG", "PAXGUSD"):
+    if s in ("XAU", "GOLD", "XAUTUSD", "XAUUSD", "PAXG", "PAXGUSD", "PAXGUSDT"):
         return "XAUUSD"
     if s.endswith("USD") and not s.endswith("USDT") and s not in ("XAUUSD",):
-        if any(x in s for x in ("BTC", "ETH", "SOL", "BNB", "XRP")):
+        if any(x in s for x in ("BTC", "XAU", "GOLD", "PAXG", "XAUT")):
             return s[:-3] + "USDT"
     return s
 
@@ -50,7 +48,7 @@ def _is_gold(sym: str) -> bool:
 
 def _is_crypto(sym: str) -> bool:
     s = _norm_symbol(sym)
-    return any(x in s for x in ("BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA")) or s.endswith("USDT")
+    return any(x in s for x in ("BTC", "BITCOIN", "XBT")) or s.endswith("USDT")
 
 
 def _binance_symbol(sym: str) -> str:
@@ -119,7 +117,7 @@ def fetch_spot_price(symbol: str = "BTCUSDT") -> Dict[str, Any]:
                 return _ok(sym, float(data["price"]), base.replace("https://", ""))
             errors.append(base)
 
-        cb_map = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD"}
+        cb_map = {"BTCUSDT": "BTC-USD"}
         cb = cb_map.get(bsym)
         if cb:
             data = _get_json(f"https://api.coinbase.com/v2/prices/{cb}/spot")
@@ -134,8 +132,8 @@ def fetch_spot_price(symbol: str = "BTCUSDT") -> Dict[str, Any]:
     try:
         import yfinance as yf
         yf_map = {
-            "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD",
-            "XAUUSD": "GC=F", "XAUTUSD": "GC=F",
+            "BTCUSDT": "BTC-USD",
+            "XAUUSD": "GC=F", "XAUTUSD": "GC=F", "PAXGUSDT": "PAXG-USD",
         }
         t = yf.Ticker(yf_map.get(sym, sym))
         hist = t.history(period="1d", interval="1m")
@@ -186,8 +184,6 @@ def _tv_quote(symbol: str) -> Optional[Dict[str, Any]]:
             ticker, screener = "OANDA:XAUUSD", "cfd"
         elif "BTC" in symbol.upper():
             ticker, screener = "BINANCE:BTCUSDT", "crypto"
-        elif "ETH" in symbol.upper():
-            ticker, screener = "BINANCE:ETHUSDT", "crypto"
         else:
             ticker, screener = f"BINANCE:{_binance_symbol(symbol)}", "crypto"
         url = f"https://scanner.tradingview.com/{screener}/scan"
@@ -403,7 +399,7 @@ def format_levels_message(data: Dict[str, Any]) -> str:
 
 
 if __name__ == "__main__":
-    for s in ("BTCUSDT", "XAUUSD", "ETHUSDT"):
+    for s in ("BTCUSDT", "XAUUSD"):
         print("PRICE", s, fetch_spot_price(s))
         print(format_levels_message(compute_levels(s)))
         print("---")

@@ -27,8 +27,8 @@ class Position:
 
 
 SECTOR_MAP = {
-    "XAU": "metals", "GOLD": "metals", "XAUT": "metals",
-    "BTC": "crypto", "ETH": "crypto", "SOL": "crypto", "BNB": "crypto",
+    "XAU": "metals", "GOLD": "metals", "XAUT": "metals", "PAXG": "metals",
+    "BTC": "crypto",
     "EUR": "fx", "GBP": "fx", "JPY": "fx", "AUD": "fx", "CAD": "fx", "CHF": "fx",
 }
 

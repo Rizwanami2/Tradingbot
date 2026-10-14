@@ -97,7 +97,6 @@ def fetch_daily_2y(symbol: str, limit: int = 730) -> pd.DataFrame:
         import yfinance as yf
         ymap = {
             "BTCUSDT": "BTC-USD",
-            "ETHUSDT": "ETH-USD",
             "XAUUSD": "GC=F",
             "PAXGUSDT": "PAXG-USD",
         }

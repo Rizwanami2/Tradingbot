@@ -193,8 +193,8 @@ class AutonomousLearner:
         try:
             import yfinance as yf
             ticker_map = {
-                "XAUUSD": "GC=F", "XAUTUSD": "GC=F", "GOLD": "GC=F",
-                "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD",
+                "XAUUSD": "GC=F", "XAUTUSD": "GC=F", "GOLD": "GC=F", "PAXGUSDT": "PAXG-USD",
+                "BTCUSDT": "BTC-USD",
                 "EURUSD": "EURUSD=X",
             }
             t = ticker_map.get(symbol.upper(), symbol)

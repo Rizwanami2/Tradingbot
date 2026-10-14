@@ -24,9 +24,6 @@ Brokers often append custom suffixes or use alternative naming conventions. `res
 |---------------------------|---------------------|-----------------------------------|
 | `XAUUSD` / `GOLD` / `XAU` | `XAUUSD`            | `XAUUSD.m`, `XAUUSD.raw`, `XAUUSD_i`, `GOLD` |
 | `BTCUSDT` / `BTC`         | `BTCUSD`            | `BTCUSD.m`, `BTCUSD.raw`, `BTCUSD_i` |
-| `ETHUSDT` / `ETH`         | `ETHUSD`            | `ETHUSD.m`, `ETHUSD.raw`, `ETHUSD_i` |
-| `SOLUSDT` / `SOL`         | `SOLUSD`            | `SOLUSD.m`, `SOLUSD.raw` |
-| `BNBUSDT` / `BNB`         | `BNBUSD`            | `BNBUSD.m`, `BNBUSD.raw` |
 
 ---
 
@@ -104,7 +101,7 @@ Lists open positions, lots, entry prices, and floating PnL on MT5 terminal.
 
 1. **Server-Side Protection**: When placing live MT5 orders, Stop Loss and Take Profit levels are attached directly to the `MqlTradeRequest` (`TRADE_ACTION_DEAL`). Protection is active immediately on the broker's matching engine.
 2. **Dynamic Trailing Stops**: As the price advances through Break-Even thresholds (+0.5R, +1.0R), `modify_position` updates the stop loss level on the server (`TRADE_ACTION_SLTP`).
-3. **Concurrent Trade Ceiling**: Capped at 5 active positions (`BOT_MAX_OPEN_TRADES=5`) across the active watchlist (`BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,BNBUSDT`).
+3. **Concurrent Trade Ceiling**: Capped at 5 active positions (`BOT_MAX_OPEN_TRADES=5`) across the active watchlist (`BTCUSDT,XAUUSD`).
 
 ---
 

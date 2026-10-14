@@ -68,8 +68,6 @@ def main() -> None:
             "                sym = (self.symbol or \"\").upper()\n"
             "                if \"BTC\" in sym:\n"
             "                    base_price = 82000.0\n"
-            "                elif \"ETH\" in sym:\n"
-            "                    base_price = 3000.0\n"
             "                elif \"XAU\" in sym or \"GOLD\" in sym:\n"
             "                    base_price = 4100.0\n"
             "        dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq=\"1min\")\n"

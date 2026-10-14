@@ -148,6 +148,9 @@ class ExecutionEngine:
         if self.execution_halted:
             raise RuntimeError("Execution halted after uncertain broker state; reconcile positions before re-enabling.")
         symbol = sig["symbol"].upper()
+        import config
+        if hasattr(config, "is_trading_allowed") and not config.is_trading_allowed(symbol):
+            raise ValueError(f"Trading {symbol} is disabled. Only Gold (XAUUSD) and Bitcoin (BTCUSDT) are permitted.")
         already = symbol in self.active_positions or symbol in self.pending_setups
         if not already and self.open_trade_count() >= int(getattr(self, "max_open_trades", 5)):
             raise RuntimeError(

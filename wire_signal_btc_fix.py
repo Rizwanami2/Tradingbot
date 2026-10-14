@@ -19,8 +19,6 @@ def patch_main(p: Path) -> bool:
         "    sym = (ctx.args[0] if ctx.args else config.DEFAULT_SYMBOL).upper()\n"
         '    if sym in ("BTC", "BITCOIN", "BTCUSD", "XBT"):\n'
         '        sym = "BTCUSDT"\n'
-        '    if sym in ("ETH", "ETHEREUM", "ETHUSD"):\n'
-        '        sym = "ETHUSDT"\n'
         '    if sym in ("GOLD", "XAU", "XAUT", "XAUTUSD"):\n'
         '        sym = "XAUUSD"\n'
     )
@@ -69,14 +67,12 @@ def patch_risk(p: Path) -> bool:
         '        s = (symbol or "").upper().replace("/", "").replace("-", "").strip()\n'
         '        if s in ("BTC", "BTCUSD", "XBT", "XBTUSD"):\n'
         '            s = "BTCUSDT"\n'
-        '        elif s in ("ETH", "ETHUSD"):\n'
-        '            s = "ETHUSDT"\n'
-        '        elif s in ("GOLD", "XAU", "XAUT", "XAUTUSD"):\n'
+        '        elif s in ("GOLD", "XAU", "XAUT", "XAUTUSD", "PAXG", "PAXGUSDT"):\n'
         '            s = "XAUUSD"\n'
         "        self.symbol = s\n"
         '        self.profile = INSTRUMENTS.get(self.symbol, INSTRUMENTS["DEFAULT"])\n'
         "        if self.symbol not in INSTRUMENTS:\n"
-        '            if any(x in self.symbol for x in ("BTC", "ETH", "SOL", "BNB", "XRP")):\n'
+        '            if any(x in self.symbol for x in ("BTC", "BITCOIN", "XBT")):\n'
         '                self.profile = INSTRUMENTS.get("BTCUSDT", INSTRUMENTS["DEFAULT"])\n'
         '            elif "XAU" in self.symbol or "GOLD" in self.symbol or "PAXG" in self.symbol:\n'
         '                self.profile = INSTRUMENTS.get("XAUUSD", INSTRUMENTS["DEFAULT"])\n'
@@ -98,11 +94,9 @@ def _norm_trade_symbol(symbol: str) -> str:
     s = (symbol or "").upper().replace("/", "").replace("-", "").replace(":", "").strip()
     if s in ("BTC", "BTCUSD", "XBT", "XBTUSD", "BITCOIN"):
         return "BTCUSDT"
-    if s in ("ETH", "ETHUSD", "ETHEREUM"):
-        return "ETHUSDT"
-    if s in ("GOLD", "XAU", "XAUT", "XAUTUSD", "XAUUSD"):
+    if s in ("GOLD", "XAU", "XAUT", "XAUTUSD", "XAUUSD", "PAXG", "PAXGUSDT"):
         return "XAUUSD"
-    if s.endswith("USD") and not s.endswith("USDT") and any(x in s for x in ("BTC", "ETH", "SOL", "BNB", "XRP")):
+    if s.endswith("USD") and not s.endswith("USDT") and any(x in s for x in ("BTC", "XAU", "GOLD", "PAXG", "XAUT")):
         return s[:-3] + "USDT"
     return s or "XAUUSD"
 

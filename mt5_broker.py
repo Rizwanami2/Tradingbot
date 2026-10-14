@@ -98,14 +98,10 @@ def resolve_mt5_symbol(symbol: str, available_symbols: Optional[List[str]] = Non
         "XAU": "XAUUSD",
         "XAUT": "XAUUSD",
         "XAUTUSD": "XAUUSD",
+        "PAXG": "XAUUSD",
+        "PAXGUSDT": "XAUUSD",
         "BTC": "BTCUSD",
         "BTCUSDT": "BTCUSD",
-        "ETH": "ETHUSD",
-        "ETHUSDT": "ETHUSD",
-        "SOL": "SOLUSD",
-        "SOLUSDT": "SOLUSD",
-        "BNB": "BNBUSD",
-        "BNBUSDT": "BNBUSD",
     }
     normalized = aliases.get(s, s)
 

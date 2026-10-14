@@ -119,9 +119,8 @@ class DataFeed:
         try:
             import yfinance as yf
             yf_map = {
-                "XAUUSD": "GC=F", "XAUTUSD": "GC=F", "GOLD": "GC=F",
-                "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD",
-                "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD",
+                "XAUUSD": "GC=F", "XAUTUSD": "GC=F", "GOLD": "GC=F", "PAXGUSDT": "PAXG-USD",
+                "BTCUSD": "BTC-USD", "BTCUSDT": "BTC-USD",
             }
             yf_sym = yf_map.get(self.symbol, self.symbol)
             period = "7d" if tf in ("1m", "5m") else "60d"

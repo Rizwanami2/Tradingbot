@@ -82,11 +82,9 @@ def _norm_trade_symbol(symbol: str) -> str:
     s = (symbol or "").upper().replace("/", "").replace("-", "").replace(":", "").strip()
     if s in ("BTC", "BTCUSD", "XBT", "XBTUSD", "BITCOIN"):
         return "BTCUSDT"
-    if s in ("ETH", "ETHUSD", "ETHEREUM"):
-        return "ETHUSDT"
-    if s in ("GOLD", "XAU", "XAUT", "XAUTUSD", "XAUUSD"):
+    if s in ("GOLD", "XAU", "XAUT", "XAUTUSD", "XAUUSD", "PAXG", "PAXGUSDT"):
         return "XAUUSD"
-    if s.endswith("USD") and not s.endswith("USDT") and any(x in s for x in ("BTC", "ETH", "SOL", "BNB", "XRP")):
+    if s.endswith("USD") and not s.endswith("USDT") and any(x in s for x in ("BTC", "XAU", "GOLD", "PAXG", "XAUT")):
         return s[:-3] + "USDT"
     return s or "XAUUSD"
 
@@ -188,8 +186,6 @@ class MarketDataFeed:
                 sym = (self.symbol or "").upper()
                 if "BTC" in sym:
                     base_price = 82000.0
-                elif "ETH" in sym:
-                    base_price = 3000.0
                 elif "XAU" in sym or "GOLD" in sym:
                     base_price = 4100.0
         dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq="1min")

@@ -49,15 +49,6 @@ INSTRUMENTS = {
     "BTCUSDT": {"contract_size": 1, "pip_size": 0.1, "pip_value_per_lot": 0.1, "min_lot": 0.001, "lot_step": 0.001},
     "BTCUSD":  {"contract_size": 1, "pip_size": 0.1, "pip_value_per_lot": 0.1, "min_lot": 0.001, "lot_step": 0.001},
     "BTC":     {"contract_size": 1, "pip_size": 0.1, "pip_value_per_lot": 0.1, "min_lot": 0.001, "lot_step": 0.001},
-    "ETHUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "ETHUSD":  {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "ETH":     {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "SOLUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "SOLUSD":  {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "SOL":     {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "BNBUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "BNBUSD":  {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
-    "BNB":     {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "XAUUSDT": {"contract_size": 1, "pip_size": 0.01, "pip_value_per_lot": 0.01, "min_lot": 0.01, "lot_step": 0.01},
     "DEFAULT": {"contract_size": 100000, "pip_size": 0.0001, "pip_value_per_lot": 10.0, "min_lot": 0.01, "lot_step": 0.01},
 }
@@ -194,16 +185,14 @@ class RiskManager:
         s = (symbol or "").upper().replace("/", "").replace("-", "").strip()
         if s in ("BTC", "BTCUSD", "XBT", "XBTUSD"):
             s = "BTCUSDT"
-        elif s in ("ETH", "ETHUSD"):
-            s = "ETHUSDT"
-        elif s in ("GOLD", "XAU", "XAUT", "XAUTUSD"):
+        elif s in ("GOLD", "XAU", "XAUT", "XAUTUSD", "PAXG", "PAXGUSDT"):
             s = "XAUUSD"
         self.symbol = s
         self.profile = INSTRUMENTS.get(self.symbol, INSTRUMENTS["DEFAULT"])
         if self.symbol not in INSTRUMENTS:
-            if any(x in self.symbol for x in ("BTC", "ETH", "SOL", "BNB", "XRP")):
+            if any(x in self.symbol for x in ("BTC", "BITCOIN", "XBT")):
                 self.profile = INSTRUMENTS.get("BTCUSDT", INSTRUMENTS["DEFAULT"])
-            elif "XAU" in self.symbol or "GOLD" in self.symbol or "PAXG" in self.symbol:
+            elif "XAU" in self.symbol or "GOLD" in self.symbol or "PAXG" in self.symbol or "XAUT" in self.symbol:
                 self.profile = INSTRUMENTS.get("XAUUSD", INSTRUMENTS["DEFAULT"])
 
     def set_leverage(self, leverage: float) -> Tuple[bool, str]:
@@ -377,7 +366,7 @@ class RiskManager:
                 p["pip_value_per_lot"] = 0.01
                 p["min_lot"] = 0.01
                 p["lot_step"] = 0.01
-            if any(x in sym for x in ("BTC", "ETH", "SOL", "BNB")):
+            if any(x in sym for x in ("BTC", "BITCOIN", "XBT")):
                 p["min_lot"] = min(float(p.get("min_lot", 0.001)), 0.001)
                 p["lot_step"] = min(float(p.get("lot_step", 0.001)), 0.001)
         if eq < 200 and p.get("contract_size", 100) == 1:

@@ -9,7 +9,7 @@ Supported Asset Classes:
 - Forex Majors & Minors (EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD, etc.)
 - Commodities & Metals (Gold XAU/USD, Silver XAG/USD, Crude Oil BRENT/WTI)
 - Global Indices (SPX500, NAS100, US30, UK100, DE30)
-- Cryptocurrencies (BTC/USD, ETH/USD)
+- Cryptocurrencies (BTC/USD)
 
 Environments:
 - "practice": Free OANDA fxPractice demo environment (https://api-fxpractice.oanda.com/v3)
@@ -65,8 +65,6 @@ OANDA_SYMBOL_MAP: Dict[str, str] = {
     # Crypto
     "BTCUSD": "BTC_USD",
     "BTCUSDT": "BTC_USD",
-    "ETHUSD": "ETH_USD",
-    "ETHUSDT": "ETH_USD",
     # Indices
     "SPX500": "SPX500_USD",
     "US500": "SPX500_USD",

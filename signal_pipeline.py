@@ -9,9 +9,8 @@ def _norm_symbol(sym: str) -> str:
     s = str(sym or "").strip().upper()
     aliases = {
         "BTC": "BTCUSDT", "BITCOIN": "BTCUSDT", "BTCUSD": "BTCUSDT", "XBT": "BTCUSDT",
-        "ETH": "ETHUSDT", "ETHEREUM": "ETHUSDT", "ETHUSD": "ETHUSDT",
         "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUT": "XAUUSD", "XAUTUSD": "XAUUSD",
-        "SOL": "SOLUSDT", "BNB": "BNBUSDT",
+        "PAXG": "XAUUSD", "PAXGUSDT": "XAUUSD",
     }
     return aliases.get(s, s)
 
@@ -28,6 +27,15 @@ def run_signal(
     from risk_manager import RiskManager
 
     sym = _norm_symbol(symbol)
+    if hasattr(config, "is_trading_allowed") and not config.is_trading_allowed(sym):
+        return {
+            "symbol": sym,
+            "price": 0.0,
+            "status": f"Trading disabled for {sym}. Only Gold (XAUUSD) and Bitcoin (BTCUSDT) are permitted.",
+            "signal": None,
+            "votes": [],
+            "error": f"Trading {sym} is disabled. Only Gold and BTC are permitted.",
+        }
     src = (source or getattr(config, "DEFAULT_DATA_SOURCE", "ccxt")).lower()
     eq = float(equity if equity is not None else getattr(config, "INITIAL_EQUITY", 1000.0))
     lev = float(leverage if leverage is not None else getattr(config, "DEFAULT_LEVERAGE", 20.0))

@@ -85,7 +85,7 @@ class TestExecutionFixes(unittest.TestCase):
         mock_exchange = MagicMock()
         mock_exchange.markets = {
             "BTC/USDT": {"active": True, "symbol": "BTC/USDT"},
-            "ETH/USDT": {"active": False, "symbol": "ETH/USDT"},
+            "LTC/USDT": {"active": False, "symbol": "LTC/USDT"},
             "PAXG/USDT": {"active": True, "symbol": "PAXG/USDT"},
         }
 
@@ -97,7 +97,7 @@ class TestExecutionFixes(unittest.TestCase):
 
         # Inactive market
         with self.assertRaises(UnknownSymbolError):
-            resolve_ccxt_symbol(mock_exchange, "ETH/USDT")
+            resolve_ccxt_symbol(mock_exchange, "LTC/USDT")
 
         # Nonexistent market
         with self.assertRaises(UnknownSymbolError):

@@ -7,7 +7,7 @@ ZERO desktop application requirements.
 
 Supported Asset Classes:
 - US Equities & ETFs (AAPL, TSLA, NVDA, SPY, QQQ)
-- Spot Cryptocurrencies (BTC/USD, ETH/USD, SOL/USD)
+- Spot Cryptocurrencies (BTC/USD)
 - Options & Fractional Shares
 
 Environments:

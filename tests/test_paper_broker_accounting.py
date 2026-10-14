@@ -39,9 +39,9 @@ class TestPaperBrokerAccounting(unittest.TestCase):
 
     def test_partial_close_realizes_only_closed_quantity(self):
         broker = self.make_broker(fee=0)
-        broker.place_order("ETH/USDT", "buy", 4, price=50)
-        self.assertTrue(broker.close_position("ETH/USDT", qty=1, price=60))
-        position = broker.positions["ETH/USDT"]
+        broker.place_order("PAXG/USDT", "buy", 4, price=50)
+        self.assertTrue(broker.close_position("PAXG/USDT", qty=1, price=60))
+        position = broker.positions["PAXG/USDT"]
         self.assertAlmostEqual(position.qty, 3)
         self.assertAlmostEqual(broker.balance, 10010)
         # Remaining 3 units are marked at 60: +30 unrealized.

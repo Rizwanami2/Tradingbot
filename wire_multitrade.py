@@ -14,8 +14,8 @@ def main() -> None:
             append = "\n".join([
                 "",
                 "MAX_OPEN_TRADES = _safe_int(os.getenv(\"BOT_MAX_OPEN_TRADES\"), 5)",
-                "_AUTOTRADE_SYMBOLS_RAW = os.getenv(\"BOT_AUTOTRADE_SYMBOLS\", \"BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,BNBUSDT\")",
-                "AUTOTRADE_SYMBOLS = [s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(\",\") if s.strip()] or [\"BTCUSDT\", \"XAUUSD\", \"ETHUSDT\", \"SOLUSDT\", \"BNBUSDT\"]",
+                "_AUTOTRADE_SYMBOLS_RAW = os.getenv(\"BOT_AUTOTRADE_SYMBOLS\", \"BTCUSDT,XAUUSD\")",
+                "AUTOTRADE_SYMBOLS = [s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(\",\") if s.strip()] or [\"BTCUSDT\", \"XAUUSD\"]",
                 "",
             ])
             cfg.write_text(t + append)

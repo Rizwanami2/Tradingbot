@@ -34,18 +34,11 @@ async def live_monitoring_worker(
                 return "XAUUSD"
             if s in ("BTC", "BTCUSD", "XBT"):
                 return "BTCUSDT"
-            if s in ("ETH", "ETHUSD"):
-                return "ETHUSDT"
-            if s in ("SOL", "SOLUSD"):
-                return "SOLUSDT"
-            if s in ("BNB", "BNBUSD"):
-                return "BNBUSDT"
             return s
 
-    raw_syms = list(getattr(config, "AUTOTRADE_SYMBOLS", None) or ["BTCUSDT", "XAUUSD", "ETHUSDT", "SOLUSDT", "BNBUSDT"])
+    raw_syms = list(getattr(config, "AUTOTRADE_SYMBOLS", None) or ["BTCUSDT", "XAUUSD"])
     _ALLOWED = {
-        "BTCUSDT", "BTCUSD", "BTC", "XAUUSD", "XAUTUSD", "XAU", "GOLD", "XAUT", "PAXGUSDT",
-        "ETHUSDT", "ETHUSD", "ETH", "SOLUSDT", "SOLUSD", "SOL", "BNBUSDT", "BNBUSD", "BNB",
+        "BTCUSDT", "BTCUSD", "BTC", "XAUUSD", "XAUTUSD", "XAU", "GOLD", "XAUT", "PAXGUSDT", "PAXG",
     }
     watchlist: List[str] = []
     for s in raw_syms:
@@ -55,22 +48,18 @@ async def live_monitoring_worker(
             n = str(s).upper()
         if not n:
             continue
-        if n not in _ALLOWED and not any(x in n for x in ("BTC", "XAU", "GOLD", "PAXG", "ETH", "SOL", "BNB")):
+        if n not in _ALLOWED and not any(x in n for x in ("BTC", "XAU", "GOLD", "PAXG", "XAUT")):
             continue
         if "BTC" in n:
             n = "BTCUSDT"
         elif any(x in n for x in ("XAU", "GOLD", "PAXG", "XAUT")):
             n = "XAUUSD"
-        elif "ETH" in n:
-            n = "ETHUSDT"
-        elif "SOL" in n:
-            n = "SOLUSDT"
-        elif "BNB" in n:
-            n = "BNBUSDT"
+        else:
+            continue
         if n not in watchlist:
             watchlist.append(n)
     if not watchlist:
-        watchlist = ["BTCUSDT", "XAUUSD", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+        watchlist = ["BTCUSDT", "XAUUSD"]
 
     max_open = int(getattr(config, "MAX_OPEN_TRADES", 5) or 5)
     try:
