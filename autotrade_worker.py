@@ -61,9 +61,9 @@ async def live_monitoring_worker(
     if not watchlist:
         watchlist = ["BTCUSDT", "XAUUSD"]
 
-    max_open = int(getattr(config, "MAX_OPEN_TRADES", 10) or 10)
+    max_open = int(getattr(config, "MAX_OPEN_TRADES", 2) or 2)
     if getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False):
-        max_open = max(max_open, int(getattr(engine, "max_open_trades", 10) or 10), 10)
+        max_open = int(getattr(engine, "max_open_trades", max_open) or max_open)
     try:
         engine.max_open_trades = max_open
     except Exception:

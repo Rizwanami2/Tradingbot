@@ -208,9 +208,9 @@ class ExecutionEngine:
         else:
             try:
                 import config as _cfg_max
-                self.max_open_trades = int(getattr(_cfg_max, "MAX_OPEN_TRADES", 10) or 10)
+                self.max_open_trades = int(getattr(_cfg_max, "MAX_OPEN_TRADES", 2) or 2)
             except Exception:
-                self.max_open_trades = 10
+                self.max_open_trades = 2
         self.scalp_mode: bool = False
         self.fast_market_fill: bool = False
         self.scalp_tp_usd: float = 2.50
@@ -226,7 +226,7 @@ class ExecutionEngine:
         return len(self.active_positions) + len(self.pending_setups)
 
     def slots_available(self) -> int:
-        return max(0, int(getattr(self, "max_open_trades", 10)) - self.open_trade_count())
+        return max(0, int(getattr(self, "max_open_trades", 2)) - self.open_trade_count())
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -246,7 +246,7 @@ class ExecutionEngine:
             raise ValueError(f"Trading {symbol} is disabled. Only Gold (XAUUSD) and Bitcoin (BTCUSDT) are permitted.")
         
         is_scalp_req = bool(sig.get("is_scalp") or getattr(self, "scalp_mode", False))
-        max_trades = int(getattr(self, "max_open_trades", 10) or 10)
+        max_trades = int(getattr(self, "max_open_trades", 2) or 2)
 
         # Check maximum concurrent open trades limit
         if self.open_trade_count() >= max_trades:
@@ -944,7 +944,7 @@ class ExecutionEngine:
         return closed
 
     def format_positions_detail(self) -> str:
-        max_trades = int(getattr(self, "max_open_trades", 10) or 10)
+        max_trades = int(getattr(self, "max_open_trades", 2) or 2)
         slots = self.slots_available()
         lines = [f"📋 **Active Positions ({len(self.active_positions)}/{max_trades} active | {slots} slots free)**"]
         if not self.active_positions:

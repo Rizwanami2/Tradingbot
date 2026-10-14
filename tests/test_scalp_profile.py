@@ -225,6 +225,65 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         self.assertEqual(order.status, OrderStatus.CLOSED)
         self.assertIn("Scalp SL", order.close_reason)
 
+    def test_multi_position_scalp_gold_and_btc_up_to_two(self):
+        self.engine.scalp_mode = True
+        self.engine.fast_market_fill = True
+        self.engine.max_open_trades = 2
+
+        self.assertEqual(self.engine.open_trade_count(), 0)
+        self.assertEqual(self.engine.slots_available(), 2)
+
+        # Register 1 Gold position and 1 BTC position (2 total slots filled)
+        g_sig = {
+            "symbol": "XAUUSD", "direction": "LONG", "entry": 2650.0, "stop": 2646.0,
+            "tp1": 2655.0, "tp2": 2660.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+            "margin_required": 50.0, "risk_amount": 8.0, "rr": 1.0, "is_scalp": True, "fast_market_fill": True,
+        }
+        order1 = self.engine.register_setup(g_sig, reason="Gold scalp #1")
+        self.assertIsNotNone(order1)
+
+        b_sig = {
+            "symbol": "BTCUSDT", "direction": "LONG", "entry": 65000.0, "stop": 64800.0,
+            "tp1": 65200.0, "tp2": 65400.0, "lots": 0.01, "size": 0.01, "leverage": 20.0,
+            "margin_required": 32.5, "risk_amount": 5.0, "rr": 1.0, "is_scalp": True, "fast_market_fill": True,
+        }
+        order2 = self.engine.register_setup(b_sig, reason="BTC scalp #1")
+        self.assertIsNotNone(order2)
+
+        self.assertEqual(self.engine.open_trade_count(), 2)
+        self.assertEqual(self.engine.slots_available(), 0)
+
+        # 3rd order must be blocked by the 2 slots limit
+        extra_sig = {
+            "symbol": "XAUUSD", "direction": "LONG", "entry": 2652.0, "stop": 2648.0,
+            "tp1": 2657.0, "tp2": 2662.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+            "margin_required": 50.0, "risk_amount": 8.0, "rr": 1.0, "is_scalp": True,
+        }
+        with self.assertRaises(RuntimeError) as ctx:
+            self.engine.register_setup(extra_sig)
+        self.assertIn("Max concurrent trades reached (2)", str(ctx.exception))
+
+        # Fill orders with market candles
+        gcandle = {"open": 2650.0, "high": 2652.0, "low": 2649.0, "close": 2651.0}
+        self.engine.update_market_candle("XAUUSD", gcandle)
+        bcandle = {"open": 65000.0, "high": 65050.0, "low": 64990.0, "close": 65010.0}
+        self.engine.update_market_candle("BTCUSDT", bcandle)
+
+        self.assertEqual(len(self.engine.active_positions), 2)
+        detail = self.engine.format_positions_detail()
+        self.assertIn("2/2 active", detail)
+        self.assertIn("0 slots free", detail)
+
+        # Close 1 position and verify slot is freed
+        self.engine.close_position("XAUUSD", current_price=2652.0)
+        self.assertEqual(self.engine.open_trade_count(), 1)
+        self.assertEqual(self.engine.slots_available(), 1)
+
+        # Now registering a 2nd position succeeds again
+        order3 = self.engine.register_setup(extra_sig, reason="Gold scalp #2")
+        self.assertIsNotNone(order3)
+        self.assertEqual(self.engine.open_trade_count(), 2)
+
     def test_multi_position_scalp_gold_and_btc_up_to_ten(self):
         self.engine.scalp_mode = True
         self.engine.fast_market_fill = True

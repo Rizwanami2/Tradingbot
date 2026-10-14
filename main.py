@@ -422,7 +422,7 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
     auto_status = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
     summary = engine.get_portfolio_summary()
-    max_trades = getattr(engine, "max_open_trades", 5)
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
     slots = engine.slots_available()
     symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
     bname = type(engine.broker).__name__ if engine.broker else "None"
@@ -462,7 +462,7 @@ async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = risk_mgr.state
     risk_pct, reason = risk_mgr.current_risk_pct()
-    max_trades = getattr(engine, "max_open_trades", 5)
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
     msg = (
         f"🛡️ **Institutional Risk Controls**\n"
@@ -640,7 +640,7 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global autotrade_active
     arg = (ctx.args[0].lower() if ctx.args else "")
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
-    max_trades = getattr(engine, "max_open_trades", 5)
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
     symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
     if arg in ("scalp", "spam") or (len(ctx.args) > 1 and ctx.args[1].lower() in ("scalp", "spam")):
         try:
@@ -1386,7 +1386,7 @@ async def live_monitoring_worker(app):
                             pass
 
                 is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
-                max_trades = getattr(engine, "max_open_trades", 10) or 10
+                max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2)) or 2
                 open_n = len(engine.active_positions) + len(engine.pending_setups)
                 can_open = (autotrade_active and open_n < max_trades) if is_scalping else (autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups and open_n < max_trades)
                 if can_open:

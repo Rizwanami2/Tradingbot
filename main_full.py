@@ -620,7 +620,7 @@ async def live_monitoring_worker(app):
                             pass
 
                 is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
-                max_trades = getattr(engine, "max_open_trades", 10) or 10
+                max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2)) or 2
                 open_n = len(engine.active_positions) + len(engine.pending_setups)
                 can_open = (autotrade_active and open_n < max_trades) if is_scalping else (autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups and open_n < max_trades)
                 if can_open:
