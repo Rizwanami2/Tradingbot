@@ -483,6 +483,77 @@ class TestDeltaBroker(unittest.TestCase):
 
         asyncio.run(_test())
 
+    # =========================================================================
+    # 11. Clock Skew Synchronization & Response Date Header
+    # =========================================================================
+    def test_clock_synchronization_from_date_header(self):
+        broker = DeltaBroker.__new__(DeltaBroker)
+        broker.api_key = "test_key"
+        broker.api_secret = "test_secret"
+        broker._time_offset = 0.0
+
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Date": "Wed, 14 Oct 2026 19:47:38 GMT"}
+        broker._sync_time_from_response(mock_resp)
+
+        import time
+        from email.utils import parsedate_to_datetime
+        expected_dt = parsedate_to_datetime("Wed, 14 Oct 2026 19:47:38 GMT")
+        expected_diff = expected_dt.timestamp() - time.time()
+        self.assertAlmostEqual(broker._time_offset, expected_diff, delta=2.0)
+
+    # =========================================================================
+    # 12. Testnet Auto-Fallback & Key Sanitization
+    # =========================================================================
+    @patch("requests.request")
+    def test_testnet_fallback_and_key_sanitization(self, mock_req):
+        requested_urls = []
+
+        def mock_dispatch(method, url, **kwargs):
+            requested_urls.append(url)
+            resp = MagicMock()
+            if "cdn-ind.testnet.deltaex.org" in url and "wallet/balances" in url:
+                # Primary India testnet returns 401 invalid_api_key
+                resp.status_code = 401
+                resp.text = '{"error": {"code": "invalid_api_key"}}'
+                resp.json.return_value = {"error": {"code": "invalid_api_key"}}
+                return resp
+            elif "testnet-api.delta.exchange" in url and "wallet/balances" in url:
+                # Fallback Global testnet succeeds
+                resp.status_code = 200
+                resp.text = '{"success": true, "result": [{"asset_symbol": "USDT", "balance": "5000.00"}]}'
+                resp.json.return_value = {"success": True, "result": [{"asset_symbol": "USDT", "balance": "5000.00"}]}
+                return resp
+            elif "products" in url:
+                resp.status_code = 200
+                resp.text = '{"success": true, "result": []}'
+                resp.json.return_value = {"success": True, "result": []}
+                return resp
+            elif "positions/margined" in url:
+                resp.status_code = 200
+                resp.text = '{"success": true, "result": []}'
+                resp.json.return_value = {"success": True, "result": []}
+                return resp
+            resp.status_code = 200
+            resp.text = "{}"
+            resp.json.return_value = {}
+            return resp
+
+        mock_req.side_effect = mock_dispatch
+
+        # Pass keys with surrounding spaces and quotes
+        broker = DeltaBroker(
+            api_key=' "my_quoted_key" ',
+            api_secret=" 'my_secret_key' ",
+            is_testnet=True,
+        )
+
+        self.assertEqual(broker.api_key, "my_quoted_key")
+        self.assertEqual(broker.api_secret, "my_secret_key")
+        self.assertTrue(broker.is_connected)
+        self.assertEqual(broker.balance, 5000.0)
+        self.assertEqual(broker.base_url, "https://testnet-api.delta.exchange")
+
 
 if __name__ == "__main__":
     unittest.main()

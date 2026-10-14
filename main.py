@@ -1408,7 +1408,10 @@ async def delta_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not key or not secret:
             await update.message.reply_text(
                 "Usage: `/delta testnet <API_KEY> <API_SECRET>`\n"
-                "Connects to Delta Exchange Testnet (`https://testnet-api.delta.exchange`).",
+                "Connects to Delta Exchange Testnet (`https://cdn-ind.testnet.deltaex.org` / `https://testnet.delta.exchange`).\n\n"
+                "💡 *Did you create your keys on the live exchange?*\n"
+                "If trading with real funds on Delta Exchange India, connect using:\n"
+                "`/delta live <API_KEY> <API_SECRET>`",
                 parse_mode="Markdown",
             )
             return
@@ -1422,16 +1425,42 @@ async def delta_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 max_leverage=200.0,
             )
             engine.broker = new_broker
-            config.BROKER_MODE = "delta_testnet"
+            if new_broker.is_testnet:
+                config.BROKER_MODE = "delta_testnet"
+                await update.message.reply_text(
+                    f"🧪 **Delta Exchange Testnet Connected Successfully**\n"
+                    f"• **Environment:** `TESTNET (Simulation)`\n"
+                    f"• **Endpoint:** `{new_broker.base_url}`\n"
+                    f"• **Wallet Balance:** `${new_broker.balance:,.2f}` {new_broker.currency}\n"
+                    f"• **Equity:** `${new_broker.equity:,.2f}` {new_broker.currency}\n"
+                    f"• **Available Margin:** `${new_broker.free_margin:,.2f}`\n"
+                    f"• **Max Leverage:** `200x`",
+                    parse_mode="Markdown",
+                )
+            else:
+                config.BROKER_MODE = "delta_live"
+                await update.message.reply_text(
+                    f"🟢 **Delta Exchange India LIVE Connected Successfully**\n"
+                    f"*(Auto-detected Live API Key)*\n"
+                    f"• **Environment:** `LIVE (Delta Exchange India)`\n"
+                    f"• **Endpoint:** `{new_broker.base_url}`\n"
+                    f"• **Wallet Balance:** `${new_broker.balance:,.2f}` {new_broker.currency}\n"
+                    f"• **Equity:** `${new_broker.equity:,.2f}` {new_broker.currency}\n"
+                    f"• **Available Margin:** `${new_broker.free_margin:,.2f}`\n"
+                    f"• **Max Leverage:** `200x`",
+                    parse_mode="Markdown",
+                )
+        except Exception as exc:
             await update.message.reply_text(
-                f"🧪 **Delta Exchange Testnet Connected**\n"
-                f"• **Balance:** `${new_broker.balance:,.2f}`\n"
-                f"• **Equity:** `${new_broker.equity:,.2f}`\n"
-                f"• **Max Leverage:** `200x`",
+                f"❌ **Delta Exchange Connection Failed**\n\n"
+                f"`{exc}`\n\n"
+                f"🔍 **Troubleshooting Tips:**\n"
+                f"1. **Live Key**: If this API key is from **https://india.delta.exchange**, connect via `/delta live <API_KEY> <API_SECRET>`.\n"
+                f"2. **Testnet Key**: Testnet accounts are separate — register at **https://testnet.delta.exchange**.\n"
+                f"3. **IP Whitelist**: If enabled on Delta Exchange, remove the IP restriction or whitelist your server IP.\n"
+                f"4. **Permissions**: Make sure 'Read' and 'Trade' permissions are active on the key.",
                 parse_mode="Markdown",
             )
-        except Exception as exc:
-            await update.message.reply_text(f"❌ Testnet connection failed: {exc}")
 
     elif sub in ("leverage", "lev"):
         if len(args) < 2:

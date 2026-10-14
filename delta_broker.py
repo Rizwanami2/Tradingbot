@@ -46,7 +46,9 @@ logger = logging.getLogger("DeltaBroker")
 
 DELTA_INDIA_LIVE_URL = "https://api.india.delta.exchange"
 DELTA_GLOBAL_LIVE_URL = "https://api.delta.exchange"
-DELTA_TESTNET_URL = "https://testnet-api.delta.exchange"
+DELTA_INDIA_TESTNET_URL = "https://cdn-ind.testnet.deltaex.org"
+DELTA_GLOBAL_TESTNET_URL = "https://testnet-api.delta.exchange"
+DELTA_TESTNET_URL = DELTA_INDIA_TESTNET_URL
 
 # Canonical symbol aliases mapping to Delta Exchange symbols
 SYMBOL_ALIASES: Dict[str, str] = {
@@ -147,14 +149,15 @@ class DeltaBroker(Broker):
         max_leverage: float = 200.0,
         timeout: int = 10,
     ):
-        self.api_key = str(api_key or "").strip()
-        self.api_secret = str(api_secret or "").strip()
+        self.api_key = str(api_key or "").strip().strip("'\"`").strip()
+        self.api_secret = str(api_secret or "").strip().strip("'\"`").strip()
         self.is_testnet = bool(is_testnet)
         if self.is_testnet:
-            self.base_url = DELTA_TESTNET_URL
+            self.base_url = (base_url if base_url and "testnet" in base_url else DELTA_INDIA_TESTNET_URL).rstrip("/")
         else:
             self.base_url = (base_url or DELTA_INDIA_LIVE_URL).rstrip("/")
         self.timeout = timeout
+        self._time_offset: float = 0.0
 
         self.max_leverage = float(max_leverage or 200.0)
         self.default_leverage = min(max(float(leverage or 20.0), 1.0), self.max_leverage)
@@ -198,6 +201,23 @@ class DeltaBroker(Broker):
     def mode(self) -> str:
         return "testnet" if self.is_testnet else "live"
 
+    def _sync_time_from_response(self, resp: requests.Response) -> None:
+        """Dynamically synchronize local time with Delta Exchange server time."""
+        date_header = resp.headers.get("Date")
+        if not date_header:
+            return
+        try:
+            from email.utils import parsedate_to_datetime
+            server_dt = parsedate_to_datetime(date_header)
+            server_ts = server_dt.timestamp()
+            local_ts = time.time()
+            diff = server_ts - local_ts
+            if abs(diff) > 1.0:
+                self._time_offset = diff
+                logger.debug("[DeltaBroker] Synced clock skew offset: %.2fs", self._time_offset)
+        except Exception:
+            pass
+
     def _generate_signature(
         self,
         method: str,
@@ -206,7 +226,7 @@ class DeltaBroker(Broker):
         timestamp: Optional[str] = None,
     ) -> Tuple[str, str]:
         """Generate HMAC-SHA256 signature according to Delta Exchange v2 spec."""
-        ts = timestamp or str(int(time.time()))
+        ts = timestamp or str(int(time.time() + self._time_offset))
         # Formula: METHOD + TIMESTAMP + PATH_WITH_QUERY + PAYLOAD
         signature_data = method.upper() + ts + path_with_query + payload_str
         signature = hmac.new(
@@ -267,6 +287,7 @@ class DeltaBroker(Broker):
                 data=payload_str if payload_str else None,
                 timeout=self.timeout,
             )
+            self._sync_time_from_response(resp)
             if resp.status_code >= 400:
                 err_code = ""
                 err_msg = resp.text
@@ -361,28 +382,93 @@ class DeltaBroker(Broker):
             self._connected = False
             self._last_error = (
                 "Delta Exchange credentials missing (api_key and api_secret required). "
-                "Configure DELTA_EXCHANGE_API_KEY and DELTA_EXCHANGE_API_SECRET in .env or via /delta live."
+                "Configure DELTA_EXCHANGE_API_KEY and DELTA_EXCHANGE_API_SECRET in .env or via /delta live or /delta testnet."
             )
             logger.error("[DeltaBroker] %s", self._last_error)
             raise BrokerConfigurationError(self._last_error)
 
-        try:
-            # 1. Fetch products
-            self.load_products()
+        # Candidate endpoints to attempt in priority order
+        if self.is_testnet:
+            candidates = [
+                self.base_url,
+                DELTA_INDIA_TESTNET_URL,
+                DELTA_GLOBAL_TESTNET_URL,
+            ]
+        else:
+            candidates = [
+                self.base_url,
+                DELTA_INDIA_LIVE_URL,
+                DELTA_GLOBAL_LIVE_URL,
+            ]
 
-            # 2. Fetch wallet balances to test authenticated connectivity
-            self.refresh_balances()
-            self._connected = True
-            logger.info(
-                "[DeltaBroker] Connected to Delta Exchange India %s (Balance: $%s, Equity: $%s)",
-                self.mode, self.balance, self.equity
-            )
-            return True
-        except Exception as exc:
-            self._connected = False
-            self._last_error = f"Delta Exchange connection failed: {exc}"
-            logger.error("[DeltaBroker] %s", self._last_error)
-            raise BrokerConfigurationError(self._last_error) from exc
+        unique_candidates = []
+        for c in candidates:
+            c = (c or "").rstrip("/")
+            if c and c not in unique_candidates:
+                unique_candidates.append(c)
+
+        last_exc = None
+        for candidate in unique_candidates:
+            self.base_url = candidate
+            try:
+                # 1. Fetch products & sync server clock
+                self.load_products()
+
+                # 2. Fetch wallet balances with authenticated signature
+                self.refresh_balances()
+                self._connected = True
+                logger.info(
+                    "[DeltaBroker] Connected to Delta Exchange %s (%s, Balance: $%s, Equity: $%s)",
+                    self.mode, self.base_url, self.balance, self.equity
+                )
+                return True
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "[DeltaBroker] Connection to %s failed (%s). Checking next endpoint...",
+                    candidate, exc
+                )
+
+        # Cross-environment check: If testnet failed with invalid_api_key, check if key belongs to LIVE!
+        if self.is_testnet and "invalid_api_key" in str(last_exc):
+            try:
+                saved_url = self.base_url
+                self.base_url = DELTA_INDIA_LIVE_URL
+                self.load_products()
+                self.refresh_balances()
+                # Key is valid on LIVE! Auto-promote to Live
+                self.is_testnet = False
+                self._connected = True
+                logger.info(
+                    "[DeltaBroker] Auto-promoted to LIVE Delta Exchange India! (Balance: $%s, Equity: $%s)",
+                    self.balance, self.equity
+                )
+                return True
+            except Exception:
+                self.base_url = saved_url
+
+        self._connected = False
+        diagnostic = ""
+        if "invalid_api_key" in str(last_exc):
+            if self.is_testnet:
+                diagnostic = (
+                    "\n\n🔍 Troubleshooting Delta Exchange Testnet:"
+                    "\n1. Testnet API keys must be created at https://testnet.delta.exchange (separate from live)."
+                    "\n2. If you generated this key on the live exchange (https://india.delta.exchange), "
+                    "connect using `/delta live <API_KEY> <API_SECRET>`."
+                    "\n3. Ensure IP whitelisting on your Delta API key is disabled or includes your server IP."
+                )
+            else:
+                diagnostic = (
+                    "\n\n🔍 Troubleshooting Delta Exchange Live:"
+                    "\n1. Live API keys must be created at https://india.delta.exchange."
+                    "\n2. If these are demo/testnet keys, connect using `/delta testnet <API_KEY> <API_SECRET>`."
+                    "\n3. Ensure Trading permissions are enabled on the API key."
+                )
+
+        self._last_error = f"Delta Exchange connection failed: {last_exc}{diagnostic}"
+        logger.error("[DeltaBroker] %s", self._last_error)
+        raise BrokerConfigurationError(self._last_error) from last_exc
 
     def refresh_balances(self) -> None:
         """Update balance, equity, and margin from /v2/wallet/balances."""
@@ -399,11 +485,22 @@ class DeltaBroker(Broker):
             blocked = float(b.get("blocked_margin", 0.0) or 0.0)
             free = float(b.get("free_margin", 0.0) or 0.0)
 
-            # Weight USD / USDT balances directly
-            if asset in ("USD", "USDT"):
+            # Weight USD / USDT / USDC balances directly
+            if asset in ("USD", "USDT", "USDC"):
                 tot_balance += bal
                 tot_blocked += blocked
                 tot_free += free
+
+        # If zero, take first asset with positive balance
+        if tot_balance == 0.0 and balances:
+            for b in balances:
+                bal = float(b.get("balance", 0.0) or 0.0)
+                if bal > 0:
+                    tot_balance += bal
+                    tot_blocked += float(b.get("blocked_margin", 0.0) or 0.0)
+                    tot_free += float(b.get("free_margin", 0.0) or 0.0)
+                    self.currency = str(b.get("asset_symbol", "USD")).upper()
+                    break
 
         self.balance = tot_balance
         self._cached_margin = tot_blocked
