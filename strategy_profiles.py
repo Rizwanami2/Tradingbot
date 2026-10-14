@@ -179,13 +179,12 @@ def apply_profile(
         if getattr(p, "is_scalp", False):
             risk_mgr.config.tp1_r = 1.0
             risk_mgr.config.tp2_r = 1.5
-            risk_mgr.config.tp3_r = 2.0
-            risk_mgr.set_leverage(min(getattr(p, "max_leverage", 20.0), 20.0))
+            risk_mgr.set_leverage(min(getattr(p, "max_leverage", 20.0), getattr(risk_mgr.config, "max_leverage", 200.0)))
         else:
             risk_mgr.config.tp1_r = 1.5
             risk_mgr.config.tp2_r = 2.5
             risk_mgr.config.tp3_r = 4.0
-            risk_mgr.set_leverage(min(getattr(p, "max_leverage", 20.0), 20.0))
+            risk_mgr.set_leverage(min(getattr(p, "max_leverage", 20.0), getattr(risk_mgr.config, "max_leverage", 200.0)))
 
     if engine is not None:
         engine.scalp_mode = getattr(p, "is_scalp", False)

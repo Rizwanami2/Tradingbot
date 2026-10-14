@@ -108,8 +108,17 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
 ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes", "on")
 
+# Native Delta Exchange India REST Settings
+DELTA_EXCHANGE_API_KEY = os.getenv("DELTA_EXCHANGE_API_KEY") or EXCHANGE_API_KEY or ""
+DELTA_EXCHANGE_API_SECRET = os.getenv("DELTA_EXCHANGE_API_SECRET") or EXCHANGE_API_SECRET or ""
+DELTA_EXCHANGE_BASE_URL = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+DELTA_EXCHANGE_TESTNET = os.getenv("DELTA_EXCHANGE_TESTNET", "false").lower() in ("true", "1", "yes", "on")
+DELTA_EXCHANGE_DEFAULT_LEVERAGE = _safe_float(os.getenv("DELTA_DEFAULT_LEVERAGE"), 20.0)
+DELTA_EXCHANGE_AUTO_LEVERAGE = os.getenv("DELTA_AUTO_LEVERAGE", "true").lower() in ("true", "1", "yes", "on")
+DELTA_EXCHANGE_MAX_LEVERAGE = _safe_float(os.getenv("DELTA_MAX_LEVERAGE"), 200.0)
+
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 2)
-ALLOWED_TRADING_SYMBOLS = {"BTCUSDT", "XAUUSD", "BTCUSD", "XAUTUSD", "PAXGUSDT", "GOLD", "XAU", "BTC"}
+ALLOWED_TRADING_SYMBOLS = {"BTCUSDT", "XAUUSD", "BTCUSD", "XAUTUSD", "PAXGUSDT", "GOLD", "XAU", "BTC", "ETHUSD", "ETHUSDT"}
 
 
 def is_trading_allowed(symbol: str) -> bool:

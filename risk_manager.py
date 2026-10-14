@@ -94,10 +94,10 @@ class RiskConfig:
     min_rr: float = 1.5
     max_lot: float = 10.0
     min_lot_override: Optional[float] = None
-    # Conservative configured cap; exchange-side limits must be verified separately.
+    # Configured leverage cap; supports up to 200x for brokers like Delta Exchange India.
     leverage: float = 5.0
     min_leverage: float = 1.0
-    max_leverage: float = 20.0
+    max_leverage: float = 200.0
     max_margin_utilization_pct: float = 85.0
     # RF (Risk Factor) – master multiplier for risk & BE sensitivity
     # 1.0 = normal | <1 safer | >1 more aggressive
@@ -196,7 +196,7 @@ class RiskManager:
                 self.profile = INSTRUMENTS.get("XAUUSD", INSTRUMENTS["DEFAULT"])
 
     def set_leverage(self, leverage: float) -> Tuple[bool, str]:
-        """Set leverage within the configured conservative bounds (default 1x-20x)."""
+        """Set leverage within the configured bounds (1x to 200x)."""
         try:
             lev = float(leverage)
         except (ValueError, TypeError):
@@ -206,8 +206,25 @@ class RiskManager:
         self.config.leverage = lev
         self.state.leverage = lev
         self._save_state()
-        warn = " ⚠️ Leverage increases liquidation risk; exchange limits and margin mode must also be verified." if lev > 5.0 else ""
+        warn = " ⚠️ High leverage increases liquidation risk; ensure tight stop-loss is placed." if lev > 25.0 else ""
         return True, f"Leverage set to {lev:.0f}x{warn}"
+
+    def auto_set_leverage(
+        self,
+        symbol: str = "",
+        stop_dist_pct: Optional[float] = None,
+        max_cap: float = 200.0,
+    ) -> Tuple[float, str]:
+        """Auto calculate and set leverage up to max 200x based on stop distance and liquidation safety."""
+        cap = min(self.config.max_leverage, max_cap, 200.0)
+        if stop_dist_pct and stop_dist_pct > 0:
+            safety_dist = (stop_dist_pct * 1.25) + 0.005
+            target_lev = min(cap, max(1.0, 1.0 / safety_dist))
+        else:
+            target_lev = min(cap, getattr(self.state, "leverage", self.config.leverage))
+        final_lev = round(target_lev)
+        self.set_leverage(final_lev)
+        return float(final_lev), f"Auto-set leverage to {final_lev:.0f}x (Max {cap:.0f}x)"
 
     def get_leverage(self) -> float:
         return getattr(self.state, "leverage", self.config.leverage)

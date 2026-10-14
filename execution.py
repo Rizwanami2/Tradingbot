@@ -391,11 +391,13 @@ def create_broker_fail_closed(
     mt5_live_factory=None,
     oanda_factory=None,
     alpaca_factory=None,
+    delta_factory=None,
 ):
     """
     Create the requested broker without silently falling back between modes.
     Supports:
     - 'paper': Deterministic local paper simulation
+    - 'delta' / 'delta_live' / 'delta_india' / 'delta_india_live': Native Delta Exchange India REST broker (up to 200x)
     - 'live' / 'ccxt' / 'ccxt_live': Native CCXT exchange broker (100+ crypto exchanges)
     - 'oanda' / 'oanda_practice' / 'oanda_live': Native OANDA v20 REST broker (Forex, Gold, Metals)
     - 'alpaca' / 'alpaca_paper' / 'alpaca_live': Native Alpaca REST broker (US Stocks, ETFs, Crypto)
@@ -406,6 +408,40 @@ def create_broker_fail_closed(
 
     if mode == "paper":
         return paper_factory()
+
+    if mode in ("delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet"):
+        if delta_factory is not None:
+            try:
+                b = delta_factory()
+                if b is not None:
+                    return b
+            except Exception as exc:
+                if isinstance(exc, BrokerConfigurationError):
+                    raise
+                raise BrokerConfigurationError(f"Delta Exchange broker initialization failed: {exc}") from exc
+        try:
+            import config
+            key = getattr(config, "DELTA_EXCHANGE_API_KEY", "") or getattr(config, "EXCHANGE_API_KEY", "") or api_key or ""
+            secret = getattr(config, "DELTA_EXCHANGE_API_SECRET", "") or getattr(config, "EXCHANGE_API_SECRET", "") or api_secret or ""
+            base_url = getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+            is_testnet = (mode == "delta_testnet") or getattr(config, "DELTA_EXCHANGE_TESTNET", False)
+            leverage = getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0)
+            auto_leverage = getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True)
+            max_leverage = getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0)
+            from delta_broker import DeltaBroker
+            return DeltaBroker(
+                api_key=key,
+                api_secret=secret,
+                base_url=base_url,
+                is_testnet=is_testnet,
+                leverage=leverage,
+                auto_leverage=auto_leverage,
+                max_leverage=max_leverage,
+            )
+        except Exception as exc:
+            if isinstance(exc, BrokerConfigurationError):
+                raise
+            raise BrokerConfigurationError(f"Delta Exchange broker initialization failed: {exc}") from exc
 
     if mode in ("mt5", "mt5_paper", "mt5_demo"):
         if mt5_paper_factory is not None:
@@ -489,7 +525,7 @@ def create_broker_fail_closed(
 
     if mode not in ("live", "ccxt", "ccxt_live"):
         raise BrokerConfigurationError(
-            f"Unsupported broker mode {broker_mode!r}; expected 'paper', 'live', 'ccxt', 'oanda', 'alpaca', 'mt5', or 'mt5_live'."
+            f"Unsupported broker mode {broker_mode!r}; expected 'paper', 'delta', 'delta_live', 'live', 'ccxt', 'oanda', 'alpaca', 'mt5', or 'mt5_live'."
         )
 
     if not api_key or not api_secret:
@@ -694,11 +730,19 @@ def create_broker(
     alpaca_api_key: str = "",
     alpaca_api_secret: str = "",
     alpaca_paper: bool = True,
+    delta_api_key: str = "",
+    delta_api_secret: str = "",
+    delta_base_url: str = "",
+    delta_testnet: bool = False,
+    delta_leverage: float = 20.0,
+    delta_auto_leverage: bool = True,
+    delta_max_leverage: float = 200.0,
 ) -> Broker:
-    """Factory creating PaperBroker, CCXTBroker, OANDABroker, AlpacaBroker, or MT5Broker with fail-closed safety."""
+    """Factory creating PaperBroker, CCXTBroker, OANDABroker, AlpacaBroker, DeltaBroker, or MT5Broker with fail-closed safety."""
     from mt5_broker import MT5Broker
     from oanda_broker import OANDABroker
     from alpaca_broker import AlpacaBroker
+    from delta_broker import DeltaBroker
 
     effective_mode = (broker_mode or "").strip().lower()
     if effective_mode == "mt5":
@@ -744,6 +788,15 @@ def create_broker(
             api_key=alpaca_api_key,
             api_secret=alpaca_api_secret,
             is_paper=alpaca_paper,
+        ),
+        delta_factory=lambda: DeltaBroker(
+            api_key=delta_api_key,
+            api_secret=delta_api_secret,
+            base_url=delta_base_url or "https://api.india.delta.exchange",
+            is_testnet=delta_testnet or (effective_mode == "delta_testnet"),
+            leverage=delta_leverage,
+            auto_leverage=delta_auto_leverage,
+            max_leverage=delta_max_leverage,
         ),
     )
 

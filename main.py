@@ -92,6 +92,13 @@ try:
         mt5_path=getattr(config, "MT5_PATH", ""),
         mt5_magic=getattr(config, "MT5_MAGIC", 112233),
         mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+        delta_api_key=getattr(config, "DELTA_EXCHANGE_API_KEY", "") or getattr(config, "EXCHANGE_API_KEY", ""),
+        delta_api_secret=getattr(config, "DELTA_EXCHANGE_API_SECRET", "") or getattr(config, "EXCHANGE_API_SECRET", ""),
+        delta_base_url=getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange"),
+        delta_testnet=getattr(config, "DELTA_EXCHANGE_TESTNET", False),
+        delta_leverage=getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0),
+        delta_auto_leverage=getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True),
+        delta_max_leverage=getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0),
     )
 except Exception as _broker_err:
     print("[boot] broker:", _broker_err)
@@ -274,14 +281,14 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL"
         )
-    elif cat in ("mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca"):
+    elif cat in ("delta", "mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca"):
         text = (
-            "🏦 **MetaTrader 5 & Broker Accounts (Paper & MT5 Exclusive):**\n"
+            "🏦 **MetaTrader 5 & Broker Accounts (Paper, Delta India & MT5):**\n"
+            "• `/delta [status|live|testnet|leverage|auto_leverage|positions]` — Delta Exchange India Live REST broker (Max 200x)\n"
+            "• `/mt5 [status|paper|live|positions]` — MetaTrader 5 Simulation or Live Terminal Bridge\n"
             "• `/balance [amount]` — View or custom-set paper wallet balance (e.g. `/balance 50000`)\n"
             "• `/broker` — View active broker environment & telemetry\n"
-            "• `/broker paper` — Switch execution broker to paper simulation\n"
-            "• `/mt5 [status|paper|live|positions]` — MetaTrader 5 Simulation or Live Terminal Bridge\n\n"
-            "ℹ️ _Native REST live brokers (Oanda/Alpaca/CCXT) have been removed. MetaTrader 5 is the sole live broker._"
+            "• `/broker [paper|delta|mt5]` — Switch execution broker engine"
         )
     elif cat in ("risk", "safety", "limits"):
         text = (
@@ -291,7 +298,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
-            "• `/leverage [1-20]` — Set maximum account leverage ceiling\n"
+            "• `/leverage [1-200|auto]` — Set manual leverage or dynamic auto-leverage (up to 200x)\n"
             "• `/kill [on|off]` — Emergency execution stop circuit breaker"
         )
     elif cat in ("backtest", "research", "abacktest"):
@@ -666,16 +673,84 @@ def _safe_summary() -> str:
 
 
 async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if ctx.args:
-        try:
-            lev = float(ctx.args[0])
-            risk_mgr.set_leverage(lev)
-            await update.message.reply_text(f"Leverage set to `{risk_mgr.get_leverage():.0f}x`", parse_mode="Markdown")
+    args = ctx.args or []
+    if not args:
+        curr_lev = risk_mgr.get_leverage()
+        b_lev_str = ""
+        auto_str = ""
+        if hasattr(engine, "broker") and engine.broker:
+            if hasattr(engine.broker, "get_leverage"):
+                try:
+                    b_lev = engine.broker.get_leverage()
+                    b_lev_str = f"\n• **Broker Leverage:** `{b_lev:.0f}x`"
+                except Exception:
+                    pass
+            if hasattr(engine.broker, "auto_leverage"):
+                auto_status = "🟢 ON (Dynamic Scaling up to 200x)" if engine.broker.auto_leverage else "⚪ OFF (Manual)"
+                auto_str = f"\n• **Auto-Leverage Engine:** {auto_status}"
+
+        await update.message.reply_text(
+            f"⚡ **Leverage Management (Max 200x)**\n"
+            f"• Current leverage: `{curr_lev:.0f}x`\n"
+            f"• **Active Risk Manager Leverage:** `{curr_lev:.0f}x`{b_lev_str}{auto_str}\n"
+            f"• **Maximum Permitted Leverage:** `200x`\n\n"
+            f"✏️ **Set Leverage Manually:**\n"
+            f"• `/leverage <1-200>` — e.g. `/leverage 50` or `/leverage 200`\n\n"
+            f"🤖 **Auto-Leverage Dynamic Scaling:**\n"
+            f"• `/leverage auto on` — Automatically optimize leverage per trade (up to 200x)\n"
+            f"• `/leverage auto off` — Revert to fixed manual leverage",
+            parse_mode="Markdown",
+        )
+        return
+
+    sub = args[0].strip().lower()
+    if sub in ("auto", "dynamic"):
+        sub_arg = args[1].lower() if len(args) > 1 else "on"
+        enable_auto = sub_arg not in ("off", "false", "0", "disable")
+        broker_synced = False
+        if hasattr(engine, "broker") and engine.broker and hasattr(engine.broker, "auto_leverage"):
+            engine.broker.auto_leverage = enable_auto
+            broker_synced = True
+        status_txt = "ACTIVATED" if enable_auto else "DEACTIVATED"
+        status_icon = "🟢" if enable_auto else "⚪"
+        sync_txt = " and synchronized with active broker" if broker_synced else ""
+        await update.message.reply_text(
+            f"{status_icon} **Auto-Leverage Dynamic Engine {status_txt}**{sync_txt}\n"
+            f"• **Mode:** {'Dynamic auto-scaling (Max 200x)' if enable_auto else 'Fixed manual leverage'}\n"
+            f"• **Safety Barrier:** Protects against premature liquidation before SL hits\n"
+            f"• **Target Cap:** `200x`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        raw_val = float(sub.replace("x", ""))
+        ok, msg = risk_mgr.set_leverage(raw_val)
+        if not ok:
+            await update.message.reply_text(f"❌ {msg}")
             return
-        except Exception as e:
-            await update.message.reply_text(f"Invalid leverage: {e}")
-            return
-    await update.message.reply_text(f"Current leverage: `{risk_mgr.get_leverage():.0f}x`", parse_mode="Markdown")
+        broker_msg = ""
+        if hasattr(engine, "broker") and engine.broker and hasattr(engine.broker, "set_leverage"):
+            try:
+                sym = getattr(config, "DEFAULT_SYMBOL", "BTCUSD")
+                bok, bmsg = engine.broker.set_leverage(sym, raw_val)
+                if bok:
+                    broker_msg = f"\n• **Broker Synced:** {bmsg}"
+                else:
+                    broker_msg = f"\n• **Broker Note:** {bmsg}"
+            except Exception as b_err:
+                broker_msg = f"\n• **Broker Sync Note:** {b_err}"
+
+        margin_pct = (1.0 / raw_val) * 100.0 if raw_val > 0 else 100.0
+        await update.message.reply_text(
+            f"✅ Leverage set to `{risk_mgr.get_leverage():.0f}x`\n"
+            f"• **Active Leverage:** `{risk_mgr.get_leverage():.0f}x`\n"
+            f"• **Required Initial Margin:** `{margin_pct:.2f}%`{broker_msg}\n"
+            f"• **Configured Limit:** Up to `200x`",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Invalid leverage '{args[0]}': {e}. Usage: `/leverage <1-200>` or `/leverage auto on|off`")
 
 
 async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1239,6 +1314,214 @@ async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def delta_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Manage Delta Exchange India live broker, orders, and manual/auto leverage up to 200x."""
+    from delta_broker import DeltaBroker
+    args = ctx.args or []
+    if not args or args[0].lower() in ("status", "info"):
+        if isinstance(engine.broker, DeltaBroker) or (hasattr(engine.broker, "get_account_info") and "Delta" in type(engine.broker).__name__):
+            info = engine.broker.get_account_info()
+            await update.message.reply_text(info.summary(), parse_mode="Markdown")
+        else:
+            bname = type(engine.broker).__name__ if engine.broker else "None"
+            await update.message.reply_text(
+                f"🇮🇳 **Delta Exchange India Live Broker**\n"
+                f"• **Current Broker:** `{bname}` (Delta Exchange is not active)\n\n"
+                f"🚀 **Connect Delta Exchange India Live:**\n"
+                f"• `/delta live <API_KEY> <API_SECRET>` — Connect live account for real trade execution\n"
+                f"• `/delta testnet <API_KEY> <API_SECRET>` — Connect testnet sandbox\n\n"
+                f"⚡ **Leverage Controls (Max 200x):**\n"
+                f"• `/delta leverage <1-200> [SYMBOL]` — Manually set order leverage (up to 200x)\n"
+                f"• `/delta auto_leverage [on|off]` — Dynamic auto-leverage up to 200x\n\n"
+                f"📋 **Positions & Orders:**\n"
+                f"• `/delta positions` — List open Delta Exchange positions\n"
+                f"• `/delta status` — Refresh balance & telemetry\n\n"
+                f"_Configure `DELTA_EXCHANGE_API_KEY` and `DELTA_EXCHANGE_API_SECRET` in `.env` for automatic connection._",
+                parse_mode="Markdown",
+            )
+        return
+
+    sub = args[0].lower()
+
+    if sub in ("live", "connect"):
+        key = args[1].strip() if len(args) > 1 else getattr(config, "DELTA_EXCHANGE_API_KEY", "")
+        secret = args[2].strip() if len(args) > 2 else getattr(config, "DELTA_EXCHANGE_API_SECRET", "")
+        base_url = args[3].strip() if len(args) > 3 else getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+
+        if not key or not secret:
+            await update.message.reply_text(
+                "❌ **Delta Exchange India Connection Failed (Missing Credentials)**\n\n"
+                "Usage: `/delta live <API_KEY> <API_SECRET> [BASE_URL]`\n"
+                "Example: `/delta live d7a8... 9b2c... https://api.india.delta.exchange`\n\n"
+                "Or configure `DELTA_EXCHANGE_API_KEY` and `DELTA_EXCHANGE_API_SECRET` in `.env`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        try:
+            new_broker = DeltaBroker(
+                api_key=key,
+                api_secret=secret,
+                base_url=base_url,
+                is_testnet=False,
+                leverage=getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0),
+                auto_leverage=getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True),
+                max_leverage=getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0),
+            )
+            engine.broker = new_broker
+            config.BROKER_MODE = "delta_live"
+            config.DELTA_EXCHANGE_API_KEY = key
+            config.DELTA_EXCHANGE_API_SECRET = secret
+            config.DELTA_EXCHANGE_BASE_URL = base_url
+            await update.message.reply_text(
+                f"🟢 **Delta Exchange India Live Connected Successfully**\n"
+                f"• **Environment:** `LIVE` (Delta India)\n"
+                f"• **Wallet Balance:** `${new_broker.balance:,.2f}` {new_broker.currency}\n"
+                f"• **Equity:** `${new_broker.equity:,.2f}` {new_broker.currency}\n"
+                f"• **Available Margin:** `${new_broker.free_margin:,.2f}`\n"
+                f"• **Active Leverage:** `{new_broker.default_leverage:.0f}x` (Max: `{new_broker.max_leverage:.0f}x`)\n"
+                f"• **Auto-Leverage Engine:** {'🟢 ON (Dynamic up to 200x)' if new_broker.auto_leverage else '⚪ OFF'}\n"
+                f"• **Status:** Live deal execution active with server-side brackets & leverage.",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            logger.error("Delta Exchange India connect failed: %s", exc)
+            await update.message.reply_text(
+                f"🚫 **Delta Exchange India Connection Rejected (Fail-Closed)**\n"
+                f"Error: `{exc}`\n\n"
+                f"_Live mode aborted safely. Current broker remains unchanged._",
+                parse_mode="Markdown",
+            )
+
+    elif sub in ("testnet", "demo"):
+        key = args[1].strip() if len(args) > 1 else getattr(config, "DELTA_EXCHANGE_API_KEY", "")
+        secret = args[2].strip() if len(args) > 2 else getattr(config, "DELTA_EXCHANGE_API_SECRET", "")
+        if not key or not secret:
+            await update.message.reply_text(
+                "Usage: `/delta testnet <API_KEY> <API_SECRET>`\n"
+                "Connects to Delta Exchange Testnet (`https://testnet-api.delta.exchange`).",
+                parse_mode="Markdown",
+            )
+            return
+        try:
+            new_broker = DeltaBroker(
+                api_key=key,
+                api_secret=secret,
+                is_testnet=True,
+                leverage=getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0),
+                auto_leverage=getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True),
+                max_leverage=200.0,
+            )
+            engine.broker = new_broker
+            config.BROKER_MODE = "delta_testnet"
+            await update.message.reply_text(
+                f"🧪 **Delta Exchange Testnet Connected**\n"
+                f"• **Balance:** `${new_broker.balance:,.2f}`\n"
+                f"• **Equity:** `${new_broker.equity:,.2f}`\n"
+                f"• **Max Leverage:** `200x`",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            await update.message.reply_text(f"❌ Testnet connection failed: {exc}")
+
+    elif sub in ("leverage", "lev"):
+        if len(args) < 2:
+            curr_lev = getattr(engine.broker, "default_leverage", risk_mgr.get_leverage()) if engine.broker else risk_mgr.get_leverage()
+            await update.message.reply_text(
+                f"⚡ **Delta Exchange Leverage**\n"
+                f"• **Current Leverage:** `{curr_lev:.0f}x` (Max: `200x`)\n"
+                f"• **Usage:** `/delta leverage <1-200> [SYMBOL]`\n"
+                f"• **Example:** `/delta leverage 100` or `/delta leverage 200 BTCUSD`",
+                parse_mode="Markdown",
+            )
+            return
+        raw_val = args[1].strip().lower().replace("x", "")
+        target_sym = args[2].strip().upper() if len(args) > 2 else getattr(config, "DEFAULT_SYMBOL", "BTCUSD")
+        try:
+            val = float(raw_val)
+            if val < 1.0 or val > 200.0:
+                await update.message.reply_text("❌ Leverage must be between 1x and 200x.")
+                return
+
+            risk_mgr.set_leverage(val)
+            broker_msg = ""
+            if hasattr(engine.broker, "set_leverage"):
+                try:
+                    ok, bmsg = engine.broker.set_leverage(target_sym, val)
+                    broker_msg = f"\n• **Exchange Response:** {bmsg}"
+                except Exception as b_err:
+                    broker_msg = f"\n• **Exchange Warning:** {b_err}"
+
+            margin_pct = (1.0 / val) * 100.0
+            await update.message.reply_text(
+                f"✅ **Delta Exchange Leverage Updated**\n"
+                f"• **Symbol:** `{target_sym}`\n"
+                f"• **New Leverage:** `{val:.0f}x`\n"
+                f"• **Initial Margin Required:** `{margin_pct:.2f}%`{broker_msg}\n"
+                f"• **Safety Note:** Stop-loss is recommended to protect against liquidation barrier.",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Invalid leverage value: {e}")
+
+    elif sub in ("auto_leverage", "autolev"):
+        sub_arg = args[1].lower() if len(args) > 1 else "toggle"
+        curr_state = getattr(engine.broker, "auto_leverage", True) if engine.broker else True
+        if sub_arg in ("on", "true", "1", "enable"):
+            new_state = True
+        elif sub_arg in ("off", "false", "0", "disable"):
+            new_state = False
+        else:
+            new_state = not curr_state
+
+        if hasattr(engine.broker, "auto_leverage"):
+            engine.broker.auto_leverage = new_state
+        config.DELTA_EXCHANGE_AUTO_LEVERAGE = new_state
+
+        status_icon = "🟢" if new_state else "⚪"
+        status_str = "ENABLED (Dynamic Scaling up to 200x)" if new_state else "DISABLED (Fixed Manual Leverage)"
+        await update.message.reply_text(
+            f"{status_icon} **Delta Exchange Auto-Leverage {status_str}**\n\n"
+            f"• **How it works:** Auto-calculates optimal leverage from 1x to 200x based on stop distance and liquidation safety barrier.\n"
+            f"• **Safety Buffer:** Ensures liquidation barrier is placed safely beyond the trade's stop-loss.\n"
+            f"• **Max Cap:** `200x`",
+            parse_mode="Markdown",
+        )
+
+    elif sub in ("positions", "pos"):
+        if engine.broker and hasattr(engine.broker, "get_positions"):
+            try:
+                positions = engine.broker.get_positions()
+                if not positions:
+                    await update.message.reply_text("ℹ️ No active open positions on Delta Exchange India.")
+                    return
+                lines = [f"🇮🇳 **Delta Exchange Active Positions ({len(positions)}):**"]
+                for p in positions:
+                    icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                    curr_p = getattr(p, "current_price", p.entry_price) or p.entry_price
+                    lines.append(
+                        f"• `{p.symbol}` **{p.side.upper()}** `{p.qty}` contracts @ Entry `${p.entry_price:,.2f}` | "
+                        f"**Mark:** `${curr_p:,.2f}` | PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                    )
+                await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ Error fetching Delta positions: `{e}`", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ No active Delta Exchange broker attached.")
+
+    else:
+        await update.message.reply_text(
+            "🇮🇳 **Delta Exchange India Commands:**\n"
+            "• `/delta status` — Check Delta account telemetry & connection\n"
+            "• `/delta live [API_KEY] [API_SECRET]` — Connect live Delta Exchange India account\n"
+            "• `/delta testnet [API_KEY] [API_SECRET]` — Connect Delta testnet account\n"
+            "• `/delta leverage <1-200> [SYMBOL]` — Manually set leverage (up to 200x)\n"
+            "• `/delta auto_leverage [on|off]` — Toggle auto-scaling dynamic leverage (max 200x)\n"
+            "• `/delta positions` — Show all active Delta Exchange positions",
+            parse_mode="Markdown",
+        )
+
+
 async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = ctx.args or []
     if not args:
@@ -1254,14 +1537,19 @@ async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🏦 **Execution Broker Environment**\n"
             f"• **Active Broker:** `{bname}`\n"
             f"• **Active Mode:** `{bmode}`{summary}\n\n"
+            f"🇮🇳 **Delta Exchange India (Live Crypto & Derivatives Broker):**\n"
+            f"• `/delta status` — Check Delta Exchange wallet, equity & leverage\n"
+            f"• `/delta live <API_KEY> <API_SECRET>` — Connect live Delta Exchange India account\n"
+            f"• `/delta leverage <1-200>` — Manually set leverage (up to 200x)\n"
+            f"• `/delta auto_leverage [on|off]` — Auto-scale leverage dynamically (max 200x)\n"
+            f"• `/broker delta` — Switch active broker to Delta Exchange India\n\n"
             f"🖥️ **MetaTrader 5 (Exclusive Live Execution Engine):**\n"
             f"• `/mt5 paper` — High-fidelity MT5 simulation engine\n"
             f"• `/mt5 live <LOGIN> <PASSWORD> [SERVER]` — Live MT5 terminal execution\n"
             f"• `/mt5 status` — Check MT5 account balance & margin\n\n"
             f"💼 **Paper Trade Wallet:**\n"
             f"• `/balance <amount>` — Custom set / manually modify paper wallet balance\n"
-            f"• `/broker paper` — Switch engine to paper execution\n\n"
-            f"ℹ️ _Native REST live brokers (Oanda/Alpaca/CCXT) have been removed. MetaTrader 5 is the sole live broker._",
+            f"• `/broker paper` — Switch engine to paper execution",
             parse_mode="Markdown",
         )
         return
@@ -1280,19 +1568,22 @@ async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **Status:** Local paper execution active",
             parse_mode="Markdown",
         )
+    elif mode in ("delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet"):
+        await delta_command(update, ctx)
     elif mode in ("mt5", "mt5_paper", "mt5_live"):
         await mt5_command(update, ctx)
     elif mode in ("oanda", "alpaca", "ccxt", "live"):
         await update.message.reply_text(
             f"⚠️ **Native Live Broker `{mode.upper()}` Removed**\n"
             f"MetaTrader 5 (`/mt5`) is now the exclusive live execution broker for Gold (XAUUSD) and Bitcoin (BTCUSDT).\n\n"
+            f"• To connect live Delta Exchange India: `/delta live <API_KEY> <API_SECRET>`\n"
             f"• To connect live MT5: `/mt5 live <LOGIN> <PASSWORD> [SERVER]`\n"
             f"• To run paper MT5: `/mt5 paper`",
             parse_mode="Markdown",
         )
     else:
         await update.message.reply_text(
-            "Usage: `/broker` | `/broker paper` | `/mt5 status|paper|live` | `/balance <amount>`",
+            "Usage: `/broker` | `/broker paper` | `/delta status|live|leverage` | `/mt5 status|paper|live` | `/balance <amount>`",
             parse_mode="Markdown",
         )
 
@@ -1753,24 +2044,55 @@ def run_cli_interactive():
                     engine.broker = new_b
                     config.BROKER_MODE = "paper"
                     print(f"Broker switched to paper (PaperBroker) with balance ${eq:,.2f}")
+                elif bmode in ("delta", "delta_live", "delta_india", "delta_india_live"):
+                    print("To configure Delta: delta live [api_key] [api_secret] | delta leverage <1-200>")
                 elif bmode in ("mt5", "mt5_paper", "mt5_live"):
                     print("To configure MT5: mt5 paper | mt5 live [login] [pass] [server] [gateway_url]")
                 elif bmode in ("oanda", "alpaca", "ccxt", "live"):
                     print(
-                        f"⚠️ Native live broker '{bmode}' has been removed.\n"
-                        f"MetaTrader 5 is the exclusive live broker interface for Gold (XAUUSD) and Bitcoin (BTCUSDT).\n"
-                        f"Use 'mt5 live' or 'mt5 paper'."
+                        f"⚠️ Native live broker '{bmode}' has been replaced.\n"
+                        f"Delta Exchange India (delta) and MetaTrader 5 (mt5) are the active live broker interfaces.\n"
+                        f"Use 'delta live' or 'mt5 live'."
                     )
                 else:
-                    print(f"Unknown broker mode: {bmode}. Available: paper, mt5")
+                    print(f"Unknown broker mode: {bmode}. Available: paper, delta, mt5")
             else:
                 bname = type(engine.broker).__name__ if engine.broker else "None"
                 print(f"Active broker: {bname} ({getattr(config, 'BROKER_MODE', 'paper')})")
+        elif name == "delta":
+            if not parts:
+                if engine.broker and hasattr(engine.broker, "get_account_info"):
+                    print(engine.broker.get_account_info().summary())
+                else:
+                    print("Delta Exchange India: use 'delta live <key> <secret>' or 'delta leverage <1-200>'")
+            elif parts[0] in ("live", "connect"):
+                k = parts[1] if len(parts) > 1 else getattr(config, "DELTA_EXCHANGE_API_KEY", "")
+                s = parts[2] if len(parts) > 2 else getattr(config, "DELTA_EXCHANGE_API_SECRET", "")
+                if k and s:
+                    try:
+                        from delta_broker import DeltaBroker
+                        engine.broker = DeltaBroker(api_key=k, api_secret=s)
+                        config.BROKER_MODE = "delta_live"
+                        print(f"Connected to Delta Exchange India Live! Balance: ${engine.broker.balance:,.2f}")
+                    except Exception as exc:
+                        print(f"Delta Live connect failed: {exc}")
+                else:
+                    print("Missing Delta API key or secret. Usage: delta live <key> <secret>")
+            elif parts[0] in ("leverage", "lev"):
+                if len(parts) > 1:
+                    try:
+                        v = float(parts[1].replace("x", ""))
+                        risk_mgr.set_leverage(v)
+                        if hasattr(engine.broker, "set_leverage"):
+                            engine.broker.set_leverage(getattr(config, "DEFAULT_SYMBOL", "BTCUSD"), v)
+                        print(f"Leverage set to {v:.0f}x")
+                    except Exception as e:
+                        print(f"Invalid leverage: {e}")
         elif name in ("oanda", "alpaca", "ccxt"):
             print(
                 f"⚠️ Native live broker '{name.upper()}' has been removed.\n"
-                f"MetaTrader 5 (mt5) is the exclusive live broker interface for Gold (XAUUSD) and Bitcoin (BTCUSDT).\n"
-                f"• Use 'mt5 status' or 'mt5 live' for live execution.\n"
+                f"Delta Exchange India (delta) and MetaTrader 5 (mt5) are active live brokers.\n"
+                f"• Use 'delta live' or 'mt5 live' for live execution.\n"
                 f"• Use 'balance <amount>' to set your paper trade wallet balance."
             )
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
@@ -1967,10 +2289,11 @@ def main():
                 BotCommand("health", "System health & background worker telemetry"),
                 BotCommand("risk", "Risk tier report, sizing & reset"),
                 BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
-                BotCommand("leverage", "Set or view leverage ceiling (1-20x)"),
+                BotCommand("leverage", "Set or view leverage (1-200x, manual/auto)"),
                 BotCommand("kill", "Emergency execution circuit breaker switch"),
                 BotCommand("balance", "View or custom set paper wallet balance"),
-                BotCommand("mt5", "MetaTrader 5 exclusive live & paper engine"),
+                BotCommand("delta", "Delta Exchange India live broker & leverage (max 200x)"),
+                BotCommand("mt5", "MetaTrader 5 live & paper engine"),
                 BotCommand("broker", "View or switch active broker engine"),
                 BotCommand("backtest", "Fast backtest engine on historical data"),
                 BotCommand("abacktest", "Advanced backtest suite (WF / MC / sweep)"),
@@ -2029,8 +2352,9 @@ def main():
     app.add_handler(CommandHandler("closed", closed_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
-    # MT5 & Paper Broker Execution
+    # MT5, Delta Exchange India & Paper Broker Execution
     app.add_handler(CommandHandler(["balance", "wallet", "equity"], balance_command))
+    app.add_handler(CommandHandler("delta", delta_command))
     app.add_handler(CommandHandler("mt5", mt5_command))
     app.add_handler(CommandHandler("broker", broker_command))
     app.add_handler(CommandHandler("oanda", oanda_command))
