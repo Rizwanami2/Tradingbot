@@ -51,6 +51,7 @@ class TradeOrder:
     executed_at: Optional[str] = None
     closed_at: Optional[str] = None
     executed_price: Optional[float] = None
+    current_price: Optional[float] = None
     exit_price: Optional[float] = None
     realized_pnl: float = 0.0
     unrealized_pnl: float = 0.0
@@ -205,6 +206,7 @@ class ExecutionEngine:
             remaining_lots=lots,
             highest_price=entry,
             lowest_price=entry,
+            current_price=float(sig.get("current_price") or entry),
         )
 
         self.pending_setups[symbol] = order
@@ -245,6 +247,7 @@ class ExecutionEngine:
         just_executed = False
         if sym in self.pending_setups:
             setup = self.pending_setups[sym]
+            setup.current_price = curr_price
 
             # Invalidate setup if market breaches stop loss before entry fill
             invalidated = False
@@ -331,6 +334,7 @@ class ExecutionEngine:
                         setup.status = OrderStatus.OPEN
                         setup.executed_at = datetime.now(timezone.utc).isoformat()
                         setup.executed_price = exec_price
+                        setup.current_price = exec_price
                         setup.highest_price = exec_price
                         setup.lowest_price = exec_price
                         setup.remaining_size = setup.size
@@ -354,6 +358,7 @@ class ExecutionEngine:
         # ----------------------------------------------------
         if sym in self.active_positions:
             pos = self.active_positions[sym]
+            pos.current_price = curr_price
             is_long = pos.direction == "LONG"
             entry = pos.executed_price or pos.entry_level
             initial_risk = abs(entry - pos.stop_loss)
@@ -682,21 +687,59 @@ class ExecutionEngine:
         self._dispatch_event("MANUAL_CLOSE", pos, msg)
         return pos
 
+    def get_current_price(self, symbol: str) -> Optional[float]:
+        """Resolve the latest market/mark price for a symbol."""
+        sym = symbol.upper()
+        # 1. Check broker mark prices if available
+        if getattr(self, "broker", None) is not None:
+            if hasattr(self.broker, "mark_prices"):
+                bp = self.broker.mark_prices.get(sym)
+                if bp and float(bp) > 0:
+                    return float(bp)
+        # 2. Check active positions or pending setups stored current_price
+        if sym in self.active_positions:
+            cp = getattr(self.active_positions[sym], "current_price", None)
+            if cp and float(cp) > 0:
+                return float(cp)
+        if sym in self.pending_setups:
+            cp = getattr(self.pending_setups[sym], "current_price", None)
+            if cp and float(cp) > 0:
+                return float(cp)
+        # 3. Fetch live spot price from realtime_prices
+        try:
+            from realtime_prices import fetch_spot_price
+            rt = fetch_spot_price(sym)
+            if rt and rt.get("ok") and float(rt.get("mark") or 0) > 0:
+                price = float(rt["mark"])
+                if getattr(self, "broker", None) is not None and hasattr(self.broker, "mark_price"):
+                    try:
+                        self.broker.mark_price(sym, price)
+                    except Exception:
+                        pass
+                if sym in self.active_positions:
+                    self.active_positions[sym].current_price = price
+                if sym in self.pending_setups:
+                    self.pending_setups[sym].current_price = price
+                return price
+        except Exception:
+            pass
+        # 4. Fallback to executed_price or entry_level
+        if sym in self.active_positions:
+            pos = self.active_positions[sym]
+            return float(pos.executed_price or pos.entry_level or 0.0)
+        if sym in self.pending_setups:
+            return float(self.pending_setups[sym].entry_level or 0.0)
+        return None
+
     def close_position(self, symbol: str, current_price: Optional[float] = None, reason: str = "Manual close") -> Optional[TradeOrder]:
         """Convenience method to close an active position immediately, resolving current price if omitted."""
         sym = symbol.upper()
         if sym not in self.active_positions:
             return None
         if current_price is None:
-            pos = self.active_positions[sym]
-            try:
-                from realtime_prices import fetch_spot_price
-                rt = fetch_spot_price(sym)
-                if rt.get("ok") and float(rt.get("mark") or 0) > 0:
-                    current_price = float(rt["mark"])
-            except Exception:
-                pass
+            current_price = self.get_current_price(sym)
             if current_price is None or current_price <= 0:
+                pos = self.active_positions[sym]
                 current_price = pos.executed_price or pos.entry_level
         return self.close_manually(sym, current_price, reason=reason)
 
@@ -721,12 +764,31 @@ class ExecutionEngine:
         else:
             for sym, pos in self.active_positions.items():
                 entry = float(pos.executed_price or pos.entry_level or 0)
+                curr_p = self.get_current_price(sym)
+                if curr_p is None or curr_p <= 0:
+                    curr_p = entry
+                else:
+                    pos.current_price = curr_p
+                    if entry > 0 and pos.remaining_size > 0:
+                        if "LONG" in str(pos.direction).upper():
+                            pos.unrealized_pnl = (curr_p - entry) * pos.remaining_size
+                        else:
+                            pos.unrealized_pnl = (entry - curr_p) * pos.remaining_size
+
                 u = float(getattr(pos, "unrealized_pnl", 0) or 0)
                 dir_icon = "🟢" if "LONG" in str(pos.direction).upper() else "🔴"
                 pnl_icon = "📈" if u >= 0 else "📉"
+                pnl_pct_str = ""
+                if entry > 0:
+                    pct = ((curr_p - entry) / entry * 100.0) if "LONG" in str(pos.direction).upper() else ((entry - curr_p) / entry * 100.0)
+                    pnl_pct_str = f" ({pct:+.2f}%)"
+
+                entry_fmt = f"${entry:,.2f}" if entry >= 1.0 else f"${entry:,.4f}"
+                curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"
+
                 lines.append(
                     f"\n{dir_icon} `{sym}` **{pos.direction}**\n"
-                    f"• **Entry:** `${entry:,.2f}` | **PnL:** {pnl_icon} `${u:+,.2f}`\n"
+                    f"• **Entry:** `{entry_fmt}` | **Current Market:** `{curr_fmt}` | **PnL:** {pnl_icon} `${u:+,.2f}`{pnl_pct_str}\n"
                     f"• **SL:** `${float(pos.stop_loss):,.2f}` | **TP1:** `${float(pos.tp1):,.2f}` | **TP2:** `${float(pos.tp2):,.2f}`\n"
                     f"• **Lots:** `{pos.lots}` | **Lev:** `{float(pos.leverage or 1):.0f}x` | **Margin:** `${float(pos.margin_required or 0):,.2f}`"
                 )
@@ -734,9 +796,28 @@ class ExecutionEngine:
             lines.append(f"\n⏳ **Pending Setups ({len(self.pending_setups)}):**")
             for psym, pord in self.pending_setups.items():
                 pdir_icon = "🟢" if "LONG" in str(pord.direction).upper() else "🔴"
+                pcurr_p = self.get_current_price(psym)
+                market_str = ""
+                if pcurr_p and pcurr_p > 0:
+                    pcurr_fmt = f"${pcurr_p:,.2f}" if pcurr_p >= 1.0 else f"${pcurr_p:,.4f}"
+                    dist_pct = ((pord.entry_level - pcurr_p) / pcurr_p * 100.0)
+                    market_str = f" | **Current Market:** `{pcurr_fmt}` ({dist_pct:+.2f}% to fill)"
                 lines.append(
-                    f"• {pdir_icon} `{psym}` **{pord.direction}** @ `${pord.entry_level:,.2f}` | SL `${pord.stop_loss:,.2f}` (Lots `{pord.lots}`)"
+                    f"• {pdir_icon} `{psym}` **{pord.direction}** @ Entry `${pord.entry_level:,.2f}`{market_str} | SL `${pord.stop_loss:,.2f}` (Lots `{pord.lots}`)"
                 )
+
+        # Current Market live quotes summary
+        market_quotes = []
+        for msym in ("BTCUSDT", "XAUUSD"):
+            try:
+                mp = self.get_current_price(msym)
+                if mp and mp > 0:
+                    market_quotes.append(f"`{msym}`: `${mp:,.2f}`")
+            except Exception:
+                pass
+        if market_quotes:
+            lines.append(f"\n📊 **Current Market:** {' | '.join(market_quotes)}")
+
         summary = self.get_portfolio_summary()
         lines.append(
             f"\n💰 **Equity:** `${summary.get('equity', 0):,.2f}` | "
@@ -744,6 +825,7 @@ class ExecutionEngine:
             f"**Used Margin:** `${summary.get('used_margin', 0):,.2f}`"
         )
         return "\n".join(lines)
+
 
     def get_portfolio_summary(self) -> Dict:
         """Returns account equity, margin utilization, and open positions stats."""

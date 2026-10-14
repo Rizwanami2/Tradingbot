@@ -422,5 +422,47 @@ class TestExecutionEngine(unittest.TestCase):
             self.assertIn("disabled", str(ctx.exception).lower())
 
 
+    def test_format_positions_detail_shows_current_market(self):
+        # 1. Test empty positions shows Current Market section
+        detail_empty = self.engine.format_positions_detail()
+        self.assertIn("Active Positions", detail_empty)
+
+        # 2. Test active position shows Current Market
+        sig_btc = {
+            "symbol": "BTCUSDT", "direction": "LONG", "entry": 64000.0, "stop": 63000.0,
+            "tp1": 66000.0, "tp2": 68000.0, "lots": 0.01, "size": 0.01, "leverage": 10.0,
+            "margin_required": 64.0, "risk_amount": 10.0, "rr": 2.0, "current_price": 64100.0,
+        }
+        order = self.engine.register_setup(sig_btc)
+        # Simulate trigger and fill into active_positions
+        candle = {"open": 64000.0, "high": 64500.0, "low": 63800.0, "close": 64200.0}
+        self.engine.update_market_candle("BTCUSDT", candle)
+        self.assertIn("BTCUSDT", self.engine.active_positions)
+
+        detail = self.engine.format_positions_detail()
+        self.assertIn("Current Market", detail)
+        self.assertIn("$64,200.00", detail)
+        self.assertIn("Entry:", detail)
+        self.assertIn("PnL:", detail)
+
+        # Update broker mark price to 65000
+        if hasattr(self.engine.broker, "mark_price"):
+            self.engine.broker.mark_price("BTCUSDT", 65000.0)
+            detail_updated = self.engine.format_positions_detail()
+            self.assertIn("$65,000.00", detail_updated)
+
+        # 3. Test pending setup also shows Current Market
+        sig_pending = {
+            "symbol": "XAUUSD", "direction": "LONG", "entry": 2600.0, "stop": 2580.0,
+            "tp1": 2650.0, "tp2": 2680.0, "lots": 0.05, "size": 0.05, "leverage": 20.0,
+            "margin_required": 13.0, "risk_amount": 10.0, "rr": 2.5, "current_price": 2620.0,
+        }
+        self.engine.register_setup(sig_pending)
+        detail_with_pending = self.engine.format_positions_detail()
+        self.assertIn("Pending Setups", detail_with_pending)
+        self.assertIn("Current Market", detail_with_pending)
+        self.assertIn("$2,620.00", detail_with_pending)
+
+
 if __name__ == "__main__":
     unittest.main()

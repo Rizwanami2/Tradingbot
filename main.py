@@ -860,9 +860,16 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 lines = [f"🏦 **MT5 Active Broker Positions ({len(positions)}):**"]
                 for p in positions:
                     icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                    curr_p = getattr(p, "current_price", None)
+                    if not curr_p:
+                        if p.qty > 0:
+                            curr_p = p.entry_price + (p.unrealized_pnl / p.qty) if p.side.lower() == "buy" else p.entry_price - (p.unrealized_pnl / p.qty)
+                        else:
+                            curr_p = p.entry_price
+                    curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"
                     lines.append(
-                        f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.2f}` lots @ `${p.entry_price:,.2f}` | "
-                        f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                        f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.2f}` lots @ Entry `${p.entry_price:,.2f}` | "
+                        f"**Current Market:** `{curr_fmt}` | PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
                     )
                 await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
             except Exception as e:
@@ -1052,9 +1059,16 @@ async def oanda_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines = [f"🌐 **OANDA Active Broker Positions ({len(pos)}):**"]
             for p in pos:
                 icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                curr_p = getattr(p, "current_price", None)
+                if not curr_p:
+                    if p.qty > 0:
+                        curr_p = p.entry_price + (p.unrealized_pnl / p.qty) if p.side.lower() == "buy" else p.entry_price - (p.unrealized_pnl / p.qty)
+                    else:
+                        curr_p = p.entry_price
+                curr_fmt = f"${curr_p:,.5f}" if curr_p < 100 else f"${curr_p:,.2f}"
                 lines.append(
-                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.0f}` units @ `${p.entry_price:,.5f}` | "
-                    f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.0f}` units @ Entry `${p.entry_price:,.5f}` | "
+                    f"**Current Market:** `{curr_fmt}` | PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
                 )
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         else:
@@ -1134,9 +1148,16 @@ async def alpaca_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines = [f"🦙 **Alpaca Active Broker Positions ({len(pos)}):**"]
             for p in pos:
                 icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                curr_p = getattr(p, "current_price", None)
+                if not curr_p:
+                    if p.qty > 0:
+                        curr_p = p.entry_price + (p.unrealized_pnl / p.qty) if p.side.lower() == "buy" else p.entry_price - (p.unrealized_pnl / p.qty)
+                    else:
+                        curr_p = p.entry_price
+                curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"
                 lines.append(
-                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.2f}` @ `${p.entry_price:,.2f}` | "
-                    f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.2f}` @ Entry `${p.entry_price:,.2f}` | "
+                    f"**Current Market:** `{curr_fmt}` | PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
                 )
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         else:
@@ -1226,9 +1247,16 @@ async def ccxt_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines = [f"⚡ **CCXT Active Positions ({len(pos)}):**"]
             for p in pos:
                 icon = "📈" if p.unrealized_pnl >= 0 else "📉"
+                curr_p = getattr(p, "current_price", None)
+                if not curr_p:
+                    if p.qty > 0:
+                        curr_p = p.entry_price + (p.unrealized_pnl / p.qty) if p.side.lower() == "buy" else p.entry_price - (p.unrealized_pnl / p.qty)
+                    else:
+                        curr_p = p.entry_price
+                curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"
                 lines.append(
-                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.4f}` @ `${p.entry_price:,.2f}` | "
-                    f"PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
+                    f"• `{p.symbol}` **{p.side.upper()}** `{p.qty:.4f}` @ Entry `${p.entry_price:,.2f}` | "
+                    f"**Current Market:** `{curr_fmt}` | PnL: {icon} `${p.unrealized_pnl:+,.2f}`"
                 )
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         else:
@@ -1431,7 +1459,10 @@ def run_cli_interactive():
         elif name == "risk":
             print(risk_mgr.summary())
         elif name == "positions":
-            print(engine.get_portfolio_summary())
+            if hasattr(engine, "format_positions_detail"):
+                print(engine.format_positions_detail())
+            else:
+                print(engine.get_portfolio_summary())
         elif name == "autotrade":
             arg = parts[1].lower() if len(parts) > 1 else ""
             broker_mode = getattr(config, "BROKER_MODE", "paper").upper()

@@ -405,6 +405,7 @@ class MT5Broker(Broker):
         for key in (sym, symbol.upper()):
             if key in self._sim_positions:
                 pos = self._sim_positions[key]
+                pos.current_price = mark_price
                 diff = (mark_price - pos.entry_price) if pos.side.lower() == "buy" else (pos.entry_price - mark_price)
                 pos.unrealized_pnl = round(diff * pos.qty, 2)
 
@@ -542,6 +543,7 @@ class MT5Broker(Broker):
             stop_loss=stop_loss,
             take_profit=take_profit,
             unrealized_pnl=0.0,
+            current_price=fill_price,
         )
         self._sim_tickets[resolved_sym] = ticket
         self._sim_orders[ticket_id] = order
@@ -561,6 +563,7 @@ class MT5Broker(Broker):
                     out = []
                     for p in raw_positions:
                         side = "buy" if p.type == native_mt5.ORDER_TYPE_BUY else "sell"
+                        curr_px = float(getattr(p, "price_current", 0.0) or 0.0) or None
                         out.append(Position(
                             symbol=str(p.symbol),
                             side=side,
@@ -569,6 +572,7 @@ class MT5Broker(Broker):
                             stop_loss=float(p.sl) if p.sl else None,
                             take_profit=float(p.tp) if p.tp else None,
                             unrealized_pnl=float(p.profit),
+                            current_price=curr_px,
                         ))
                     return out
                 except Exception as e:
@@ -582,6 +586,7 @@ class MT5Broker(Broker):
                     out = []
                     for p in raw_positions:
                         side = "buy" if str(p.get("type", "buy")).lower() in ("buy", "0") else "sell"
+                        curr_px = float(p.get("price_current", p.get("current_price", 0.0)) or 0.0) or None
                         out.append(Position(
                             symbol=str(p.get("symbol", "")),
                             side=side,
@@ -590,6 +595,7 @@ class MT5Broker(Broker):
                             stop_loss=float(p.get("sl", 0.0)) if p.get("sl") else None,
                             take_profit=float(p.get("tp", 0.0)) if p.get("tp") else None,
                             unrealized_pnl=float(p.get("profit", p.get("unrealized_pnl", 0.0))),
+                            current_price=curr_px,
                         ))
                     return out
                 except Exception as e:

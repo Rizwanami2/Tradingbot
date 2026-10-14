@@ -80,6 +80,7 @@ class Position:
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     unrealized_pnl: float = 0.0
+    current_price: Optional[float] = None
 
 
 class Broker(ABC):
@@ -281,6 +282,7 @@ class PaperBroker(Broker):
         unrealized = 0.0
         for symbol, pos in self.positions.items():
             mark = self.mark_prices.get(symbol, pos.entry_price)
+            pos.current_price = mark
             unrealized += (
                 (mark - pos.entry_price) * pos.qty
                 if pos.side == "buy"
