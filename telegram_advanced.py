@@ -237,11 +237,17 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sim = AdvancedSimulator(cfg)
 
         if mode == "walkforward":
-            text = walk_forward(df, ema_cross_signal, n_windows=4, cfg=cfg, symbol=symbol).summary()
+            if len(df) < 300:
+                text = f"Walk-forward requires at least 300 bars (got {len(df)}). Try `/abacktest 500 wf {symbol}`."
+            else:
+                text = walk_forward(df, ema_cross_signal, n_windows=4, cfg=cfg, symbol=symbol).summary()
         elif mode == "montecarlo":
             m, trades, _ = sim.run(df, ema_cross_signal, symbol)
-            mc = monte_carlo_from_trades(trades, initial_equity=cfg.initial_equity, n_runs=400)
-            text = m.summary() + mc.summary()
+            if len(trades) < 5:
+                text = m.summary() + f"\n\n⚠️ Monte Carlo requires at least 5 simulated trades (got {len(trades)}). Try running with more bars: `/abacktest 500 mc {symbol}`."
+            else:
+                mc = monte_carlo_from_trades(trades, initial_equity=cfg.initial_equity, n_runs=400)
+                text = m.summary() + mc.summary()
         elif mode == "multiagent":
             text = sim.run(df, multiagent_proxy_signal, symbol)[0].summary()
         elif mode == "sweep":

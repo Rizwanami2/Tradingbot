@@ -58,6 +58,15 @@ from risk_manager import RiskManager
 from backtest_engine import BacktestConfig, run_backtest
 from ops_dashboard import StatusStore, health_from_snapshot
 
+
+async def _to_thread(func, *args, **kwargs):
+    if hasattr(asyncio, "to_thread"):
+        return await asyncio.to_thread(func, *args, **kwargs)
+    import functools
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -697,7 +706,7 @@ async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return out
 
         try:
-            text = await asyncio.to_thread(_run_single)
+            text = await _to_thread(_run_single)
             await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
         except Exception as exc:
             logger.warning("Single backtest failed for %s: %s", symbol, exc)
@@ -724,7 +733,7 @@ async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
     try:
-        report = await asyncio.to_thread(_run)
+        report = await _to_thread(_run)
         text = report.text(max_len=3800)
         await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
     except Exception as exc:

@@ -101,6 +101,7 @@ async def quality_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await safe_reply(update, "No data", parse_mode=None)
             return
         q = evaluate_signal_quality(df, "LONG", spread=0.0)
+        icon = "✅" if q.allowed else "❌"
         clean_reasons = [str(r).replace("`", "'") for r in q.reasons]
         reason_lines = "\n".join(f"• `{cr}`" for cr in clean_reasons)
         msg = f"{icon} *Quality {sym}* score=`{q.score:.2f}`\n" + reason_lines

@@ -24,6 +24,12 @@ from main import (
     cancel_command,
     positions_command,
     autotrade_command,
+    balance_command,
+    broker_command,
+    oanda_command,
+    alpaca_command,
+    ccxt_command,
+    set_paper_wallet_balance,
 )
 from execution_engine import TradeOrder, OrderStatus
 
@@ -359,6 +365,80 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
 
         await heal_command(self.update, self.ctx)
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
+
+    async def test_balance_command_view_and_set(self):
+        # 1. View balance with no arguments
+        self.ctx.args = []
+        await balance_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        view_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Paper Trading Wallet & Balance", view_text)
+        self.assertIn("Current Balance:", view_text)
+
+        # 2. Set balance to custom amount (e.g. 25,000)
+        self.ctx.args = ["25000"]
+        await balance_command(self.update, self.ctx)
+        set_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Paper Wallet Balance Updated", set_text)
+        self.assertIn("25,000.00", set_text)
+        self.assertEqual(risk_mgr.state.equity, 25000.0)
+
+        # 3. Set balance with shorthand (e.g. 50k)
+        self.ctx.args = ["50k"]
+        await balance_command(self.update, self.ctx)
+        k_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Paper Wallet Balance Updated", k_text)
+        self.assertIn("50,000.00", k_text)
+        self.assertEqual(risk_mgr.state.equity, 50000.0)
+
+        # 4. Invalid balance amount
+        self.ctx.args = ["invalid_amount"]
+        await balance_command(self.update, self.ctx)
+        err_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Failed to set balance", err_text)
+
+    async def test_broker_command_and_native_removals(self):
+        # 1. View broker info
+        self.ctx.args = []
+        await broker_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        broker_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Execution Broker Environment", broker_text)
+        self.assertIn("MetaTrader 5 (Exclusive Live Execution Engine)", broker_text)
+
+        # 2. Switch to paper mode
+        self.ctx.args = ["paper"]
+        await broker_command(self.update, self.ctx)
+        paper_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Broker Switched to PAPER Simulation", paper_text)
+
+        # 3. Attempting native brokers via broker command warns user
+        for b in ("oanda", "alpaca", "ccxt"):
+            self.ctx.args = [b]
+            await broker_command(self.update, self.ctx)
+            warn_text = self.message.reply_text.call_args[0][0]
+            self.assertIn(f"Native Live Broker `{b.upper()}` Removed", warn_text)
+            self.assertIn("MetaTrader 5 (`/mt5`) is now the exclusive live execution broker", warn_text)
+
+    async def test_native_broker_commands_direct(self):
+        # Test direct /oanda, /alpaca, /ccxt commands
+        for cmd_func, name in [(oanda_command, "OANDA"), (alpaca_command, "Alpaca"), (ccxt_command, "CCXT Live")]:
+            await cmd_func(self.update, self.ctx)
+            rep = self.message.reply_text.call_args[0][0]
+            self.assertIn(f"{name} Broker Removed", rep)
+            self.assertIn("MetaTrader 5 (`/mt5`) is the sole live broker", rep)
+
+    def test_cli_balance_and_native_broker_removal(self):
+        input_data = io.StringIO("balance\nbalance 75000\noanda status\nalpaca status\nccxt status\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("Paper Trade Wallet:", out)
+        self.assertIn("Paper wallet balance successfully set to $75,000.00", out)
+        self.assertIn("Native live broker 'OANDA' has been removed", out)
+        self.assertIn("Native live broker 'ALPACA' has been removed", out)
+        self.assertIn("Native live broker 'CCXT' has been removed", out)
 
 
 if __name__ == "__main__":

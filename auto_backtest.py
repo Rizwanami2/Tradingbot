@@ -142,11 +142,16 @@ def run_auto_backtest(
     bars: int = 730,
     risk: float = 0.01,
     do_sweep: bool = True,
+    source: str = "ccxt",
+    equity: float = 10000.0,
+    mc_runs: int = 300,
+    wf_windows: int = 4,
+    **kwargs: Any,
 ) -> AutoBacktestReport:
     report = AutoBacktestReport(symbol=symbol, bars=bars)
-    cfg = SimConfig(risk_per_trade=risk, initial_equity=10000.0, tp_r=2.5, min_bars=60)
+    cfg = SimConfig(risk_per_trade=risk, initial_equity=equity, tp_r=2.5, min_bars=60)
     try:
-        df = load_data(symbol, bars=bars, source="ccxt", csv=None)
+        df = load_data(symbol, bars=bars, source=source, csv=None)
     except Exception as e:
         report.errors.append(f"load_data: {e}")
         return report
@@ -162,7 +167,7 @@ def run_auto_backtest(
         report.errors.append(f"adaptive: {e}")
     try:
         if len(df) >= 250:
-            report.walkforward = walk_forward(df, primary, n_windows=4, cfg=cfg, symbol=symbol)
+            report.walkforward = walk_forward(df, primary, n_windows=wf_windows, cfg=cfg, symbol=symbol)
         else:
             report.errors.append("walkforward: need >= 250 bars")
     except Exception as e:
@@ -170,7 +175,7 @@ def run_auto_backtest(
     try:
         if len(primary_trades) >= 5:
             report.montecarlo = monte_carlo_from_trades(
-                primary_trades, n_runs=400, initial_equity=cfg.initial_equity
+                primary_trades, n_runs=mc_runs, initial_equity=cfg.initial_equity
             )
         else:
             report.errors.append(f"montecarlo: need >= 5 trades (got {len(primary_trades)})")
