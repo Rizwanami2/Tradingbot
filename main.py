@@ -1743,11 +1743,11 @@ def run_cli_interactive():
                 print("Usage: ccxt status | ccxt live <exchange> <KEY> <SECRET> [password] | ccxt positions")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, mt5 [CMD], broker [MODE], oanda [CMD], ccxt [CMD], alpaca [CMD], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
-                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], closed, mt5 [CMD], broker [MODE]\n"
+                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], closed, broker [MODE], mt5 [CMD], oanda [CMD], ccxt [CMD], alpaca [CMD]\n"
                 "🛡️ Risk: status, health, risk, leverage [LEV], kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME]\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, relearn [SYM]\n"

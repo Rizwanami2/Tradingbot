@@ -67,12 +67,12 @@ BOT_NEWS=true
 - `/cancel [SYM]` — Cancel pending order setup
 - `/closed` — Recently closed trades history & realized PnL
 
-### 🏦 MetaTrader 5 & Broker Accounts
-- `/mt5` or `/mt5 status` — Check MT5 account telemetry & margin
-- `/mt5 paper` — Switch to MT5 Paper simulation engine
-- `/mt5 live [login] [pass] [server]` — Connect live MT5 account (fail-closed safe)
-- `/mt5 positions` — Show active positions on MT5 broker terminal
-- `/broker [paper|mt5|mt5_live|live]` — View or switch execution broker engine
+### 🏦 Multi-Broker & Live Execution Environments
+- `/broker [paper|oanda|ccxt|alpaca|mt5|mt5_live]` — View or switch active execution broker engine
+- `/mt5 [status|paper|live|positions]` — MetaTrader 5 account telemetry & execution ([Guide](docs/MT5_INTEGRATION.md))
+- `/oanda [status|live|positions]` — Native OANDA v20 REST broker for Gold & Forex ([Guide](docs/NATIVE_BROKERS.md))
+- `/ccxt [status|live|positions]` — CCXT exchange live trading (Binance, Bybit, OKX, Kraken)
+- `/alpaca [status|live|positions]` — Alpaca REST broker (paper & live trading)
 
 ### 🛡️ Risk & Safety Management
 - `/status` — Portfolio equity, drawdown & active slot capacity
