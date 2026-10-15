@@ -11,7 +11,7 @@ def main() -> None:
     if not main_py.exists():
         print("[wire_railway] main missing")
         return
-    t = main_py.read_text(errors="ignore")
+    t = main_py.read_text(encoding="utf-8", errors="ignore")
     changed = False
 
     # 1) NameError: application is not defined (crash on bot start)
@@ -46,12 +46,12 @@ def main() -> None:
     rm = ROOT / "risk_manager.py"
     if rm.exists():
         try:
-            compile(rm.read_text(errors="ignore"), "risk_manager.py", "exec")
+            compile(rm.read_text(encoding="utf-8", errors="ignore"), "risk_manager.py", "exec")
         except SyntaxError as e:
             print("[wire_railway] risk_manager SYNTAX", e)
 
     if changed:
-        main_py.write_text(t)
+        main_py.write_text(t, encoding="utf-8")
         print("[wire_railway] main.py patched")
     else:
         print("[wire_railway] main OK")

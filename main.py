@@ -33,6 +33,24 @@ import threading
 import time as time_module
 from typing import Any, Dict, Optional, Tuple
 
+if sys.platform == "win32":
+    for _s in (sys.stdout, sys.stderr, sys.stdin):
+        if hasattr(_s, "reconfigure"):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
+
 import pandas as pd
 import requests
 from telegram import Update
@@ -1825,7 +1843,8 @@ def run_cli_interactive():
     while True:
         try:
             cmd = input("TradingBot> ").strip()
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting CLI.")
             break
         if not cmd:
             continue

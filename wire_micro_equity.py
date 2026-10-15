@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 def main() -> None:
     cfg = ROOT / "config.py"
     if cfg.exists():
-        t = cfg.read_text(errors="ignore")
+        t = cfg.read_text(encoding="utf-8", errors="ignore")
         if "_equity_default" not in t and 'INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)' in t:
             t = t.replace(
                 'INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)',
@@ -17,7 +17,7 @@ def main() -> None:
                 'INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), _equity_default)',
                 1,
             )
-            cfg.write_text(t)
+            cfg.write_text(t, encoding="utf-8")
             print("[wire_micro_equity] paper equity default 100")
         else:
             print("[wire_micro_equity] config OK")
@@ -26,7 +26,7 @@ def main() -> None:
     if not rm_path.exists():
         print("[wire_micro_equity] done")
         return
-    t = rm_path.read_text(errors="ignore")
+    t = rm_path.read_text(encoding="utf-8", errors="ignore")
     changed = False
 
     if "_adapt_profile_for_equity" not in t:
@@ -92,7 +92,7 @@ def main() -> None:
             print("[wire_micro_equity] margin micro-size")
 
     if changed:
-        rm_path.write_text(t)
+        rm_path.write_text(t, encoding="utf-8")
         print("[wire_micro_equity] risk_manager patched")
     else:
         print("[wire_micro_equity] risk_manager OK")

@@ -11,7 +11,7 @@ def main() -> None:
     if not main_py.exists():
         print("[wire_polish] main missing")
         return
-    t = main_py.read_text(errors="ignore")
+    t = main_py.read_text(encoding="utf-8", errors="ignore")
     changed = False
 
     if "Institutional Multi-Agent Trading Assistant" in t:
@@ -63,7 +63,7 @@ def main() -> None:
         changed = True
 
     if changed:
-        main_py.write_text(t)
+        main_py.write_text(t, encoding="utf-8")
         print("[wire_polish] main updated")
     else:
         print("[wire_polish] main already OK")

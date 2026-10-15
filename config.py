@@ -4,6 +4,7 @@ Loads configuration from environment variables and an optional .env file.
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -60,13 +61,30 @@ TRADINGVIEW_EXCHANGE = os.getenv("TRADINGVIEW_EXCHANGE", "")
 TRADINGVIEW_SCREENER = os.getenv("TRADINGVIEW_SCREENER", "")
 POLL_INTERVAL = _safe_int(os.getenv("BOT_POLL"), 10)
 FAST_POLL_INTERVAL = _safe_int(os.getenv("BOT_FAST_POLL"), 3)
+def find_default_mt5_path() -> str:
+    """Auto-detect standard MetaTrader 5 desktop terminal on Windows / AWS EC2."""
+    if sys.platform != "win32":
+        return ""
+    candidates = [
+        os.path.expandvars(r"%ProgramFiles%\MetaTrader 5\terminal64.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\MetaTrader 5\terminal64.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\MetaTrader 5\terminal64.exe"),
+        r"C:\Program Files\MetaTrader 5\terminal64.exe",
+        r"C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
+    ]
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
 # MetaTrader 5 (MT5) Configuration
 MT5_ENABLED = os.getenv("MT5_ENABLED", "false").lower() in ("true", "1", "yes", "on")
 MT5_MODE = os.getenv("MT5_MODE", "paper").lower()  # "paper" or "live"
 MT5_LOGIN = _safe_int(os.getenv("MT5_LOGIN"), 0)
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
 MT5_SERVER = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
-MT5_PATH = os.getenv("MT5_PATH", "")
+MT5_PATH = os.getenv("MT5_PATH") or find_default_mt5_path()
 MT5_MAGIC = _safe_int(os.getenv("MT5_MAGIC"), 112233)
 MT5_GATEWAY_URL = os.getenv("MT5_GATEWAY_URL", "")
 

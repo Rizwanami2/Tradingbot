@@ -261,7 +261,7 @@ class RiskManager:
     def _load_state(self):
         if os.path.exists(self.state_file):
             try:
-                with open(self.state_file, "r") as f:
+                with open(self.state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 for k, v in data.items():
                     if hasattr(self.state, k):
@@ -274,8 +274,14 @@ class RiskManager:
             self.state.total_trades = 0
 
     def _save_state(self):
-        with open(self.state_file, "w") as f:
-            json.dump(asdict(self.state), f, indent=2)
+        try:
+            tmp = f"{self.state_file}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(asdict(self.state), f, indent=2)
+            os.replace(tmp, self.state_file)
+        except Exception:
+            with open(self.state_file, "w", encoding="utf-8") as f:
+                json.dump(asdict(self.state), f, indent=2)
 
     def _check_period_reset(self):
         today = date.today().isoformat()

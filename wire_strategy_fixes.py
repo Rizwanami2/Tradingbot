@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 def main() -> None:
     ma = ROOT / "multi_agent_trading_bot.py"
     if ma.exists():
-        t = ma.read_text(errors="ignore")
+        t = ma.read_text(encoding="utf-8", errors="ignore")
         changed = False
         if "class Arbiter:" in t:
             head, _, rest = t.partition("class Arbiter:")
@@ -31,14 +31,14 @@ def main() -> None:
             changed = True
             print("[wire_strategy] LiquidityAgent daily optional")
         if changed:
-            ma.write_text(t)
+            ma.write_text(t, encoding="utf-8")
             print("[wire_strategy] multi_agent patches applied")
         else:
             print("[wire_strategy] multi_agent already OK")
 
     ind = ROOT / "trading_strategy_indicators_pro.py"
     if ind.exists():
-        it = ind.read_text(errors="ignore")
+        it = ind.read_text(encoding="utf-8", errors="ignore")
         ichanged = False
         if "def _safe_f" not in it:
             needle = "@dataclass\nclass IndicatorSnapshot:"
@@ -90,7 +90,7 @@ def main() -> None:
             ichanged = True
             print("[wire_strategy] AIPredictor zero-price guard")
         if ichanged:
-            ind.write_text(it)
+            ind.write_text(it, encoding="utf-8")
         else:
             print("[wire_strategy] indicators OK")
     print("[wire_strategy] done")

@@ -62,7 +62,7 @@ class KillSwitch:
     def activate_manual(self, reason: str = "Manual kill"):
         self._set(reason, "manual")
         try:
-            with open(self.flag_file, "w") as f:
+            with open(self.flag_file, "w", encoding="utf-8") as f:
                 f.write(reason)
         except Exception:
             pass

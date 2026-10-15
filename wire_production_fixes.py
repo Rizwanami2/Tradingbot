@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 def patch_file(path: Path, replacements: list) -> list:
     if not path.exists():
         return [f"missing {path.name}"]
-    t = path.read_text(errors="ignore")
+    t = path.read_text(encoding="utf-8", errors="ignore")
     done = []
     for old, new in replacements:
         if old in t:
@@ -19,7 +19,7 @@ def patch_file(path: Path, replacements: list) -> list:
             done.append(f"already:{old[:30]!r}")
         else:
             done.append(f"skip:{old[:30]!r}")
-    path.write_text(t)
+    path.write_text(t, encoding="utf-8")
     return done
 
 

@@ -11,7 +11,7 @@ def main() -> None:
     if not ma.exists():
         print("[wire_mean_reversion] multi_agent missing")
         return
-    t = ma.read_text(errors="ignore")
+    t = ma.read_text(encoding="utf-8", errors="ignore")
     changed = False
 
     if "mean_reversion_vwap_strategy" not in t:
@@ -69,7 +69,7 @@ def main() -> None:
             print("[wire_mean_reversion] vote hook added")
 
     if changed:
-        ma.write_text(t)
+        ma.write_text(t, encoding="utf-8")
         print("[wire_mean_reversion] multi_agent patched")
     else:
         print("[wire_mean_reversion] multi_agent already OK")

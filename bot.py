@@ -19,6 +19,20 @@ import sys
 
 import config
 
+if sys.platform == "win32":
+    for _s in (sys.stdout, sys.stderr, sys.stdin):
+        if hasattr(_s, "reconfigure"):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
+
 
 def run_telegram():
     import main

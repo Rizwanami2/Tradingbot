@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def patch_main(p: Path) -> bool:
-    t = p.read_text()
+    t = p.read_text(encoding="utf-8", errors="ignore")
     if 'if sym in ("BTC", "BITCOIN", "BTCUSD", "XBT"):' in t:
         return False
     old = (
@@ -23,7 +23,7 @@ def patch_main(p: Path) -> bool:
         '        sym = "XAUUSD"\n'
     )
     if old in t:
-        p.write_text(t.replace(old, new, 1))
+        p.write_text(t.replace(old, new, 1), encoding="utf-8")
         return True
     t2, n = re.subn(
         r"async def signal_command\(update: Update, ctx: ContextTypes\.DEFAULT_TYPE\):\n"
@@ -33,13 +33,13 @@ def patch_main(p: Path) -> bool:
         count=1,
     )
     if n:
-        p.write_text(t2)
+        p.write_text(t2, encoding="utf-8")
         return True
     return False
 
 
 def patch_risk(p: Path) -> bool:
-    t = p.read_text()
+    t = p.read_text(encoding="utf-8", errors="ignore")
     changed = False
     if '"BTC":' not in t and '"BTCUSDT":' in t:
         needle = (
@@ -81,12 +81,12 @@ def patch_risk(p: Path) -> bool:
         t = t.replace(old_set, new_set, 1)
         changed = True
     if changed:
-        p.write_text(t)
+        p.write_text(t, encoding="utf-8")
     return changed
 
 
 def patch_ma(p: Path) -> bool:
-    t = p.read_text()
+    t = p.read_text(encoding="utf-8", errors="ignore")
     changed = False
     if "def _norm_trade_symbol" not in t:
         helper = '''
@@ -181,7 +181,7 @@ def _norm_trade_symbol(symbol: str) -> str:
             t = t.replace(old_price, new_price, 1)
             changed = True
     if changed:
-        p.write_text(t)
+        p.write_text(t, encoding="utf-8")
     return changed
 
 

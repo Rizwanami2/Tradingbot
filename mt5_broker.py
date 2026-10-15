@@ -241,7 +241,8 @@ class MT5Broker(Broker):
 
             if native_mt5 is not None:
                 try:
-                    init_kwargs = {"path": self.path} if self.path else {}
+                    mt5_exe = self.path or getattr(config, "MT5_PATH", "") or getattr(config, "find_default_mt5_path", lambda: "")()
+                    init_kwargs = {"path": mt5_exe} if mt5_exe else {}
                     if not native_mt5.initialize(**init_kwargs):
                         err = native_mt5.last_error()
                         raise ConnectionError(f"MT5 initialize failed: {err}")
@@ -313,7 +314,8 @@ class MT5Broker(Broker):
             # Paper / Demo Mode
             if native_mt5 is not None and self.login and self.password:
                 try:
-                    init_kwargs = {"path": self.path} if self.path else {}
+                    mt5_exe = self.path or getattr(config, "MT5_PATH", "") or getattr(config, "find_default_mt5_path", lambda: "")()
+                    init_kwargs = {"path": mt5_exe} if mt5_exe else {}
                     if native_mt5.initialize(**init_kwargs) and native_mt5.login(
                         login=self.login, password=self.password, server=self.server
                     ):

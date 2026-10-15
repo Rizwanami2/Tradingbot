@@ -11,7 +11,7 @@ def main() -> None:
     if not sp.exists():
         print("[wire_2y] signal_pipeline missing")
         return
-    t = sp.read_text(errors="ignore")
+    t = sp.read_text(encoding="utf-8", errors="ignore")
     changed = False
 
     if "historical_2y" not in t:
@@ -77,14 +77,14 @@ def main() -> None:
             print("[wire_2y] format history")
 
     if changed:
-        sp.write_text(t)
+        sp.write_text(t, encoding="utf-8")
         print("[wire_2y] signal_pipeline updated")
     else:
         print("[wire_2y] signal_pipeline OK")
 
     ep = ROOT / "entry_level_planner.py"
     if ep.exists():
-        et = ep.read_text(errors="ignore")
+        et = ep.read_text(encoding="utf-8", errors="ignore")
         if "historical_2y" not in et and "all_levels.update(emas)" in et:
             et = et.replace(
                 "    all_levels.update(emas)\n",
@@ -97,7 +97,7 @@ def main() -> None:
                 "        pass\n",
                 1,
             )
-            ep.write_text(et)
+            ep.write_text(et, encoding="utf-8")
             print("[wire_2y] entry planner levels")
     print("[wire_2y] done")
 

@@ -25,7 +25,7 @@ def _is_bad(text: str) -> bool:
 
 def main() -> None:
     adv = ROOT / "advanced_backtest.py"
-    text = adv.read_text(errors="ignore") if adv.exists() else ""
+    text = adv.read_text(encoding="utf-8", errors="ignore") if adv.exists() else ""
     if not _is_bad(text):
         print("[wire_restore_bt] advanced_backtest OK")
         print("[wire_restore_bt] done")
@@ -43,7 +43,7 @@ def main() -> None:
             timeout=10,
         )
         if res.returncode == 0 and not _is_bad(res.stdout):
-            adv.write_text(res.stdout)
+            adv.write_text(res.stdout, encoding="utf-8")
             print(f"[wire_restore_bt] restored {len(res.stdout)} bytes from local git (b2f17eb)")
             print("[wire_restore_bt] done")
             return
@@ -59,7 +59,7 @@ def main() -> None:
         if _is_bad(body):
             print("[wire_restore_bt] remote also bad")
             return
-        adv.write_text(body)
+        adv.write_text(body, encoding="utf-8")
         print(f"[wire_restore_bt] restored {len(body)} bytes from b2f17eb")
     except Exception as e:
         print(f"[wire_restore_bt] fetch failed: {e}")

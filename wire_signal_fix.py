@@ -11,7 +11,7 @@ def main() -> None:
     if not main_py.exists():
         print("[wire_signal] main missing")
         return
-    t = main_py.read_text(errors="ignore")
+    t = main_py.read_text(encoding="utf-8", errors="ignore")
     changed = False
 
     if "from signal_pipeline import run_signal" not in t:
@@ -77,7 +77,7 @@ def main() -> None:
         print("[wire_signal] asignal alias")
 
     if changed:
-        main_py.write_text(t)
+        main_py.write_text(t, encoding="utf-8")
         print("[wire_signal] main.py updated")
     else:
         print("[wire_signal] main already OK")

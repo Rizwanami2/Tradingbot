@@ -11,7 +11,7 @@ def main() -> None:
     if not ma.exists():
         print("[wire_gautam] multi_agent missing")
         return
-    t = ma.read_text(errors="ignore")
+    t = ma.read_text(encoding="utf-8", errors="ignore")
     changed = False
 
     if "gautam_jha_strategy" not in t:
@@ -68,7 +68,7 @@ def main() -> None:
             print("[wire_gautam] vote hook")
 
     if changed:
-        ma.write_text(t)
+        ma.write_text(t, encoding="utf-8")
         print("[wire_gautam] multi_agent patched")
     else:
         print("[wire_gautam] multi_agent already OK")

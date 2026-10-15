@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 def main() -> None:
     cfg = ROOT / "config.py"
     if cfg.exists():
-        t = cfg.read_text(errors="ignore")
+        t = cfg.read_text(encoding="utf-8", errors="ignore")
         changed = False
         if '_equity_default = 100.0 if BROKER_MODE' in t:
             t = t.replace(
@@ -25,14 +25,14 @@ def main() -> None:
             )
             changed = True
         if changed:
-            cfg.write_text(t)
+            cfg.write_text(t, encoding="utf-8")
             print("[wire_pos] config $1000 + scalp")
         else:
             print("[wire_pos] config OK")
 
     ee = ROOT / "execution_engine.py"
     if ee.exists():
-        t = ee.read_text(errors="ignore")
+        t = ee.read_text(encoding="utf-8", errors="ignore")
         if "def close_all_positions" not in t and "def get_portfolio_summary" in t:
             helper = (
                 "\n    def close_all_positions(self, reason: str = \"Close all\") -> list:\n"
@@ -68,12 +68,12 @@ def main() -> None:
                 "        return \"\\n\".join(lines)\n\n"
             )
             t = t.replace("    def get_portfolio_summary(self)", helper + "    def get_portfolio_summary(self)", 1)
-            ee.write_text(t)
+            ee.write_text(t, encoding="utf-8")
             print("[wire_pos] close_all + format_positions")
         else:
             print("[wire_pos] execution_engine methods OK")
 
-        t = ee.read_text(errors="ignore")
+        t = ee.read_text(encoding="utf-8", errors="ignore")
         if "SCALP AUTO-CLOSE" not in t and "Calculate live unrealized PnL" in t:
             needle = (
                 "            # Calculate live unrealized PnL\n"
@@ -125,12 +125,12 @@ def main() -> None:
             )
             if needle in t:
                 t = t.replace(needle, scalp, 1)
-                ee.write_text(t)
+                ee.write_text(t, encoding="utf-8")
                 print("[wire_pos] scalp auto-close")
 
     main_py = ROOT / "main.py"
     if main_py.exists():
-        t = main_py.read_text(errors="ignore")
+        t = main_py.read_text(encoding="utf-8", errors="ignore")
         if "format_positions_detail" not in t and "async def positions_command" in t:
             i = t.find("async def positions_command")
             k = t.find("async def cancel_command")
@@ -176,9 +176,9 @@ def main() -> None:
                     "        await update.message.reply_text(f\"No position for {sym}. Use /close all\")\n\n\n"
                 )
                 t = t[:i] + new_block + t[k:]
-                main_py.write_text(t)
+                main_py.write_text(t, encoding="utf-8")
                 print("[wire_pos] main positions/close")
-        t = main_py.read_text(errors="ignore")
+        t = main_py.read_text(encoding="utf-8", errors="ignore")
         if 'CommandHandler("closeall"' not in t and 'CommandHandler("close"' in t:
             t = t.replace(
                 'CommandHandler("close", close_command)',
@@ -187,7 +187,7 @@ def main() -> None:
                 '    app.add_handler(CommandHandler("closed", close_command)',
                 1,
             )
-            main_py.write_text(t)
+            main_py.write_text(t, encoding="utf-8")
             print("[wire_pos] closeall alias")
     print("[wire_pos] done")
 

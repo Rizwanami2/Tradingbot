@@ -55,7 +55,31 @@ def _safe_wire(name: str) -> None:
         print(f"[run_bot] {name}: {type(e).__name__}: {e}")
 
 
+def _setup_windows_compatibility() -> None:
+    """Ensure UTF-8 console output and event loop compatibility on Windows 11 / AWS."""
+    if sys.platform == "win32":
+        for stream_name in ("stdout", "stderr", "stdin"):
+            s = getattr(sys, stream_name, None)
+            if s and hasattr(s, "reconfigure"):
+                try:
+                    s.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+        except Exception:
+            pass
+        try:
+            import asyncio
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+
+
 def main() -> None:
+    _setup_windows_compatibility()
     sys.path.insert(0, str(ROOT))
 
     import logging
@@ -93,7 +117,7 @@ def main() -> None:
 
     main_py = ROOT / "main.py"
     if main_py.exists():
-        t = main_py.read_text(errors="ignore")
+        t = main_py.read_text(encoding="utf-8", errors="ignore")
         fixed = False
         if "application.add_handler" in t:
             t = t.replace("application.add_handler", "app.add_handler")
@@ -118,7 +142,7 @@ def main() -> None:
             )
             fixed = True
         if fixed:
-            main_py.write_text(t)
+            main_py.write_text(t, encoding="utf-8")
 
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")

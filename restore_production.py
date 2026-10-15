@@ -20,17 +20,17 @@ def restore() -> None:
     ma_path = root / "multi_agent_trading_bot.py"
     needs = (
         not rm_path.exists()
-        or "class RiskManager" not in rm_path.read_text(errors="ignore")
+        or "class RiskManager" not in rm_path.read_text(encoding="utf-8", errors="ignore")
         or not ma_path.exists()
-        or "class Arbiter" not in ma_path.read_text(errors="ignore")
-        or rm_path.read_text(errors="ignore").strip() in ("PLACEHOLDER", "")
-        or ma_path.read_text(errors="ignore").strip() in ("PLACEHOLDER", "")
+        or "class Arbiter" not in ma_path.read_text(encoding="utf-8", errors="ignore")
+        or rm_path.read_text(encoding="utf-8", errors="ignore").strip() in ("PLACEHOLDER", "")
+        or ma_path.read_text(encoding="utf-8", errors="ignore").strip() in ("PLACEHOLDER", "")
     )
     if needs:
         for name in ("risk_manager.py", "multi_agent_trading_bot.py"):
             try:
                 data = fetch(name)
-                (root / name).write_text(data)
+                (root / name).write_text(data, encoding="utf-8")
                 print(f"[restore] {name} {len(data)} bytes")
             except Exception as e:
                 print(f"[restore] Failed {name}: {e}")

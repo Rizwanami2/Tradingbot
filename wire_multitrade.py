@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 def main() -> None:
     cfg = ROOT / "config.py"
     if cfg.exists():
-        t = cfg.read_text(errors="ignore")
+        t = cfg.read_text(encoding="utf-8", errors="ignore")
         if "MAX_OPEN_TRADES" not in t:
             append = "\n".join([
                 "",
@@ -18,14 +18,14 @@ def main() -> None:
                 "AUTOTRADE_SYMBOLS = [s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(\",\") if s.strip()] or [\"BTCUSDT\", \"XAUUSD\"]",
                 "",
             ])
-            cfg.write_text(t + append)
+            cfg.write_text(t + append, encoding="utf-8")
             print("[wire_multitrade] config defaults added")
         else:
             print("[wire_multitrade] config OK")
 
     ee = ROOT / "execution_engine.py"
     if ee.exists():
-        t = ee.read_text(errors="ignore")
+        t = ee.read_text(encoding="utf-8", errors="ignore")
         changed = False
         if "max_open_trades" not in t:
             needle = "self.execution_halted: bool = False\n"
@@ -66,14 +66,14 @@ def main() -> None:
                 t = t.replace(needle, insert, 1)
                 changed = True
         if changed:
-            ee.write_text(t)
+            ee.write_text(t, encoding="utf-8")
             print("[wire_multitrade] execution_engine capacity")
         else:
             print("[wire_multitrade] execution_engine OK")
 
     main_py = ROOT / "main.py"
     if main_py.exists():
-        mt = main_py.read_text(errors="ignore")
+        mt = main_py.read_text(encoding="utf-8", errors="ignore")
         if "from autotrade_worker import live_monitoring_worker" not in mt:
             marker = "async def live_monitoring_worker(app):\n"
             if marker in mt:
@@ -97,7 +97,7 @@ def main() -> None:
                     "        print(\"[autotrade_worker] using legacy worker:\", _aw_err)\n"
                 )
                 mt = mt.replace(marker, inject, 1)
-                main_py.write_text(mt)
+                main_py.write_text(mt, encoding="utf-8")
                 print("[wire_multitrade] main.py -> autotrade_worker")
             else:
                 print("[wire_multitrade] main worker marker miss")
