@@ -193,6 +193,46 @@ class TestPerformancePipeline(unittest.TestCase):
         asyncio.run(performance_command(update, ctx))
         self.assertTrue(update.message.reply_text.called)
 
+    def test_performance_command_does_not_instantiate_advanced_engine(self):
+        """Verify performance_command uses fast PerformanceTracker directly without network/AdvancedEngine."""
+        from telegram_advanced import performance_command
+        update = MagicMock()
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+        ctx = MagicMock()
+        ctx.args = []
+
+        with patch("advanced_integration.AdvancedEngine") as mock_engine:
+            asyncio.run(performance_command(update, ctx))
+            self.assertFalse(mock_engine.called, "AdvancedEngine should NOT be called for performance reporting")
+        self.assertTrue(update.message.reply_text.called)
+
+    def test_safe_reply_effective_message_and_bot_fallback(self):
+        from telegram_brain import safe_reply
+
+        # Case 1: update.message is None, update.effective_message is present
+        update_effective = MagicMock()
+        update_effective.message = None
+        update_effective.effective_message = MagicMock()
+        update_effective.effective_message.reply_text = AsyncMock()
+
+        asyncio.run(safe_reply(update_effective, "Test message", parse_mode="Markdown"))
+        self.assertTrue(update_effective.effective_message.reply_text.called)
+
+        # Case 2: update.message is None, update.effective_message is None, falls back to bot.send_message
+        update_bot = MagicMock()
+        update_bot.message = None
+        update_bot.effective_message = None
+        update_bot.effective_chat = MagicMock()
+        update_bot.effective_chat.id = 12345
+        mock_bot = MagicMock()
+        mock_bot.send_message = AsyncMock()
+        update_bot._bot = mock_bot
+
+        asyncio.run(safe_reply(update_bot, "Fallback test", parse_mode="Markdown"))
+        self.assertTrue(mock_bot.send_message.called)
+        self.assertEqual(mock_bot.send_message.call_args[1].get("chat_id"), 12345)
+
     def test_cli_performance_subcommands(self):
         from main import run_cli_interactive as main_cli
         from main_full import run_cli_interactive as full_cli

@@ -1029,10 +1029,18 @@ def run_cli_interactive():
                 print(f"Kill error: {e}")
         elif name in ("performance", "perf"):
             try:
-                from advanced_integration import AdvancedEngine
-                eng = AdvancedEngine()
+                from performance_analytics import PerformanceTracker
+                perf = PerformanceTracker()
                 sub = parts[1].lower() if len(parts) > 1 else "summary"
-                print(eng.performance_report(sub))
+                if sub in ("agents", "ranking", "rankings"):
+                    print(perf.agent_report())
+                elif sub in ("trades", "history", "recent", "closed"):
+                    print(perf.recent_trades_report())
+                elif sub in ("reset", "clear"):
+                    perf.reset()
+                    print("🧹 Performance Stats Reset: All closed trade history has been cleared.")
+                else:
+                    print(perf.telegram_report())
             except Exception as e:
                 print(f"Performance error: {e}")
         elif name == "profile":
@@ -1193,13 +1201,17 @@ def main():
     except Exception:
         pass
     try:
-        from telegram_advanced import abacktest_command, performance_command, profile_command, kill_command
+        from telegram_advanced import performance_command
         app.add_handler(CommandHandler(["performance", "perf"], performance_command))
+    except Exception as e:
+        logger.exception("Failed to register performance_command: %s", e)
+    try:
+        from telegram_advanced import abacktest_command, profile_command, kill_command
         app.add_handler(CommandHandler("profile", profile_command))
         app.add_handler(CommandHandler("kill", kill_command))
         app.add_handler(CommandHandler(["abacktest", "auto_backtest"], abacktest_command))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Failed to register advanced handlers: %s", e)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message))
 
     print("Trading Bot is running. Press Ctrl+C to terminate.")

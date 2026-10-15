@@ -243,7 +243,7 @@ class PerformanceTracker:
         s = self.summary()
         if s.get("trades", 0) == 0:
             return (
-                "📊 **Performance Analytics**\n"
+                "📊 *Performance Analytics*\n"
                 "• Closed Trades: `0`\n"
                 "• Status: _No closed trades recorded yet._\n"
                 "• Metrics (win rate, Sharpe ratio, profit factor, agent contribution) will automatically update as trades complete."
@@ -253,7 +253,7 @@ class PerformanceTracker:
         tot_r = s.get("total_r", 0.0)
 
         lines = [
-            "📊 **Performance Report**",
+            "📊 *Performance Report*",
             f"• Closed Trades: `{s['trades']}` | Win Rate: `{s['win_rate']*100:.1f}%` ({s['wins']}W - {s['losses']}L)",
             f"• Realized PnL: `{pnl_str}` | Total R: `{tot_r:+.2f}R`",
             f"• Avg R: `{s['avg_r']:+.2f}` | Expectancy: `{s['expectancy_r']:+.2f}R`",
@@ -262,7 +262,7 @@ class PerformanceTracker:
         ]
         if s.get("agents"):
             lines.append("")
-            lines.append("**Agent Contribution**")
+            lines.append("*Agent Contribution*")
             sorted_agents = sorted(
                 s["agents"].items(),
                 key=lambda x: (x[1]["count"], x[1]["avg_r"]),
@@ -277,9 +277,9 @@ class PerformanceTracker:
     def agent_report(self) -> str:
         s = self.summary()
         if not s.get("agents"):
-            return "🤖 **Agent Performance**\nNo agent trade history recorded yet."
+            return "🤖 *Agent Performance*\nNo agent trade history recorded yet."
         lines = [
-            "🤖 **Agent Performance Rankings**",
+            "🤖 *Agent Performance Rankings*",
             f"Total Evaluated Trades: `{s.get('trades', 0)}`",
             "",
         ]
@@ -291,7 +291,7 @@ class PerformanceTracker:
         for rank, (name, a) in enumerate(sorted_agents, 1):
             icon = "🟢" if a["avg_r"] > 0 else ("🔴" if a["avg_r"] < 0 else "⚪")
             lines.append(
-                f"{rank}. {icon} **{name}:** {a['count']} trades | "
+                f"{rank}. {icon} *{name}:* {a['count']} trades | "
                 f"WR `{a['win_rate']*100:.1f}%` ({a.get('wins', 0)}W - {a.get('losses', 0)}L) | "
                 f"Total `{a.get('total_r', 0.0):+.2f}R` | Avg `{a['avg_r']:+.2f}R`"
             )
@@ -299,17 +299,17 @@ class PerformanceTracker:
 
     def recent_trades_report(self, limit: int = 10) -> str:
         if not self.trades:
-            return "📜 **Recent Closed Trades**\nNo closed trades recorded yet."
+            return "📜 *Recent Closed Trades*\nNo closed trades recorded yet."
         recent = self.trades[-limit:]
         lines = [
-            f"📜 **Recent Closed Trades (Last {len(recent)})**",
+            f"📜 *Recent Closed Trades (Last {len(recent)})*",
         ]
         for t in reversed(recent):
             won = float(t.r_multiple) > 0
             icon = "✅" if won else "❌"
             pnl_str = f"{float(t.pnl):+.2f}" if t.pnl is not None else "0.00"
             lines.append(
-                f"• {icon} `#{t.id}` **{t.symbol}** {t.direction} | "
+                f"• {icon} `#{t.id}` *{t.symbol}* {t.direction} | "
                 f"R: `{float(t.r_multiple):+.2f}R` | PnL: `${pnl_str}` | "
                 f"Exit: `${float(t.exit):,.2f}`"
             )

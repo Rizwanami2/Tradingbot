@@ -25,8 +25,8 @@ from telegram_brain import safe_reply
 
 async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        from advanced_integration import AdvancedEngine
-        eng = AdvancedEngine()
+        from performance_analytics import PerformanceTracker
+        perf = PerformanceTracker()
         args = list(getattr(ctx, "args", []) or [])
         sub = args[0].lower() if args else "summary"
         if sub in ("help", "commands"):
@@ -38,8 +38,15 @@ async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "• `/performance reset` — Clear performance history"
             )
             await safe_reply(update, msg, parse_mode="Markdown")
+        elif sub in ("agents", "ranking", "rankings"):
+            await safe_reply(update, perf.agent_report(), parse_mode="Markdown")
+        elif sub in ("trades", "history", "recent", "closed"):
+            await safe_reply(update, perf.recent_trades_report(), parse_mode="Markdown")
+        elif sub in ("reset", "clear"):
+            perf.reset()
+            await safe_reply(update, "🧹 *Performance Stats Reset*\nAll closed trade history has been cleared.", parse_mode="Markdown")
         else:
-            await safe_reply(update, eng.performance_report(sub), parse_mode="Markdown")
+            await safe_reply(update, perf.telegram_report(), parse_mode="Markdown")
     except Exception as e:
         logger.exception("Error in /performance command: %s", e)
         await safe_reply(update, f"Performance error: {e}", parse_mode=None)
@@ -48,17 +55,18 @@ async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        from advanced_integration import AdvancedEngine
-        eng = AdvancedEngine()
+        from kill_switch import KillSwitch
+        ks = KillSwitch()
         arg = (ctx.args[0].lower() if ctx.args else "status")
         if arg in ("on", "1", "true", "activate"):
-            eng.activate_kill("Manual kill via Telegram")
+            ks.activate_manual("Manual kill via Telegram")
             await safe_reply(update, "🛑 *KILL SWITCH ON* — no new entries.", parse_mode="Markdown")
         elif arg in ("off", "0", "false", "deactivate"):
-            eng.deactivate_kill()
+            ks.deactivate()
             await safe_reply(update, "🟢 *Kill switch OFF.*", parse_mode="Markdown")
         else:
-            await safe_reply(update, f"Status: `{eng.kill_status()}`", parse_mode="Markdown")
+            _, msg = ks.is_active()
+            await safe_reply(update, f"Status: `{msg}`", parse_mode="Markdown")
     except Exception as e:
         logger.exception("Error in /kill command: %s", e)
         await safe_reply(update, f"Kill error: {e}", parse_mode=None)
@@ -97,7 +105,7 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     profile = ctx.args[1].lower() if len(ctx.args) > 1 else "balanced"
-    await update.message.reply_text(f"⏳ Advanced eval **{sym}** (`{profile}`)...", parse_mode="Markdown")
+    await safe_reply(update, f"⏳ Advanced eval *{sym}* (`{profile}`)...", parse_mode="Markdown")
     try:
         from advanced_integration import AdvancedEngine
         eng = AdvancedEngine(symbol=sym, profile=profile)
@@ -285,6 +293,7 @@ def register_all_advanced(application) -> None:
             existing_cmds.add(cmd)
 
     _safe_add("performance", performance_command)
+    _safe_add("perf", performance_command)
     _safe_add("kill", kill_command)
     _safe_add("profile", profile_command)
     _safe_add("asignal", asignal_command)

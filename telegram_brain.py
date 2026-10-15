@@ -9,22 +9,64 @@ from telegram.ext import ContextTypes, CommandHandler
 logger = logging.getLogger("TelegramBrain")
 
 
-async def safe_reply(update: Update, text: str, parse_mode: str | None = "Markdown"):
+async def safe_reply(update: Update, text: str, parse_mode: str | None = "Markdown", bot: Any = None):
     """Send reply, falling back cleanly to plain text if Telegram fails to parse entities."""
-    if not update or not getattr(update, "message", None):
+    if not update:
         return None
     if len(text) > 4000:
         text = text[:3990] + "\n..."
-    if parse_mode:
+
+    msg = None
+    if getattr(update, "message", None) is not None:
+        msg = update.message
+    elif getattr(update, "effective_message", None) is not None:
+        msg = update.effective_message
+    elif getattr(update, "edited_message", None) is not None:
+        msg = update.edited_message
+
+    clean_text = text.replace("**", "*").replace("```", "").replace("`", "")
+
+    if msg and hasattr(msg, "reply_text"):
+        if parse_mode:
+            try:
+                return await msg.reply_text(text, parse_mode=parse_mode)
+            except Exception as e:
+                logger.warning("Markdown reply failed (%s), falling back to plain text", e)
         try:
-            return await update.message.reply_text(text, parse_mode=parse_mode)
+            return await msg.reply_text(text, parse_mode=None)
         except Exception as e:
-            logger.warning("Markdown reply failed (%s), falling back to plain text", e)
-    try:
-        return await update.message.reply_text(text, parse_mode=None)
-    except Exception as e:
-        logger.error("Failed to send message: %s", e)
-        return None
+            logger.warning("Plain reply failed (%s), falling back to clean text", e)
+            try:
+                return await msg.reply_text(clean_text, parse_mode=None)
+            except Exception as e2:
+                logger.warning("Clean text reply failed (%s)", e2)
+
+    chat = getattr(update, "effective_chat", None) or (getattr(msg, "chat", None) if msg else None)
+    chat_id = getattr(chat, "id", None) if chat else None
+    _bot = bot or getattr(update, "_bot", None)
+    if not _bot and hasattr(update, "get_bot"):
+        try:
+            _bot = update.get_bot()
+        except Exception:
+            pass
+
+    if chat_id and _bot and hasattr(_bot, "send_message"):
+        if parse_mode:
+            try:
+                return await _bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+            except Exception as e:
+                logger.warning("Markdown send_message failed (%s), falling back to plain text", e)
+        try:
+            return await _bot.send_message(chat_id=chat_id, text=text, parse_mode=None)
+        except Exception as e:
+            logger.warning("send_message failed (%s), trying clean text", e)
+            try:
+                return await _bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None)
+            except Exception as e2:
+                logger.error("All reply and send_message attempts failed: %s", e2)
+                return None
+
+    return None
 
 
 _safe_reply = safe_reply

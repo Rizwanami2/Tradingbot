@@ -1977,10 +1977,18 @@ def run_cli_interactive():
                 print(f"Kill error: {e}")
         elif name in ("performance", "perf"):
             try:
-                from advanced_integration import AdvancedEngine
-                eng = AdvancedEngine()
+                from performance_analytics import PerformanceTracker
+                perf = PerformanceTracker()
                 sub = parts[1].lower() if len(parts) > 1 else "summary"
-                print(eng.performance_report(sub))
+                if sub in ("agents", "ranking", "rankings"):
+                    print(perf.agent_report())
+                elif sub in ("trades", "history", "recent", "closed"):
+                    print(perf.recent_trades_report())
+                elif sub in ("reset", "clear"):
+                    perf.reset()
+                    print("🧹 Performance Stats Reset: All closed trade history has been cleared.")
+                else:
+                    print(perf.telegram_report())
             except Exception as e:
                 print(f"Performance error: {e}")
         elif name == "profile":
@@ -2436,12 +2444,17 @@ def main():
     # Backtesting & Research
     app.add_handler(CommandHandler("backtest", backtest_command))
     try:
-        from telegram_advanced import abacktest_command, performance_command, profile_command
-        app.add_handler(CommandHandler(["abacktest", "backtestall"], abacktest_command))
+        from telegram_advanced import performance_command
         app.add_handler(CommandHandler(["performance", "perf"], performance_command))
+    except Exception as e:
+        logger.exception("Failed to register performance_command: %s", e)
+
+    try:
+        from telegram_advanced import abacktest_command, profile_command
+        app.add_handler(CommandHandler(["abacktest", "backtestall"], abacktest_command))
         app.add_handler(CommandHandler("profile", profile_command))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Failed to register abacktest/profile handlers: %s", e)
 
     # Autonomous AI & Feature Packs
     try:
