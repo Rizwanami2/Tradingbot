@@ -671,11 +671,44 @@ class DeltaBroker(Broker):
             order_data = res.get("result", {}) if isinstance(res, dict) else {}
             order_id = str(order_data.get("id", ""))
             fill_price = float(order_data.get("average_fill_price") or price or 0.0)
-            status = str(order_data.get("state", "pending")).lower()
-            is_filled = status in ("filled", "closed") or (order_type_clean == "market_order" and status not in ("cancelled", "rejected"))
-            filled_qty = qty if is_filled else max(0.0, float(order_data.get("size", 0.0) or qty) - float(order_data.get("unfilled_size", 0.0) or 0.0))
-            if is_filled and filled_qty <= 0:
-                filled_qty = qty
+            status = str(order_data.get("state", "")).strip().lower()
+            size_raw = order_data.get("size")
+            unfilled_raw = order_data.get("unfilled_size")
+
+            # A market order is not necessarily filled just because it was accepted.
+            # Only explicit terminal fill states count as filled; uncertain or partial
+            # states must stop execution so the caller can reconcile with the exchange.
+            if size_raw is not None and unfilled_raw is not None:
+                try:
+                    exchange_size = float(size_raw)
+                    unfilled_size = float(unfilled_raw)
+                except (TypeError, ValueError) as state_exc:
+                    raise OrderStateUnknownError(
+                        "Delta Exchange returned invalid order quantity metadata; reconcile order state."
+                    ) from state_exc
+                if exchange_size < 0 or unfilled_size < 0 or unfilled_size > exchange_size:
+                    raise OrderStateUnknownError(
+                        "Delta Exchange returned inconsistent order quantity metadata; reconcile order state."
+                    )
+                if status in ("filled", "closed") and unfilled_size > 0:
+                    raise OrderStateUnknownError(
+                        "Delta Exchange reported a terminal fill with unfilled quantity; reconcile order state."
+                    )
+                if status not in ("filled", "closed") and exchange_size > unfilled_size:
+                    raise OrderStateUnknownError(
+                        "Delta Exchange order has a partial fill or ambiguous quantity; reconcile before continuing."
+                    )
+
+            is_filled = status in ("filled", "closed")
+            if not is_filled and status not in ("pending", "open", "cancelled", "canceled", "rejected"):
+                raise OrderStateUnknownError(
+                    f"Delta Exchange returned unrecognized order state {status!r}; reconcile before continuing."
+                )
+            if status in ("pending", "open") and (size_raw is None or unfilled_raw is None):
+                raise OrderStateUnknownError(
+                    "Delta Exchange returned a non-terminal order without fill metadata; reconcile before continuing."
+                )
+            filled_qty = qty if is_filled else 0.0
 
             return Order(
                 id=order_id,
@@ -691,6 +724,8 @@ class DeltaBroker(Broker):
                 filled_qty=filled_qty,
                 created_at=datetime.now(timezone.utc),
             )
+        except OrderStateUnknownError:
+            raise
         except Exception as exc:
             logger.error("[DeltaBroker] Order placement failed for %s: %s", delta_sym, exc)
             raise ExecutionError(f"Delta Exchange order placement failed: {exc}") from exc

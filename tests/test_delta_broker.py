@@ -4,9 +4,11 @@ import unittest
 from delta_broker import DeltaBroker, MockDeltaBroker, resolve_delta_symbol
 from execution import (
     BrokerConfigurationError,
+    OrderStateUnknownError,
     create_broker,
     create_broker_fail_closed,
 )
+from unittest.mock import Mock
 from execution_engine import ExecutionEngine, OrderStatus
 from mt5_broker import MockMT5Broker
 from risk_manager import RiskManager
@@ -53,6 +55,59 @@ class TestDeltaBroker(unittest.TestCase):
 
         with self.assertRaises(BrokerConfigurationError):
             create_broker(broker_mode="delta_live")
+
+    def test_market_order_pending_state_is_not_misreported_as_filled(self):
+        broker = DeltaBroker.__new__(DeltaBroker)
+        broker._connected = True
+        broker.auto_leverage = False
+        broker.get_product = Mock(return_value={"id": 1, "symbol": "BTCUSD"})
+        broker.to_contracts = Mock(return_value=10)
+        broker._request = Mock(return_value={
+            "result": {
+                "id": "order-pending",
+                "state": "pending",
+                "size": 10,
+                "unfilled_size": 10,
+            }
+        })
+
+        order = broker.place_order("BTCUSDT", "buy", 0.01, order_type="market")
+        self.assertEqual(order.status, "pending")
+        self.assertEqual(order.filled_qty, 0.0)
+
+    def test_market_order_partial_fill_fails_closed_for_reconciliation(self):
+        broker = DeltaBroker.__new__(DeltaBroker)
+        broker._connected = True
+        broker.auto_leverage = False
+        broker.get_product = Mock(return_value={"id": 1, "symbol": "BTCUSD"})
+        broker.to_contracts = Mock(return_value=10)
+        broker._request = Mock(return_value={
+            "result": {
+                "id": "order-partial",
+                "state": "open",
+                "size": 10,
+                "unfilled_size": 4,
+            }
+        })
+
+        with self.assertRaisesRegex(OrderStateUnknownError, "partial fill"):
+            broker.place_order("BTCUSDT", "buy", 0.01, order_type="market")
+
+    def test_unknown_market_order_state_fails_closed(self):
+        broker = DeltaBroker.__new__(DeltaBroker)
+        broker._connected = True
+        broker.auto_leverage = False
+        broker.get_product = Mock(return_value={"id": 1, "symbol": "BTCUSD"})
+        broker.to_contracts = Mock(return_value=10)
+        broker._request = Mock(return_value={
+            "result": {
+                "id": "order-unknown",
+                "state": "awaiting_confirmation",
+            }
+        })
+
+        with self.assertRaisesRegex(OrderStateUnknownError, "unrecognized order state"):
+            broker.place_order("BTCUSDT", "buy", 0.01, order_type="market")
 
     def test_mock_delta_broker_features(self):
         broker = MockDeltaBroker(balance=10000.0)

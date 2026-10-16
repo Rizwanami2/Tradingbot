@@ -51,6 +51,17 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or ""
 
+from telegram_auth import parse_allowed_user_ids
+
+# Empty allowlist intentionally denies all commands except /start and /help.
+TELEGRAM_ALLOWED_USER_IDS = parse_allowed_user_ids(
+    os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
+)
+
+# Explicit test-only mode allows mock broker fallback during pytest collection.
+# Production remains fail-closed unless BOT_TESTING is deliberately set.
+TESTING = os.getenv("BOT_TESTING", "false").strip().lower() in ("true", "1", "yes", "on")
+
 
 
 

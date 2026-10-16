@@ -1,6 +1,6 @@
 # TradingBot — Multi-Agent Institutional Trading Assistant
 
-Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **Bitcoin (BTCUSDT)** powered by 7-agent consensus, best-entry zones, 2-year market structure, and **exclusive MetaTrader 5 (MT5) Live execution**.
+Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **Bitcoin (BTCUSDT)** powered by 7-agent consensus and multi-timeframe market structure. MT5 and Delta broker adapters are present; validate only with demo/testnet and keep live execution disabled.
 
 ## Features
 
@@ -10,7 +10,7 @@ Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **B
 | **Entry Planning** | Dynamic best-entry *zones* synthesized from PDH/PDL, EMAs, market swings, ATR volatility, and 2-year macro S/R levels |
 | **2Y History** | ~730 daily bars caching — 52-week ranges, EMA50/200, historical swing structures |
 | **Autotrade** | Automated multi-symbol execution up to **5 concurrent active trade slots** |
-| **Brokers** | **MetaTrader 5 Live (`mt5_live`)** — Exclusive execution engine for institutional real trading with broker-side SL/TP. (Paper trading and legacy brokers have been removed). |
+| **Brokers** | MT5 and Delta broker adapters; use MT5 demo / Delta testnet for validation. Live execution is not enabled by this deployment baseline. |
 | **Safety & Risk** | Fail-closed security, 0.20% base risk per trade, 3.0% daily loss limit, 6.0% weekly loss limit, dynamic leverage ceilings, and emergency kill switch |
 | **Scalping** | Optional instant profit harvesting on USD profit target or percentage moves |
 
@@ -22,24 +22,35 @@ TELEGRAM_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 GEMINI_API_KEY=your_gemini_api_key
 
-# Execution & Broker Settings (Exclusive: mt5_live)
-BOT_BROKER_MODE=mt5_live
+# Testnet-first broker settings; do not use live credentials during validation.
+BOT_BROKER_MODE=delta_testnet
+TELEGRAM_ALLOWED_USER_IDS=123456789 # comma-separated numeric Telegram user IDs
 BOT_EQUITY=1000
-BOT_LEVERAGE=20
-BOT_AUTOTRADE=true
+BOT_LEVERAGE=1
+BOT_AUTOTRADE=false
+BOT_AUTOTRADE_LIVE_OPT_IN=false
 BOT_AUTOTRADE_SYMBOLS=BTCUSDT,XAUUSD
 BOT_MAX_OPEN_TRADES=5
 BOT_DATA_SOURCE=ccxt
 
-# MetaTrader 5 (MT5) Live Settings
-MT5_ENABLED=true
-MT5_MODE=live               # Exclusive Live Execution
-MT5_LOGIN=12345678          # Account number (integer)
-MT5_PASSWORD=YourPassword   # Account trading password
-MT5_SERVER=YourBroker-Live  # Broker server name (e.g., Exness-MT5Live, IC-Markets, etc.)
+# MT5 remains disabled until a demo terminal is explicitly configured.
+MT5_ENABLED=false
+MT5_MODE=demo
+MT5_LOGIN=                   # Demo account number only
+MT5_PASSWORD=               # Demo account password only
+MT5_SERVER=MetaQuotes-Demo  # Demo server only
 MT5_PATH=                   # Optional path to terminal64.exe (Windows/Wine)
 MT5_MAGIC=112233            # EA Magic identifier for order tagging
-MT5_GATEWAY_URL=            # Optional HTTP gateway for Linux/cloud execution
+MT5_GATEWAY_URL=            # Keep unset during testnet validation
+
+# Delta Exchange testnet (no live keys)
+DELTA_EXCHANGE_API_KEY=
+DELTA_EXCHANGE_API_SECRET=
+DELTA_EXCHANGE_BASE_URL=https://cdn-ind.testnet.deltaex.org
+DELTA_EXCHANGE_TESTNET=true
+DELTA_EXCHANGE_DEFAULT_LEVERAGE=1.0
+DELTA_EXCHANGE_AUTO_LEVERAGE=false
+DELTA_EXCHANGE_MAX_LEVERAGE=1.0
 
 # Strategy Profile & Micro-Scalping Settings
 BOT_PROFILE=scalp
