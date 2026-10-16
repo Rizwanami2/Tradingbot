@@ -39,6 +39,7 @@ from execution import (
     BrokerConfigurationError,
     ExecutionError,
     Order,
+    OrderStateUnknownError,
     Position,
 )
 
@@ -430,24 +431,6 @@ class DeltaBroker(Broker):
                     candidate, exc
                 )
 
-        # Cross-environment check: If testnet failed with invalid_api_key, check if key belongs to LIVE!
-        if self.is_testnet and "invalid_api_key" in str(last_exc):
-            try:
-                saved_url = self.base_url
-                self.base_url = DELTA_INDIA_LIVE_URL
-                self.load_products()
-                self.refresh_balances()
-                # Key is valid on LIVE! Auto-promote to Live
-                self.is_testnet = False
-                self._connected = True
-                logger.info(
-                    "[DeltaBroker] Auto-promoted to LIVE Delta Exchange India! (Balance: $%s, Equity: $%s)",
-                    self.balance, self.equity
-                )
-                return True
-            except Exception:
-                self.base_url = saved_url
-
         self._connected = False
         diagnostic = ""
         if "invalid_api_key" in str(last_exc):
@@ -715,7 +698,7 @@ class DeltaBroker(Broker):
     def get_positions(self) -> List[Position]:
         """Fetch active open positions with unrealized PnL and liquidation price."""
         if not self._connected:
-            return []
+            raise OrderStateUnknownError("Cannot query positions: Delta Exchange broker is disconnected.")
         try:
             res = self._request("GET", "/v2/positions/margined")
             data = res.get("result", []) if isinstance(res, dict) else []
@@ -744,7 +727,7 @@ class DeltaBroker(Broker):
             return positions
         except Exception as exc:
             logger.error("[DeltaBroker] Failed to query positions: %s", exc)
-            return []
+            raise OrderStateUnknownError(f"Delta Exchange position query failed: {exc}") from exc
 
     @property
     def positions(self) -> Dict[str, Position]:
@@ -774,7 +757,7 @@ class DeltaBroker(Broker):
     ) -> bool:
         """Close an active position using an opposite market order with reduce_only=True."""
         if not self._connected:
-            return False
+            raise OrderStateUnknownError("Cannot close position: Delta Exchange broker is disconnected.")
 
         delta_sym = resolve_delta_symbol(symbol)
         prod = self.get_product(delta_sym)
@@ -952,6 +935,8 @@ class MockDeltaBroker(Broker):
         return dict(self._positions)
 
     def get_positions(self) -> List[Position]:
+        if not self._connected:
+            raise OrderStateUnknownError("Cannot query positions: Delta Exchange broker is disconnected.")
         return list(self._positions.values())
 
     def update_mark_price(self, symbol: str, price: float) -> None:
@@ -1059,6 +1044,8 @@ class MockDeltaBroker(Broker):
         price: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        if not self._connected:
+            raise OrderStateUnknownError("Cannot close position: Delta Exchange broker is disconnected.")
         delta_sym = resolve_delta_symbol(symbol)
         for key in (delta_sym, symbol.upper()):
             if key in self._positions:
@@ -1072,8 +1059,7 @@ class MockDeltaBroker(Broker):
                     self._positions.pop(symbol.upper(), None)
                 else:
                     pos.qty -= close_qty
-                return True
-        return False
+        return True
 
     def modify_position(self, symbol: str, stop_loss: Optional[float] = None, take_profit: Optional[float] = None) -> bool:
         delta_sym = resolve_delta_symbol(symbol)

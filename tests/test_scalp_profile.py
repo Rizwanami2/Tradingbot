@@ -490,6 +490,7 @@ class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from telegram import Chat, Message, Update
         from telegram.ext import ContextTypes
+        import config
 
         self.chat = Chat(id=12345, type="private")
         self.message = MagicMock(spec=Message)
@@ -497,9 +498,21 @@ class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):
         self.update = MagicMock(spec=Update)
         self.update.effective_chat = self.chat
         self.update.message = self.message
+        self.user = MagicMock()
+        self.user.id = 12345
+        self.update.effective_user = self.user
+        self._orig_auth = set(config.TELEGRAM_ALLOWED_USER_IDS)
+        self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
+        config.TELEGRAM_ALLOWED_USER_IDS = {12345}
+        config.AUTOTRADE_LIVE_OPT_IN = True
 
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
         self.ctx.args = []
+
+    async def asyncTearDown(self):
+        import config
+        config.TELEGRAM_ALLOWED_USER_IDS = self._orig_auth
+        config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
 
     async def test_telegram_profile_command_activates_scalp(self):
         from telegram_advanced import profile_command

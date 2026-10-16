@@ -103,10 +103,16 @@ class TestWatchlistAsyncHandlers(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"], persist=False)
         main.autotrade_active = False
+        self._orig_auth = set(config.TELEGRAM_ALLOWED_USER_IDS)
+        self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
+        config.TELEGRAM_ALLOWED_USER_IDS = {12345}
+        config.AUTOTRADE_LIVE_OPT_IN = True
 
     def tearDown(self):
         config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"], persist=False)
         main.autotrade_active = False
+        config.TELEGRAM_ALLOWED_USER_IDS = self._orig_auth
+        config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
         p = Path(config._WATCHLIST_PERSIST_FILE)
         if p.is_file():
             try:
@@ -116,6 +122,7 @@ class TestWatchlistAsyncHandlers(unittest.IsolatedAsyncioTestCase):
 
     async def test_watchlist_command_btc(self):
         update = MagicMock()
+        update.effective_user.id = 12345
         update.message.reply_text = AsyncMock()
         ctx = MagicMock()
         ctx.args = ["btc"]
@@ -128,6 +135,7 @@ class TestWatchlistAsyncHandlers(unittest.IsolatedAsyncioTestCase):
 
     async def test_watchlist_command_gold(self):
         update = MagicMock()
+        update.effective_user.id = 12345
         update.message.reply_text = AsyncMock()
         ctx = MagicMock()
         ctx.args = ["gold"]
@@ -141,6 +149,7 @@ class TestWatchlistAsyncHandlers(unittest.IsolatedAsyncioTestCase):
     async def test_watchlist_command_both(self):
         config.set_autotrade_symbols(["BTCUSDT"], persist=False)
         update = MagicMock()
+        update.effective_user.id = 12345
         update.message.reply_text = AsyncMock()
         ctx = MagicMock()
         ctx.args = ["both"]
@@ -153,6 +162,7 @@ class TestWatchlistAsyncHandlers(unittest.IsolatedAsyncioTestCase):
 
     async def test_autotrade_command_btc_selection(self):
         update = MagicMock()
+        update.effective_user.id = 12345
         update.message.reply_text = AsyncMock()
         ctx = MagicMock()
         ctx.args = ["btc"]
@@ -167,6 +177,7 @@ class TestWatchlistAsyncHandlers(unittest.IsolatedAsyncioTestCase):
 
     async def test_autotrade_command_scalp_gold(self):
         update = MagicMock()
+        update.effective_user.id = 12345
         update.message.reply_text = AsyncMock()
         ctx = MagicMock()
         ctx.args = ["scalp", "gold"]
@@ -182,10 +193,12 @@ class TestWatchlistAsyncHandlers(unittest.IsolatedAsyncioTestCase):
     async def test_autotrade_callback_handler(self):
         update = MagicMock()
         query = MagicMock()
+        query.from_user.id = 12345
         query.answer = AsyncMock()
         query.edit_message_text = AsyncMock()
         query.data = "wl:btc"
         update.callback_query = query
+        update.effective_user.id = 12345
         ctx = MagicMock()
 
         await main.autotrade_callback_handler(update, ctx)

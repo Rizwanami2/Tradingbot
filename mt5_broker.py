@@ -30,6 +30,7 @@ from execution import (
     BrokerConfigurationError,
     ExecutionError,
     Order,
+    OrderStateUnknownError,
     Position,
 )
 
@@ -545,12 +546,15 @@ class MT5Broker(Broker):
 
     def get_positions(self) -> List[Position]:
         """Fetch active open positions from MT5."""
-        if self.mode == "live" and self._connected:
+        if self.mode == "live":
+            if not self._connected:
+                raise OrderStateUnknownError("Cannot query positions: MT5 Live terminal is not connected.")
             if native_mt5 is not None:
                 try:
                     raw_positions = native_mt5.positions_get()
                     if raw_positions is None:
-                        return []
+                        err = native_mt5.last_error()
+                        raise OrderStateUnknownError(f"MT5 positions_get returned None; terminal state is unknown: {err}")
                     out = []
                     for p in raw_positions:
                         side = "buy" if p.type == native_mt5.ORDER_TYPE_BUY else "sell"
@@ -568,7 +572,9 @@ class MT5Broker(Broker):
                     return out
                 except Exception as e:
                     logger.error("[MT5Broker] get_positions error: %s", e)
-                    raise ExecutionError(f"MT5 get_positions error: {e}") from e
+                    if isinstance(e, OrderStateUnknownError):
+                        raise
+                    raise OrderStateUnknownError(f"MT5 get_positions error: {e}") from e
             elif self.gateway_url:
                 try:
                     url = f"{self.gateway_url.rstrip('/')}/positions"
@@ -605,13 +611,22 @@ class MT5Broker(Broker):
         params: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Close an open position on MT5 (full or partial)."""
+        if not self._connected:
+            raise OrderStateUnknownError(
+                "Cannot close position: MT5 Live terminal is not connected. "
+                "Ensure MT5 is running on Windows with credentials configured or MT5_GATEWAY_URL is accessible."
+            )
+
         resolved_sym = resolve_mt5_symbol(symbol)
 
         if self.mode == "live" and self._connected:
             if native_mt5 is not None:
                 positions = native_mt5.positions_get(symbol=resolved_sym)
-                if not positions:
-                    return False
+                if positions is None:
+                    raise OrderStateUnknownError(f"Failed to query MT5 positions for {symbol}: terminal query returned None")
+                if len(positions) == 0:
+                    logger.info("[MT5Broker] Native MT5: no open position found for %s to close", symbol)
+                    return True
                 pos = positions[0]
                 close_side = native_mt5.ORDER_TYPE_SELL if pos.type == native_mt5.ORDER_TYPE_BUY else native_mt5.ORDER_TYPE_BUY
                 close_qty = float(qty) if qty and qty > 0 else float(pos.volume)
@@ -661,13 +676,9 @@ class MT5Broker(Broker):
                             key, close_qty, close_price, pnl
                         )
                         return True
-                return False
+                logger.info("[MT5Broker] Cloud MT5 Live: no open position found for %s to close", symbol)
+                return True
 
-        if not self._connected:
-            raise ExecutionError(
-                "MT5 Live terminal is not connected. "
-                "Ensure MT5 is running on Windows with credentials configured or MT5_GATEWAY_URL is accessible."
-            )
         return False
 
     def modify_position(self, symbol: str, stop_loss: Optional[float] = None, take_profit: Optional[float] = None) -> bool:
@@ -884,6 +895,8 @@ class MockMT5Broker(Broker):
         return dict(self._positions)
 
     def get_positions(self) -> List[Position]:
+        if not self._connected:
+            raise OrderStateUnknownError("Cannot query positions: MT5 Live terminal is not connected.")
         return list(self._positions.values())
 
     def place_order(
@@ -934,6 +947,8 @@ class MockMT5Broker(Broker):
         price: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        if not self._connected:
+            raise OrderStateUnknownError("Cannot close position: MT5 Live terminal is not connected.")
         resolved_sym = resolve_mt5_symbol(symbol)
         for key in (resolved_sym, symbol.upper()):
             if key in self._positions:
@@ -943,8 +958,7 @@ class MockMT5Broker(Broker):
                     self._positions.pop(key, None)
                 else:
                     pos.qty -= close_qty
-                return True
-        return False
+        return True
 
     def modify_position(
         self,

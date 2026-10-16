@@ -11,14 +11,28 @@ Features:
 - Position tracking, margin utilization, and real-time event dispatching
 """
 
-import time
+import json
+import logging
 import math
-from dataclasses import dataclass, field, asdict
+import os
+from pathlib import Path
+import sys
+import time
+from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from execution import OrderStateUnknownError
 from risk_manager import RiskManager
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_STATE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".runtime",
+    "execution_state.json",
+)
 
 
 class OrderStatus(Enum):
@@ -69,6 +83,18 @@ class TradeOrder:
         d = asdict(self)
         d["status"] = self.status.value
         return d
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "TradeOrder":
+        data = dict(d)
+        if "status" in data and isinstance(data["status"], str):
+            try:
+                data["status"] = OrderStatus(data["status"])
+            except ValueError:
+                data["status"] = OrderStatus.OPEN
+        known_fields = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered)
 
 
 class PositionDict(dict):
@@ -164,6 +190,7 @@ class ExecutionEngine:
         event_callback: Optional[Callable] = None,
         broker: Optional[object] = None,
         max_open_trades: Optional[int] = None,
+        state_file: Optional[str] = None,
     ):
         self.risk_manager = risk_manager
         self.event_callback = event_callback
@@ -192,7 +219,6 @@ class ExecutionEngine:
                     delta_max_leverage=getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0),
                 )
             except Exception:
-                import os
                 if "PYTEST_CURRENT_TEST" in os.environ or getattr(config, "TESTING", False):
                     b_m = str(getattr(config, "BROKER_MODE", "")).lower()
                     if "delta" in b_m:
@@ -223,10 +249,164 @@ class ExecutionEngine:
         self.scalp_sl_usd: float = 3.00
         self.scalp_tp_pct: float = 0.10
         self.scalp_sl_pct: float = 0.12
+        self.state_file: str = state_file or os.getenv("EXECUTION_STATE_FILE") or _DEFAULT_STATE_FILE
+        if state_file or (
+            "pytest" not in sys.modules
+            and not os.getenv("PYTEST_CURRENT_TEST")
+        ):
+            if os.path.isfile(self.state_file):
+                self.restore_state(self.state_file)
 
     def reset_halt(self) -> None:
         """Clear execution halt state so setups can be registered again."""
         self.execution_halted = False
+
+    def save_state(self, filepath: Optional[str] = None) -> str:
+        """Persist current active positions, pending setups, and execution state to disk."""
+        target = Path(filepath or self.state_file or _DEFAULT_STATE_FILE)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "execution_halted": self.execution_halted,
+                "order_counter": self._order_counter,
+                "active_positions": {k: pos.to_dict() for k, pos in self.active_positions.items()},
+                "pending_setups": {k: pos.to_dict() for k, pos in self.pending_setups.items()},
+                "trade_history": [pos.to_dict() for pos in self.trade_history[-50:]],
+            }
+            tmp = target.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            tmp.replace(target)
+            return str(target)
+        except Exception as e:
+            logger.warning("[ExecutionEngine] Could not save execution state to %s: %s", target, e)
+            return str(target)
+
+    def restore_state(self, filepath: Optional[str] = None) -> bool:
+        """Restore active positions, pending setups, and execution state from disk."""
+        target = Path(filepath or self.state_file or _DEFAULT_STATE_FILE)
+        if not target.is_file():
+            return False
+        try:
+            content = json.loads(target.read_text(encoding="utf-8"))
+            self.execution_halted = bool(content.get("execution_halted", False))
+            self._order_counter = int(content.get("order_counter", 0))
+
+            self.active_positions.clear()
+            for k, p_data in content.get("active_positions", {}).items():
+                order = TradeOrder.from_dict(p_data)
+                self.active_positions[k] = order
+
+            self.pending_setups.clear()
+            for k, p_data in content.get("pending_setups", {}).items():
+                order = TradeOrder.from_dict(p_data)
+                self.pending_setups[k] = order
+
+            self.trade_history = [TradeOrder.from_dict(d) for d in content.get("trade_history", [])]
+            logger.info(
+                "[ExecutionEngine] Restored state from %s: %d active positions, %d pending setups (halted=%s)",
+                target, len(self.active_positions), len(self.pending_setups), self.execution_halted
+            )
+            return True
+        except Exception as e:
+            logger.error("[ExecutionEngine] Failed to restore state from %s: %s", target, e)
+            return False
+
+    def recover_positions_from_broker(self) -> List[TradeOrder]:
+        """
+        Query broker for open positions and adopt any that are not currently tracked locally.
+        Fails closed by raising OrderStateUnknownError and halting execution if broker query fails.
+        """
+        if getattr(self, "broker", None) is None:
+            return []
+        try:
+            broker_positions = self.broker.get_positions()
+        except Exception as e:
+            self.execution_halted = True
+            logger.error("[ExecutionEngine] Position query failed during broker recovery: %s", e)
+            if isinstance(e, OrderStateUnknownError):
+                raise
+            raise OrderStateUnknownError(f"Broker position query failed during recovery: {e}") from e
+
+        adopted = []
+        for bp in broker_positions:
+            norm_sym = bp.symbol.upper()
+            existing = [p for p in self.active_positions.values() if p.symbol.upper() == norm_sym]
+            if not existing:
+                self._order_counter += 1
+                direction = "LONG" if bp.side.lower() in ("buy", "long") else "SHORT"
+                entry_px = float(bp.entry_price or 0.0)
+                sl = float(bp.stop_loss) if bp.stop_loss is not None else (entry_px * 0.98 if direction == "LONG" else entry_px * 1.02)
+                tp = float(bp.take_profit) if bp.take_profit is not None else (entry_px * 1.04 if direction == "LONG" else entry_px * 0.96)
+                order = TradeOrder(
+                    id=f"RECOVERED-{self._order_counter}",
+                    symbol=bp.symbol,
+                    direction=direction,
+                    entry_level=entry_px,
+                    stop_loss=sl,
+                    tp1=tp,
+                    tp2=tp,
+                    tp3=None,
+                    lots=float(bp.qty),
+                    size=float(bp.qty),
+                    leverage=getattr(self.risk_manager, "leverage", 1.0) or 1.0,
+                    margin_required=0.0,
+                    liquidation_price=None,
+                    risk_amount=abs(entry_px - sl) * float(bp.qty),
+                    rr_ratio=2.0,
+                    setup_reason="Broker Recovery",
+                    status=OrderStatus.OPEN,
+                    executed_price=entry_px,
+                    current_price=bp.current_price or entry_px,
+                    unrealized_pnl=float(bp.unrealized_pnl or 0.0),
+                    remaining_size=float(bp.qty),
+                    remaining_lots=float(bp.qty),
+                )
+                self.active_positions[order.id] = order
+                adopted.append(order)
+                logger.info("[ExecutionEngine] Adopted broker position: %s %s @ %s", order.direction, order.symbol, entry_px)
+
+        if adopted:
+            self.save_state()
+        return adopted
+
+    def reconcile_positions(self) -> Dict[str, Any]:
+        """
+        Reconcile local active positions with the broker's reported positions.
+        Fails closed (halts execution and raises OrderStateUnknownError) on query failure.
+        """
+        if getattr(self, "broker", None) is None:
+            return {"status": "skipped", "reason": "no broker"}
+
+        try:
+            broker_positions = self.broker.get_positions()
+        except Exception as e:
+            self.execution_halted = True
+            logger.error("[ExecutionEngine] Reconcile positions query failed: %s", e)
+            if isinstance(e, OrderStateUnknownError):
+                raise
+            raise OrderStateUnknownError(f"Reconcile failed: {e}") from e
+
+        broker_symbols = {bp.symbol.upper() for bp in broker_positions}
+        closed_locally = []
+        for k, local_pos in list(self.active_positions.items()):
+            if local_pos.symbol.upper() not in broker_symbols:
+                local_pos.status = OrderStatus.CLOSED
+                local_pos.closed_at = datetime.now(timezone.utc).isoformat()
+                local_pos.close_reason = "Reconciled with broker: closed externally"
+                self.trade_history.append(local_pos)
+                self.active_positions.pop(k, None)
+                closed_locally.append(local_pos)
+
+        adopted = self.recover_positions_from_broker()
+        self.save_state()
+        return {
+            "status": "ok",
+            "broker_count": len(broker_positions),
+            "local_count": len(self.active_positions),
+            "adopted": len(adopted),
+            "closed_locally": len(closed_locally),
+        }
 
     def _notify_trade_closed(self, pos: TradeOrder, r_mult: float) -> None:
         won = pos.realized_pnl > 0
@@ -609,6 +789,21 @@ class ExecutionEngine:
                     hit_pct = move_pct >= scalp_pct
                 hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= scalp_usd
                 if hit_usd or hit_pct:
+                    broker_ok = True
+                    if getattr(self, "broker", None):
+                        try:
+                            res = self.broker.close_position(sym, price=curr_price)
+                            if res is False:
+                                broker_ok = False
+                        except Exception as ex:
+                            broker_ok = False
+                            logger.error("[ExecutionEngine] Broker scalp close failed for %s: %s", sym, ex)
+                    if not broker_ok:
+                        self.execution_halted = True
+                        msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{sym}` [#{pos.id}]. Local position retained. Execution halted."
+                        self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                        continue
+
                     pos.exit_price = curr_price
                     pos.realized_pnl = pos.unrealized_pnl
                     pos.status = OrderStatus.CLOSED
@@ -621,11 +816,7 @@ class ExecutionEngine:
                     self._notify_brain_close(pos, 0.5)
                     self.trade_history.append(pos)
                     self.active_positions.pop(pos.id, None)
-                    if getattr(self, "broker", None):
-                        try:
-                            self.broker.close_position(sym, price=curr_price)
-                        except Exception:
-                            pass
+                    self.save_state()
                     msg = (
                         f"⚡ **SCALP AUTO-CLOSE** `{sym}` [#{pos.id}]\n"
                         f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
@@ -643,6 +834,21 @@ class ExecutionEngine:
                     hit_sl_pct = move_pct >= scalp_sl_pct
                 hit_sl_usd = scalp_sl_usd > 0 and pos.unrealized_pnl <= -scalp_sl_usd
                 if hit_sl_usd or hit_sl_pct:
+                    broker_ok = True
+                    if getattr(self, "broker", None):
+                        try:
+                            res = self.broker.close_position(sym, price=curr_price)
+                            if res is False:
+                                broker_ok = False
+                        except Exception as ex:
+                            broker_ok = False
+                            logger.error("[ExecutionEngine] Broker scalp SL cut failed for %s: %s", sym, ex)
+                    if not broker_ok:
+                        self.execution_halted = True
+                        msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{sym}` [#{pos.id}]. Local position retained. Execution halted."
+                        self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                        continue
+
                     pos.exit_price = curr_price
                     pos.realized_pnl = pos.unrealized_pnl
                     pos.status = OrderStatus.CLOSED
@@ -655,11 +861,7 @@ class ExecutionEngine:
                     self._notify_brain_close(pos, -1.0)
                     self.trade_history.append(pos)
                     self.active_positions.pop(pos.id, None)
-                    if getattr(self, "broker", None):
-                        try:
-                            self.broker.close_position(sym, price=curr_price)
-                        except Exception:
-                            pass
+                    self.save_state()
                     msg = (
                         f"🛡️ **SCALP STOP LOSS CUT** `{sym}` [#{pos.id}]\n"
                         f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
@@ -868,18 +1070,27 @@ class ExecutionEngine:
 
             if stop_hit:
                 exit_price = pos.stop_loss
+                broker_ok = True
+                if getattr(self, "broker", None):
+                    try:
+                        res = self.broker.close_position(pos.symbol, price=exit_price)
+                        if res is False:
+                            broker_ok = False
+                    except Exception as ex:
+                        broker_ok = False
+                        logger.error("[ExecutionEngine] Broker exit close failed for %s: %s", pos.symbol, ex)
+                if not broker_ok:
+                    self.execution_halted = True
+                    msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{pos.symbol}` [#{pos.id}]. Local position retained. Execution halted."
+                    self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                    continue
+
                 final_pnl = (exit_price - entry) * pos.remaining_size if is_long else (entry - exit_price) * pos.remaining_size
                 pos.realized_pnl += final_pnl
                 pos.exit_price = exit_price
                 pos.status = OrderStatus.CLOSED
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.close_reason = "Stop Loss / Break-Even Exit"
-
-                if getattr(self, "broker", None):
-                    try:
-                        self.broker.close_position(pos.symbol, price=exit_price)
-                    except Exception as ex:
-                        print(f"[ExecutionEngine] Broker exit close: {ex}")
 
                 r_mult = pos.realized_pnl / (initial_risk * pos.size) if (initial_risk * pos.size) > 0 else 0.0
                 try:
@@ -890,6 +1101,7 @@ class ExecutionEngine:
                 self._notify_brain_close(pos, r_mult)
                 self.trade_history.append(pos)
                 self.active_positions.pop(pos.id, None)
+                self.save_state()
 
                 ev = {
                     "event": "TRADE_CLOSED",
@@ -928,6 +1140,24 @@ class ExecutionEngine:
         for pos in list(matching):
             is_long = pos.direction == "LONG"
             entry = pos.executed_price or pos.entry_level
+
+            # If broker attached, attempt broker close first
+            if getattr(self, "broker", None):
+                try:
+                    res = self.broker.close_position(pos.symbol, price=current_price)
+                    if res is False:
+                        self.execution_halted = True
+                        msg = f"🚨 **CRITICAL: BROKER CLOSE REJECTED** for `{pos.symbol}` [#{pos.id}]. Local position retained. Execution halted."
+                        self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                        raise OrderStateUnknownError(f"Broker rejected close position for {pos.symbol}")
+                except Exception as ex:
+                    self.execution_halted = True
+                    msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{pos.symbol}` [#{pos.id}]: {ex}. Local position retained. Execution halted."
+                    self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                    if isinstance(ex, OrderStateUnknownError):
+                        raise
+                    raise OrderStateUnknownError(f"Broker close failed for {pos.symbol}: {ex}") from ex
+
             final_pnl = (current_price - entry) * pos.remaining_size if is_long else (entry - current_price) * pos.remaining_size
 
             pos.realized_pnl += final_pnl
@@ -946,12 +1176,7 @@ class ExecutionEngine:
             self._notify_brain_close(pos, r_mult)
             self.trade_history.append(pos)
             self.active_positions.pop(pos.id, None)
-
-            if getattr(self, "broker", None):
-                try:
-                    self.broker.close_position(pos.symbol, price=current_price)
-                except Exception as ex:
-                    print(f"[ExecutionEngine] Broker manual close: {ex}")
+            self.save_state()
 
             msg = (
                 f"⏹️ **MANUAL CLOSE EXECUTED** ({pos.symbol} [#{pos.id}])\n"

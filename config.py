@@ -6,7 +6,7 @@ Loads configuration from environment variables and an optional .env file.
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Set
 
 
 def load_dotenv(env_path: str = ".env"):
@@ -51,6 +51,25 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or ""
 
+
+def _parse_user_ids(val: Optional[str]) -> Set[int]:
+    if not val:
+        return set()
+    result = set()
+    for item in str(val).split(","):
+        item = item.strip()
+        if item:
+            try:
+                result.add(int(item))
+            except (ValueError, TypeError):
+                continue
+    return result
+
+
+TELEGRAM_ALLOWED_USER_IDS: Set[int] = _parse_user_ids(
+    os.getenv("TELEGRAM_ALLOWED_USER_IDS") or os.getenv("TELEGRAM_ALLOWED_USERS")
+)
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -94,7 +113,8 @@ BROKER_MODE = os.getenv("BROKER_MODE") or os.getenv("BOT_BROKER_MODE") or "mt5_l
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.20)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
-AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "true").lower() in ("true", "1", "yes", "on")
+AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false").lower() in ("true", "1", "yes", "on")
+AUTOTRADE_LIVE_OPT_IN = os.getenv("BOT_AUTOTRADE_LIVE_OPT_IN", "false").lower() in ("true", "1", "yes", "on")
 
 
 STATUS_FILE = os.getenv(

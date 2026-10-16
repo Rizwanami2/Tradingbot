@@ -43,9 +43,19 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.update = MagicMock(spec=Update)
         self.update.effective_chat = self.chat
         self.update.message = self.message
+        self.user = MagicMock()
+        self.user.id = 999
+        self.update.effective_user = self.user
+        self._orig_auth = set(config.TELEGRAM_ALLOWED_USER_IDS)
+        self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
+        config.TELEGRAM_ALLOWED_USER_IDS = {999}
 
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
         self.ctx.args = []
+
+    async def asyncTearDown(self):
+        config.TELEGRAM_ALLOWED_USER_IDS = self._orig_auth
+        config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
 
     async def test_help_command_full_catalog(self):
         self.ctx.args = []
@@ -337,15 +347,73 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertTrue("Positions" in text or "Active" in text or "Open" in text)
 
     async def test_autotrade_command(self):
+        # 1. In LIVE mode without opt-in, autotrade on is blocked with safety warning
         self.ctx.args = ["on"]
+        config.AUTOTRADE_LIVE_OPT_IN = False
+        await autotrade_command(self.update, self.ctx)
+        text_warn = self.message.reply_text.call_args[0][0]
+        self.assertIn("Live Trading Protection", text_warn)
+
+        # 2. In LIVE mode with confirm, autotrade activates
+        self.ctx.args = ["on", "confirm"]
         await autotrade_command(self.update, self.ctx)
         text = self.message.reply_text.call_args[0][0]
         self.assertIn("Autotrade ACTIVATED", text)
 
+        # 3. Autotrade off pauses
         self.ctx.args = ["off"]
         await autotrade_command(self.update, self.ctx)
         text_off = self.message.reply_text.call_args[0][0]
         self.assertIn("Autotrade PAUSED", text_off)
+
+        # 4. With config.AUTOTRADE_LIVE_OPT_IN = True, activates without confirm
+        config.AUTOTRADE_LIVE_OPT_IN = True
+        self.ctx.args = ["on"]
+        await autotrade_command(self.update, self.ctx)
+        text_opt = self.message.reply_text.call_args[0][0]
+        self.assertIn("Autotrade ACTIVATED", text_opt)
+        config.AUTOTRADE_LIVE_OPT_IN = False
+
+    async def test_telegram_control_authorization(self):
+        # Unauthorized user (ID 888 not in allowed {999})
+        self.user.id = 888
+        config.TELEGRAM_ALLOWED_USER_IDS = {999}
+
+        # Control commands must be rejected
+        self.ctx.args = ["on", "confirm"]
+        await autotrade_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Access Denied", text)
+
+        self.ctx.args = ["all"]
+        await close_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Access Denied", text)
+
+        self.ctx.args = ["BTCUSDT"]
+        await cancel_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Access Denied", text)
+
+        self.ctx.args = ["50"]
+        await leverage_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Access Denied", text)
+
+        self.ctx.args = ["all"]
+        await resetrisk_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Access Denied", text)
+
+    async def test_telegram_control_authorization_fail_closed(self):
+        # Empty allowlist must fail closed even for any user
+        self.user.id = 999
+        config.TELEGRAM_ALLOWED_USER_IDS = set()
+
+        self.ctx.args = ["on", "confirm"]
+        await autotrade_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Access Denied", text)
 
     async def test_fp4_commands(self):
         from telegram_feature_pack_v4 import digest_command, export_command, setups_command, abooks_command, heal_command

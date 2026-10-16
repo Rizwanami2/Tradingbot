@@ -228,9 +228,17 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         self.update = MagicMock(spec=Update)
         self.update.effective_chat = self.chat
         self.update.message = self.message
+        self.user = MagicMock()
+        self.user.id = 12345
+        self.update.effective_user = self.user
+        self._orig_auth = set(config.TELEGRAM_ALLOWED_USER_IDS)
+        config.TELEGRAM_ALLOWED_USER_IDS = {12345}
 
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
         self.ctx.args = []
+
+    async def asyncTearDown(self):
+        config.TELEGRAM_ALLOWED_USER_IDS = self._orig_auth
 
     async def test_mt5_command_status_dashboard(self):
         self.ctx.args = ["status"]
@@ -296,7 +304,9 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         query.answer = AsyncMock()
         query.edit_message_text = AsyncMock()
         query.message = self.message
+        query.from_user = self.user
         self.update.callback_query = query
+        self.update.effective_user = self.user
 
         # 1. Switch to paper callback
         query.data = "mt5:switch_paper"
