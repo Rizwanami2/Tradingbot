@@ -354,7 +354,13 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
     if not sig or not engine:
         return False, "No signal or engine"
     if sig.get("vetoed"):
-        return False, f"Paper execution blocked by Autonomous Learner: {sig.get('veto_reason', 'Vetoed')}"
+        return False, f"Trade execution blocked by Autonomous Learner: {sig.get('veto_reason', 'Vetoed')}"
+    if getattr(engine, "execution_halted", False):
+        return False, (
+            "Execution halted after uncertain broker state. "
+            "Reconcile broker positions, then resume with `/autotrade on` or `/risk restart`. "
+            "Verify live MT5 connection with `/mt5 status`."
+        )
     try:
         order = engine.register_setup(sig, reason=sig.get("reason", "Multi-Agent Consensus"))
     except Exception as e:
@@ -369,5 +375,5 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
         return True, f"Setup registered (fill pending): {e}"
     msgs = [ev.get("message") for ev in events if ev.get("message")]
     if order.symbol in getattr(engine, "active_positions", {}):
-        return True, msgs[-1] if msgs else f"PAPER filled {order.symbol} {order.direction}"
-    return True, msgs[-1] if msgs else f"Setup pending {order.symbol} @ {order.entry_level}"
+        return True, msgs[-1] if msgs else f"Trade filled: {order.symbol} {order.direction}"
+    return True, msgs[-1] if msgs else f"Setup pending: {order.symbol} @ {order.entry_level}"

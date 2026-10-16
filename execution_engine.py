@@ -293,7 +293,9 @@ class ExecutionEngine:
         Otherwise, it stays in PENDING state until price reaches the entry level.
         """
         if self.execution_halted:
-            raise RuntimeError("Execution halted after uncertain broker state; reconcile positions before re-enabling.")
+            raise RuntimeError(
+                "Execution halted after uncertain broker state; reconcile positions, then run /autotrade on or /risk restart before re-enabling."
+            )
         symbol = sig["symbol"].upper()
         import config
         if hasattr(config, "is_trading_allowed") and not config.is_trading_allowed(symbol):

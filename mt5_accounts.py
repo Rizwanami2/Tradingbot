@@ -393,6 +393,8 @@ def switch_broker_mode(
         # Attach live broker
         if engine is not None:
             engine.broker = live_broker
+            if hasattr(engine, "reset_halt"):
+                engine.reset_halt()
         cfg.BROKER_MODE = "mt5_live"
         cfg.MT5_MODE = "live"
         cfg.MT5_ENABLED = True
