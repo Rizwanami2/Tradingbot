@@ -783,7 +783,7 @@ class DeltaBroker(Broker):
             return False
 
         pid = int(prod["id"])
-        open_positions = [p for p in self.get_positions() if p.symbol == delta_sym]
+        open_positions = [p for p in self.get_positions() if p.symbol == delta_sym or resolve_delta_symbol(p.symbol) == delta_sym]
         if not open_positions:
             logger.info("[DeltaBroker] No open position found for %s to close", delta_sym)
             return True

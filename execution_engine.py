@@ -712,6 +712,11 @@ class ExecutionEngine:
                 stage = 2 if "full" in be_reason.lower() else 1
                 if stage > pos.be_stage:
                     pos.be_stage = stage
+                    if getattr(self, "broker", None) and hasattr(self.broker, "modify_position"):
+                        try:
+                            self.broker.modify_position(pos.symbol, stop_loss=be_stop)
+                        except Exception:
+                            pass
                     ev = {
                         "event": "AUTO_BE_LOCKED",
                         "order": pos,
@@ -751,6 +756,11 @@ class ExecutionEngine:
                         self.broker.close_position(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp1)
                     except Exception as ex:
                         print(f"[ExecutionEngine] Broker TP1 close: {ex}")
+                    if hasattr(self.broker, "modify_position"):
+                        try:
+                            self.broker.modify_position(pos.symbol, stop_loss=pos.stop_loss, take_profit=pos.tp2)
+                        except Exception:
+                            pass
 
                 ev = {
                     "event": "TP1_PARTIAL_TAKEN",
@@ -786,6 +796,11 @@ class ExecutionEngine:
                     if trail_ev:
                         events.append(trail_ev)
                         self._dispatch_event(trail_ev["event"], pos, trail_ev["message"])
+                        if getattr(self, "broker", None) and hasattr(self.broker, "modify_position"):
+                            try:
+                                self.broker.modify_position(pos.symbol, stop_loss=pos.stop_loss)
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 
@@ -811,6 +826,11 @@ class ExecutionEngine:
                         self.broker.close_position(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp2)
                     except Exception as ex:
                         print(f"[ExecutionEngine] Broker TP2 close: {ex}")
+                    if hasattr(self.broker, "modify_position"):
+                        try:
+                            self.broker.modify_position(pos.symbol, stop_loss=pos.stop_loss)
+                        except Exception:
+                            pass
 
                 ev = {
                     "event": "TP2_PARTIAL_TAKEN",

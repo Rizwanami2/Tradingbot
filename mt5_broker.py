@@ -946,6 +946,23 @@ class MockMT5Broker(Broker):
                 return True
         return False
 
+    def modify_position(
+        self,
+        symbol: str,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+    ) -> bool:
+        resolved_sym = resolve_mt5_symbol(symbol)
+        for key in (resolved_sym, symbol.upper()):
+            if key in self._positions:
+                pos = self._positions[key]
+                if stop_loss is not None:
+                    pos.stop_loss = float(stop_loss)
+                if take_profit is not None:
+                    pos.take_profit = float(take_profit)
+                return True
+        return False
+
     def get_account_info(self) -> MT5AccountInfo:
         return MT5AccountInfo(
             login=self.login,
