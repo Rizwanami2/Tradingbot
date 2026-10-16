@@ -61,6 +61,9 @@ class MT5AccountInfo:
     leverage: float
     currency: str = "USD"
     company: str = "MetaQuotes"
+    trade_allowed: bool = True
+    trade_expert: bool = True
+    terminal_trade_allowed: bool = True
 
     @property
     def margin_level(self) -> float:
@@ -69,6 +72,14 @@ class MT5AccountInfo:
     def summary(self) -> str:
         icon = "🟢" if self.trade_mode == "live" else "⚪"
         conn_icon = "📶" if self.connected else "⚠️"
+        warnings = []
+        if not self.terminal_trade_allowed:
+            warnings.append("⚠️ **MT5 Algo Trading is DISABLED**: Click 'Algo Trading' button in MT5 toolbar to turn it green.")
+        if not self.trade_allowed:
+            warnings.append("⚠️ **Account Trading is DISABLED**: Check if logged in with read-only Investor password.")
+        if not self.trade_expert:
+            warnings.append("⚠️ **Automated/EA Trading is DISABLED by Broker** on this account.")
+        warn_block = ("\n\n" + "\n".join(warnings)) if warnings else ""
         return (
             f"🏦 **MT5 Account Info** ({icon} `{self.trade_mode.upper()}`)\n"
             f"• **Status:** {conn_icon} {'Connected' if self.connected else 'Disconnected'}\n"
@@ -77,6 +88,7 @@ class MT5AccountInfo:
             f"• **Margin:** `${self.margin:,.2f}` | **Free Margin:** `${self.free_margin:,.2f}`\n"
             f"• **Margin Level:** `{self.margin_level_pct:.1f}%` | **Leverage:** `{self.leverage:.0f}x`\n"
             f"• **Currency:** `{self.currency}` | **Broker:** `{self.company}`"
+            f"{warn_block}"
         )
 
 
@@ -198,6 +210,9 @@ class MT5Broker(Broker):
         self.company = "MetaQuotes Software Corp."
         self._connected = False
         self._last_error = ""
+        self._term_trade_allowed: bool = True
+        self._acc_trade_allowed: bool = True
+        self._acc_trade_expert: bool = True
 
         # Simulated Paper State
         self._sim_positions: Dict[str, Position] = {}
@@ -277,11 +292,22 @@ class MT5Broker(Broker):
                         err = native_mt5.last_error()
                         raise ConnectionError(f"MT5 login failed: {err}")
                     acc = native_mt5.account_info()
+                    term = native_mt5.terminal_info()
                     if acc:
                         self.balance = float(acc.balance)
                         self.leverage = float(acc.leverage)
                         self.currency = str(acc.currency)
                         self.company = str(acc.company)
+                        self._acc_trade_allowed = bool(getattr(acc, "trade_allowed", True))
+                        self._acc_trade_expert = bool(getattr(acc, "trade_expert", True))
+                    if term:
+                        self._term_trade_allowed = bool(getattr(term, "trade_allowed", True))
+                    if not self._term_trade_allowed:
+                        logger.warning("[MT5Broker] WARNING: Algo Trading is DISABLED in MT5 terminal toolbar.")
+                    if not self._acc_trade_allowed:
+                        logger.warning("[MT5Broker] WARNING: Trading is DISABLED for MT5 account #%s (investor password?)", self.login)
+                    if not self._acc_trade_expert:
+                        logger.warning("[MT5Broker] WARNING: Automated/EA trading is DISABLED by broker for MT5 account #%s", self.login)
                     self._connected = True
                     logger.info("[MT5Broker] Connected to live MT5 account #%s on %s", self.login, self.server)
                     return True
@@ -315,6 +341,12 @@ class MT5Broker(Broker):
                             self.currency = str(res["currency"])
                         if "company" in res:
                             self.company = str(res["company"])
+                        if "trade_allowed" in res:
+                            self._acc_trade_allowed = bool(res["trade_allowed"])
+                        if "trade_expert" in res:
+                            self._acc_trade_expert = bool(res["trade_expert"])
+                        if "terminal_trade_allowed" in res:
+                            self._term_trade_allowed = bool(res["terminal_trade_allowed"])
                         logger.info("[MT5Broker] Connected to MT5 REST Gateway at %s for account #%s on %s",
                                     self.gateway_url, self.login, self.server)
                         return True
@@ -375,30 +407,122 @@ class MT5Broker(Broker):
 
         if self.mode == "live" and self._connected:
             if native_mt5 is not None:
-                # LIVE MT5 ORDER DISPATCH (Native Windows)
-                order_type_mt5 = native_mt5.ORDER_TYPE_BUY if side_norm == "buy" else native_mt5.ORDER_TYPE_SELL
-                req = {
-                    "action": native_mt5.TRADE_ACTION_DEAL,
-                    "symbol": resolved_sym,
-                    "volume": float(qty),
-                    "type": order_type_mt5,
-                    "price": fill_price,
-                    "sl": float(stop_loss) if stop_loss else 0.0,
-                    "tp": float(take_profit) if take_profit else 0.0,
-                    "deviation": 20,
-                    "magic": self.magic,
-                    "comment": "TradingBot MT5",
-                    "type_time": native_mt5.ORDER_TIME_GTC,
-                    "type_filling": native_mt5.ORDER_FILLING_IOC,
-                }
-                if params:
-                    req.update(params)
+                # 0. Pre-flight Terminal & Account Trading Permission Checks
+                term = native_mt5.terminal_info()
+                if term and not getattr(term, "trade_allowed", True):
+                    raise ExecutionError(
+                        "MT5 Algo Trading is DISABLED in MetaTrader 5 terminal toolbar! "
+                        "Click the 'Algo Trading' button in MT5 toolbar to turn it green, "
+                        "and verify Tools -> Options -> Expert Advisors -> 'Allow Algorithmic Trading' is checked."
+                    )
+                acc = native_mt5.account_info()
+                if acc and not getattr(acc, "trade_allowed", True):
+                    raise ExecutionError(
+                        f"Trading is DISABLED for MT5 account #{self.login}. "
+                        "If you logged in with an Investor (read-only) password, please log in with your Master/Trading password."
+                    )
+                if acc and not getattr(acc, "trade_expert", True):
+                    raise ExecutionError(
+                        f"Broker has DISABLED automated/EA trading for account #{self.login}."
+                    )
 
-                res = native_mt5.order_send(req)
+                # 1. Resolve & Select Symbol in Market Watch (with suffix fallbacks)
+                resolved_sym = resolve_mt5_symbol(symbol)
+                sym_selected = native_mt5.symbol_select(resolved_sym, True)
+                if not sym_selected:
+                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                        cand = f"{resolved_sym}{suf}"
+                        if native_mt5.symbol_select(cand, True):
+                            resolved_sym = cand
+                            sym_selected = True
+                            break
+
+                sym_info = native_mt5.symbol_info(resolved_sym)
+                if sym_info is None:
+                    raise ExecutionError(f"Symbol '{resolved_sym}' not found in MT5 Market Watch.")
+
+                trade_mode = getattr(sym_info, "trade_mode", 4)
+                if trade_mode == getattr(native_mt5, "SYMBOL_TRADE_MODE_DISABLED", 0):
+                    raise ExecutionError(
+                        f"Trading for '{resolved_sym}' is currently DISABLED by the broker (market closed or weekend)."
+                    )
+
+                # 2. Live Tick Price for Market Orders
+                tick = native_mt5.symbol_info_tick(resolved_sym)
+                order_type_mt5 = native_mt5.ORDER_TYPE_BUY if side_norm == "buy" else native_mt5.ORDER_TYPE_SELL
+                if tick is not None:
+                    fill_price = float(tick.ask) if side_norm == "buy" else float(tick.bid)
+
+                # 3. Lot sizing / volume step normalization
+                v_min = float(getattr(sym_info, "volume_min", 0.01) or 0.01)
+                v_max = float(getattr(sym_info, "volume_max", 100.0) or 100.0)
+                v_step = float(getattr(sym_info, "volume_step", 0.01) or 0.01)
+                order_vol = max(v_min, min(v_max, float(qty)))
+                if v_step > 0:
+                    order_vol = round(round(order_vol / v_step) * v_step, 4)
+
+                # 4. Dynamic Filling Mode Auto-Negotiation (IOC / FOK / RETURN)
+                filling_flags = getattr(sym_info, "filling_mode", 0) or 0
+                filling_modes_to_try = []
+                if filling_flags & 2:
+                    filling_modes_to_try.append(getattr(native_mt5, "ORDER_FILLING_IOC", 1))
+                if filling_flags & 1:
+                    filling_modes_to_try.append(getattr(native_mt5, "ORDER_FILLING_FOK", 0))
+                filling_modes_to_try.append(getattr(native_mt5, "ORDER_FILLING_RETURN", 2))
+                for m in (getattr(native_mt5, "ORDER_FILLING_IOC", 1), getattr(native_mt5, "ORDER_FILLING_FOK", 0)):
+                    if m not in filling_modes_to_try:
+                        filling_modes_to_try.append(m)
+
+                res = None
+                last_err = ""
+                for fill_mode in filling_modes_to_try:
+                    req = {
+                        "action": native_mt5.TRADE_ACTION_DEAL,
+                        "symbol": resolved_sym,
+                        "volume": order_vol,
+                        "type": order_type_mt5,
+                        "price": fill_price,
+                        "sl": float(stop_loss) if stop_loss else 0.0,
+                        "tp": float(take_profit) if take_profit else 0.0,
+                        "deviation": 50,
+                        "magic": self.magic,
+                        "comment": "TradingBot MT5",
+                        "type_time": native_mt5.ORDER_TIME_GTC,
+                        "type_filling": fill_mode,
+                    }
+                    if params:
+                        req.update(params)
+
+                    res = native_mt5.order_send(req)
+                    if res is not None and res.retcode == native_mt5.TRADE_RETCODE_DONE:
+                        break
+                    last_ret = getattr(res, "retcode", "None")
+                    last_comment = getattr(res, "comment", native_mt5.last_error())
+                    last_err = f"retcode={last_ret} comment={last_comment}"
+                    if last_ret not in (
+                        getattr(native_mt5, "TRADE_RETCODE_UNSUPPORTED_FILLING_MODE", 10030),
+                        getattr(native_mt5, "TRADE_RETCODE_INVALID_REQUEST", 10013),
+                        10030,
+                        10013,
+                    ):
+                        break
+
                 if res is None or res.retcode != native_mt5.TRADE_RETCODE_DONE:
-                    ret = getattr(res, "retcode", "None")
-                    comment = getattr(res, "comment", native_mt5.last_error())
-                    raise ExecutionError(f"MT5 order_send failed: retcode={ret} comment={comment}")
+                    diag_help = ""
+                    ret_int = getattr(res, "retcode", None)
+                    if ret_int == 10027:
+                        diag_help = " -> Algo Trading button is turned OFF in MT5 terminal toolbar."
+                    elif ret_int == 10026:
+                        diag_help = " -> Trading is disabled on account (check if Investor password was used)."
+                    elif ret_int == 10014:
+                        diag_help = f" -> Invalid volume (allowed: min={v_min}, max={v_max}, step={v_step})."
+                    elif ret_int == 10018:
+                        diag_help = " -> Market is closed for this symbol."
+                    elif ret_int == 10019:
+                        diag_help = " -> Insufficient margin / free balance in account."
+                    elif ret_int == 10030:
+                        diag_help = " -> Unsupported filling mode by broker."
+                    raise ExecutionError(f"MT5 order_send failed: {last_err}{diag_help}")
 
                 ticket_id = str(res.order)
                 order = Order(
@@ -406,13 +530,13 @@ class MT5Broker(Broker):
                     symbol=resolved_sym,
                     side=side_norm,
                     order_type=order_type,
-                    qty=qty,
+                    qty=order_vol,
                     price=fill_price,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
                     status="filled",
                     filled_price=float(res.price or fill_price),
-                    filled_qty=float(res.volume or qty),
+                    filled_qty=float(res.volume or order_vol),
                 )
                 return order
 
@@ -579,22 +703,55 @@ class MT5Broker(Broker):
                 pos = positions[0]
                 close_side = native_mt5.ORDER_TYPE_SELL if pos.type == native_mt5.ORDER_TYPE_BUY else native_mt5.ORDER_TYPE_BUY
                 close_qty = float(qty) if qty and qty > 0 else float(pos.volume)
-                close_price = float(price) if price and price > 0 else float(pos.price_current)
+                
+                # Fetch fresh tick for closing deal
+                tick = native_mt5.symbol_info_tick(resolved_sym)
+                if tick is not None:
+                    close_price = float(tick.bid) if close_side == native_mt5.ORDER_TYPE_SELL else float(tick.ask)
+                else:
+                    close_price = float(price) if price and price > 0 else float(pos.price_current)
 
-                req = {
-                    "action": native_mt5.TRADE_ACTION_DEAL,
-                    "position": pos.ticket,
-                    "symbol": resolved_sym,
-                    "volume": close_qty,
-                    "type": close_side,
-                    "price": close_price,
-                    "deviation": 20,
-                    "magic": self.magic,
-                    "comment": "Close TradingBot MT5",
-                    "type_time": native_mt5.ORDER_TIME_GTC,
-                    "type_filling": native_mt5.ORDER_FILLING_IOC,
-                }
-                res = native_mt5.order_send(req)
+                sym_info = native_mt5.symbol_info(resolved_sym)
+                filling_flags = getattr(sym_info, "filling_mode", 0) or 0
+                filling_modes_to_try = []
+                if filling_flags & 2:
+                    filling_modes_to_try.append(getattr(native_mt5, "ORDER_FILLING_IOC", 1))
+                if filling_flags & 1:
+                    filling_modes_to_try.append(getattr(native_mt5, "ORDER_FILLING_FOK", 0))
+                filling_modes_to_try.append(getattr(native_mt5, "ORDER_FILLING_RETURN", 2))
+                for m in (getattr(native_mt5, "ORDER_FILLING_IOC", 1), getattr(native_mt5, "ORDER_FILLING_FOK", 0)):
+                    if m not in filling_modes_to_try:
+                        filling_modes_to_try.append(m)
+
+                res = None
+                for fill_mode in filling_modes_to_try:
+                    req = {
+                        "action": native_mt5.TRADE_ACTION_DEAL,
+                        "position": pos.ticket,
+                        "symbol": resolved_sym,
+                        "volume": close_qty,
+                        "type": close_side,
+                        "price": close_price,
+                        "deviation": 50,
+                        "magic": self.magic,
+                        "comment": "Close TradingBot MT5",
+                        "type_time": native_mt5.ORDER_TIME_GTC,
+                        "type_filling": fill_mode,
+                    }
+                    if params:
+                        req.update(params)
+                    res = native_mt5.order_send(req)
+                    if res and res.retcode == native_mt5.TRADE_RETCODE_DONE:
+                        break
+                    last_ret = getattr(res, "retcode", None)
+                    if last_ret not in (
+                        getattr(native_mt5, "TRADE_RETCODE_UNSUPPORTED_FILLING_MODE", 10030),
+                        getattr(native_mt5, "TRADE_RETCODE_INVALID_REQUEST", 10013),
+                        10030,
+                        10013,
+                    ):
+                        break
+
                 return bool(res and res.retcode == native_mt5.TRADE_RETCODE_DONE)
             elif self.gateway_url:
                 url = f"{self.gateway_url.rstrip('/')}/close"
@@ -707,10 +864,17 @@ class MT5Broker(Broker):
             if native_mt5 is not None:
                 try:
                     acc = native_mt5.account_info()
+                    term = native_mt5.terminal_info()
                     if acc:
                         margin = float(acc.margin or 0.0)
                         equity = float(acc.equity or 0.0)
                         lvl = (equity / margin * 100.0) if margin > 0 else 0.0
+                        term_allowed = bool(getattr(term, "trade_allowed", True)) if term else True
+                        acc_allowed = bool(getattr(acc, "trade_allowed", True))
+                        expert_allowed = bool(getattr(acc, "trade_expert", True))
+                        self._term_trade_allowed = term_allowed
+                        self._acc_trade_allowed = acc_allowed
+                        self._acc_trade_expert = expert_allowed
                         return MT5AccountInfo(
                             login=int(acc.login),
                             server=str(acc.server),
@@ -724,6 +888,9 @@ class MT5Broker(Broker):
                             leverage=float(acc.leverage or 20.0),
                             currency=str(acc.currency or "USD"),
                             company=str(acc.company or "MetaQuotes"),
+                            trade_allowed=acc_allowed,
+                            trade_expert=expert_allowed,
+                            terminal_trade_allowed=term_allowed,
                         )
                 except Exception as e:
                     logger.error("[MT5Broker] Failed to fetch account_info: %s", e)
@@ -738,6 +905,12 @@ class MT5Broker(Broker):
                     self._cached_margin = margin
                     lvl = (equity / margin * 100.0) if margin > 0 else 0.0
                     lvl_pct = float(res.get("margin_level_pct") or res.get("margin_level") or lvl)
+                    trade_allowed = bool(res.get("trade_allowed", self._acc_trade_allowed))
+                    trade_expert = bool(res.get("trade_expert", self._acc_trade_expert))
+                    terminal_trade_allowed = bool(res.get("terminal_trade_allowed", self._term_trade_allowed))
+                    self._acc_trade_allowed = trade_allowed
+                    self._acc_trade_expert = trade_expert
+                    self._term_trade_allowed = terminal_trade_allowed
                     return MT5AccountInfo(
                         login=int(res.get("login", self.login)),
                         server=str(res.get("server", self.server)),
@@ -751,6 +924,9 @@ class MT5Broker(Broker):
                         leverage=float(res.get("leverage", self.leverage) or self.leverage),
                         currency=str(res.get("currency", self.currency)),
                         company=str(res.get("company", self.company)),
+                        trade_allowed=trade_allowed,
+                        trade_expert=trade_expert,
+                        terminal_trade_allowed=terminal_trade_allowed,
                     )
                 except Exception as e:
                     logger.error("[MT5Broker] Gateway get_account_info error: %s", e)
@@ -772,6 +948,9 @@ class MT5Broker(Broker):
             leverage=self.leverage,
             currency=self.currency,
             company=self.company,
+            trade_allowed=self._acc_trade_allowed,
+            trade_expert=self._acc_trade_expert,
+            terminal_trade_allowed=self._term_trade_allowed,
         )
 
     def get_account_summary(self) -> Dict[str, Any]:
@@ -789,7 +968,111 @@ class MT5Broker(Broker):
             "free_margin": info.free_margin,
             "unrealized_pnl": round(info.equity - info.balance, 2),
             "open_positions": len(self.get_positions()),
+            "trade_allowed": info.trade_allowed,
+            "trade_expert": info.trade_expert,
+            "terminal_trade_allowed": info.terminal_trade_allowed,
         }
+
+    def check_trading_readiness(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Comprehensive pre-flight verification of MT5 trading permissions.
+        Verifies:
+        1. Terminal connection & Algo Trading enabled status
+        2. Account trading permission & investor password check
+        3. Broker EA permission
+        4. Symbol resolution and market status for symbols
+        """
+        symbols_to_check = symbols or ["XAUUSD", "BTCUSD"]
+        diag: Dict[str, Any] = {
+            "connected": self._connected,
+            "mode": self.mode,
+            "login": self.login,
+            "server": self.server,
+            "terminal_algo_trading": True,
+            "account_trading_allowed": True,
+            "broker_expert_allowed": True,
+            "symbols": {},
+            "ready": True,
+            "blockers": [],
+            "warnings": [],
+        }
+
+        if self.mode == "live" and self._connected:
+            if native_mt5 is not None:
+                term = native_mt5.terminal_info()
+                if term:
+                    diag["terminal_algo_trading"] = bool(getattr(term, "trade_allowed", True))
+                    if not diag["terminal_algo_trading"]:
+                        diag["ready"] = False
+                        diag["blockers"].append(
+                            "MT5 Algo Trading is DISABLED in MetaTrader 5 toolbar. Click the 'Algo Trading' button in MT5 to turn it GREEN."
+                        )
+                acc = native_mt5.account_info()
+                if acc:
+                    diag["account_trading_allowed"] = bool(getattr(acc, "trade_allowed", True))
+                    diag["broker_expert_allowed"] = bool(getattr(acc, "trade_expert", True))
+                    if not diag["account_trading_allowed"]:
+                        diag["ready"] = False
+                        diag["blockers"].append(
+                            f"Trading is DISABLED for account #{self.login}. Check if logged in with read-only Investor password."
+                        )
+                    if not diag["broker_expert_allowed"]:
+                        diag["ready"] = False
+                        diag["blockers"].append(
+                            f"Broker has disabled automated/EA trading for account #{self.login}."
+                        )
+
+                for sym in symbols_to_check:
+                    res_sym = resolve_mt5_symbol(sym)
+                    sel = native_mt5.symbol_select(res_sym, True)
+                    if not sel:
+                        for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                            cand = f"{res_sym}{suf}"
+                            if native_mt5.symbol_select(cand, True):
+                                res_sym = cand
+                                sel = True
+                                break
+                    sinfo = native_mt5.symbol_info(res_sym) if sel else None
+                    if sinfo is None:
+                        diag["symbols"][sym] = {"ok": False, "error": f"Symbol '{res_sym}' not found in MT5."}
+                        diag["warnings"].append(f"Symbol '{sym}' not found in MT5 Market Watch.")
+                    else:
+                        tmode = getattr(sinfo, "trade_mode", 4)
+                        is_disabled = tmode == getattr(native_mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
+                        fmode = getattr(sinfo, "filling_mode", 0)
+                        fok = bool(fmode & 1)
+                        ioc = bool(fmode & 2)
+                        mode_str = "IOC" if ioc else ("FOK" if fok else "RETURN")
+                        diag["symbols"][sym] = {
+                            "ok": not is_disabled,
+                            "resolved": res_sym,
+                            "trade_mode": tmode,
+                            "filling_mode": mode_str,
+                            "min_volume": getattr(sinfo, "volume_min", 0.01),
+                            "volume_step": getattr(sinfo, "volume_step", 0.01),
+                        }
+                        if is_disabled:
+                            diag["warnings"].append(f"Trading for '{res_sym}' is currently closed/disabled by broker.")
+            elif self.gateway_url:
+                try:
+                    url = f"{self.gateway_url.rstrip('/')}/check"
+                    res = _gateway_request("GET", url, timeout=5.0)
+                    diag.update(res)
+                except Exception as e:
+                    diag["warnings"].append(f"Could not perform gateway diagnostic check: {e}")
+            else:
+                for sym in symbols_to_check:
+                    res_sym = resolve_mt5_symbol(sym)
+                    diag["symbols"][sym] = {
+                        "ok": True,
+                        "resolved": res_sym,
+                        "trade_mode": 4,
+                        "filling_mode": "FOK/IOC",
+                        "min_volume": 0.01,
+                        "volume_step": 0.01,
+                    }
+
+        return diag
 
     def switch_mode(
         self,
@@ -940,6 +1223,9 @@ class MockMT5Broker(Broker):
             leverage=self.leverage,
             currency=self.currency,
             company=self.company,
+            trade_allowed=True,
+            trade_expert=True,
+            terminal_trade_allowed=True,
         )
 
     def get_account_summary(self) -> Dict[str, Any]:
@@ -955,6 +1241,36 @@ class MockMT5Broker(Broker):
             "free_margin": self.free_margin,
             "unrealized_pnl": 0.0,
             "open_positions": len(self._positions),
+            "trade_allowed": True,
+            "trade_expert": True,
+            "terminal_trade_allowed": True,
         }
+
+    def check_trading_readiness(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        symbols_to_check = symbols or ["XAUUSD", "BTCUSD"]
+        return {
+            "connected": True,
+            "mode": "live",
+            "login": self.login,
+            "server": self.server,
+            "terminal_algo_trading": True,
+            "account_trading_allowed": True,
+            "broker_expert_allowed": True,
+            "symbols": {
+                s: {
+                    "ok": True,
+                    "resolved": resolve_mt5_symbol(s),
+                    "trade_mode": 4,
+                    "filling_mode": "FOK/IOC",
+                    "min_volume": 0.01,
+                    "volume_step": 0.01,
+                }
+                for s in symbols_to_check
+            },
+            "ready": True,
+            "blockers": [],
+            "warnings": [],
+        }
+
 
 

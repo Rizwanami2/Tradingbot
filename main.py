@@ -1256,6 +1256,45 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
             except Exception:
                 await query.message.reply_text(msg)
             return
+        elif data == "mt5:check":
+            b = engine.broker
+            if hasattr(b, "check_trading_readiness"):
+                symbols = getattr(config, "get_autotrade_symbols", lambda: ["XAUUSD", "BTCUSDT"])()
+                res = b.check_trading_readiness(symbols)
+                ready_icon = "🟢 **READY FOR TRADING**" if res.get("ready") else "🔴 **TRADING BLOCKED**"
+                lines = [
+                    f"🔍 **MT5 Pre-Flight Diagnostics Check**",
+                    f"━━━━━━━━━━━━━━━━━━━━",
+                    f"• **Status:** {ready_icon}",
+                    f"• **Server:** `{res.get('server', 'N/A')}` | **Login:** `{res.get('login', 'N/A')}`",
+                    f"• **Terminal Algo Trading:** {'🟢 Enabled' if res.get('terminal_algo_trading') else '🔴 DISABLED (Click Algo Trading button in MT5)'}",
+                    f"• **Account Trading:** {'🟢 Enabled' if res.get('account_trading_allowed') else '🔴 DISABLED (Investor read-only password?)'}",
+                    f"• **Broker EA Allowed:** {'🟢 Allowed' if res.get('broker_expert_allowed') else '🔴 DISABLED by broker'}",
+                    f"• **Engine Halt State:** {'🔴 HALTED (Run /mt5 reset to clear)' if getattr(engine, 'execution_halted', False) else '🟢 Active'}",
+                ]
+                syms = res.get("symbols", {})
+                if syms:
+                    lines.append("\n📊 **Symbol Market Checks:**")
+                    for s, data_item in syms.items():
+                        if data_item.get("ok"):
+                            lines.append(f"• `{s}` -> `{data_item.get('resolved', s)}`: 🟢 Open | Filling: `{data_item.get('filling_mode', 'N/A')}` | Min: `{data_item.get('min_volume', 0.01)}`")
+                        else:
+                            lines.append(f"• `{s}`: 🔴 {data_item.get('error', 'Disabled / Market Closed')}")
+                blockers = res.get("blockers", [])
+                if blockers:
+                    lines.append("\n🚨 **Identified Blockers:**")
+                    for bl in blockers:
+                        lines.append(f"• {bl}")
+                warnings = res.get("warnings", [])
+                if warnings:
+                    lines.append("\n⚠️ **Warnings:**")
+                    for w in warnings:
+                        lines.append(f"• {w}")
+                try:
+                    await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
+                except Exception:
+                    await query.message.reply_text("\n".join(lines))
+            return
         elif data == "mt5:refresh":
             pass
 
@@ -1440,6 +1479,18 @@ def build_mt5_dashboard() -> tuple:
     except Exception:
         lev_f = 20.0
 
+    alerts = []
+    if getattr(engine, "execution_halted", False):
+        alerts.append("🚨 **EXECUTION HALTED**: Prior broker order failed. Send `/mt5 reset` or `/live on` to resume.")
+    if ai:
+        if hasattr(ai, "terminal_trade_allowed") and not ai.terminal_trade_allowed:
+            alerts.append("⚠️ **MT5 ALGO TRADING DISABLED**: Click 'Algo Trading' toolbar button in MT5 to turn it GREEN.")
+        if hasattr(ai, "trade_allowed") and not ai.trade_allowed:
+            alerts.append("⚠️ **ACCOUNT TRADING DISABLED**: Check if logged in with read-only Investor password.")
+        if hasattr(ai, "trade_expert") and not ai.trade_expert:
+            alerts.append("⚠️ **AUTOMATED TRADING DISABLED BY BROKER** on this account.")
+    alert_section = ("\n" + "\n".join(alerts) + "\n") if alerts else ""
+
     text = (
         f"🏦 **MetaTrader 5 Dashboard**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1449,8 +1500,11 @@ def build_mt5_dashboard() -> tuple:
         f"• **Balance:** `${bal_f:,.2f}` | **Equity:** `${eq_f:,.2f}`\n"
         f"• **Margin:** `${margin_f:,.2f}` | **Free Margin:** `${free_m_f:,.2f}`\n"
         f"• **Leverage:** `{lev_f:.0f}x` | **Open Positions:** `{active_positions_count}`\n"
-        f"• **Saved Accounts:** `{accounts_count}`\n\n"
+        f"• **Saved Accounts:** `{accounts_count}`\n"
+        f"{alert_section}\n"
         f"⚡ **Quick Controls:**\n"
+        f"• `/mt5 check` — Run pre-flight trading permissions diagnostics\n"
+        f"• `/mt5 reset` — Clear execution halt state & resume orders\n"
         f"• `/mt5 switch live` — Connect / switch active live MT5 account\n"
         f"• `/mt5 switch <alias|login>` — Switch to a saved live account\n"
         f"• `/mt5 add <login> <pass> <server> [alias]` — Save live account\n"
@@ -1463,13 +1517,14 @@ def build_mt5_dashboard() -> tuple:
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🟢 Connect / Switch Live", callback_data="mt5:switch_live"),
+            InlineKeyboardButton("🔍 Pre-Flight Check", callback_data="mt5:check"),
+        ],
+        [
             InlineKeyboardButton("📋 My Accounts", callback_data="mt5:list_accounts"),
-        ],
-        [
             InlineKeyboardButton("➕ Add Account", callback_data="mt5:help_add"),
-            InlineKeyboardButton("📊 Positions", callback_data="mt5:positions"),
         ],
         [
+            InlineKeyboardButton("📊 Positions", callback_data="mt5:positions"),
             InlineKeyboardButton("🔄 Refresh Telemetry", callback_data="mt5:refresh"),
         ],
     ])
@@ -1675,6 +1730,53 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⚠️ Error fetching MT5 positions: `{e}`", parse_mode="Markdown")
         else:
             await update.message.reply_text("⚠️ No broker attached to engine.")
+
+    elif sub in ("check", "test", "verify", "diag", "diagnose"):
+        b = engine.broker
+        if hasattr(b, "check_trading_readiness"):
+            symbols = getattr(config, "get_autotrade_symbols", lambda: ["XAUUSD", "BTCUSDT"])()
+            res = b.check_trading_readiness(symbols)
+            ready_icon = "🟢 **READY FOR TRADING**" if res.get("ready") else "🔴 **TRADING BLOCKED**"
+            lines = [
+                f"🔍 **MT5 Pre-Flight Diagnostics Check**",
+                f"━━━━━━━━━━━━━━━━━━━━",
+                f"• **Status:** {ready_icon}",
+                f"• **Server:** `{res.get('server', 'N/A')}` | **Login:** `{res.get('login', 'N/A')}`",
+                f"• **Terminal Algo Trading:** {'🟢 Enabled' if res.get('terminal_algo_trading') else '🔴 DISABLED (Click Algo Trading button in MT5)'}",
+                f"• **Account Trading:** {'🟢 Enabled' if res.get('account_trading_allowed') else '🔴 DISABLED (Investor read-only password?)'}",
+                f"• **Broker EA Allowed:** {'🟢 Allowed' if res.get('broker_expert_allowed') else '🔴 DISABLED by broker'}",
+                f"• **Engine Halt State:** {'🔴 HALTED (Run /mt5 reset to clear)' if getattr(engine, 'execution_halted', False) else '🟢 Active'}",
+            ]
+            syms = res.get("symbols", {})
+            if syms:
+                lines.append("\n📊 **Symbol Market Checks:**")
+                for s, data_item in syms.items():
+                    if data_item.get("ok"):
+                        lines.append(f"• `{s}` -> `{data_item.get('resolved', s)}`: 🟢 Open | Filling: `{data_item.get('filling_mode', 'N/A')}` | Min: `{data_item.get('min_volume', 0.01)}`")
+                    else:
+                        lines.append(f"• `{s}`: 🔴 {data_item.get('error', 'Disabled / Market Closed')}")
+            blockers = res.get("blockers", [])
+            if blockers:
+                lines.append("\n🚨 **Identified Blockers:**")
+                for bl in blockers:
+                    lines.append(f"• {bl}")
+            warnings = res.get("warnings", [])
+            if warnings:
+                lines.append("\n⚠️ **Warnings:**")
+                for w in warnings:
+                    lines.append(f"• {w}")
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        else:
+            await update.message.reply_text("ℹ️ Current broker does not support MT5 pre-flight diagnostics.")
+
+    elif sub in ("reset", "resethalt", "clearhalt", "unhalt"):
+        if hasattr(engine, "reset_halt"):
+            engine.reset_halt()
+        await update.message.reply_text(
+            "🟢 **MT5 Execution Halt Cleared**\n"
+            "Execution engine halt state has been reset. All trading requests and order placements are unblocked.",
+            parse_mode="Markdown",
+        )
 
     else:
         text, markup = build_mt5_dashboard()
@@ -2861,8 +2963,30 @@ def run_cli_interactive():
                     print(engine.broker.get_positions())
                 else:
                     print("No broker attached.")
+            elif sub in ("check", "test", "verify", "diag", "diagnose"):
+                b = engine.broker
+                if hasattr(b, "check_trading_readiness"):
+                    symbols = getattr(config, "get_autotrade_symbols", lambda: ["XAUUSD", "BTCUSDT"])()
+                    res = b.check_trading_readiness(symbols)
+                    st = "READY FOR TRADING" if res.get("ready") else "TRADING BLOCKED"
+                    print(f"MT5 Pre-Flight Diagnostics Check: {st}")
+                    print(f"• Server: {res.get('server')} | Login: {res.get('login')}")
+                    print(f"• Terminal Algo Trading: {'Enabled' if res.get('terminal_algo_trading') else 'DISABLED (Turn Algo Trading ON in MT5)'}")
+                    print(f"• Account Trading: {'Enabled' if res.get('account_trading_allowed') else 'DISABLED (Check if Investor password was used)'}")
+                    print(f"• Broker EA Allowed: {'Allowed' if res.get('broker_expert_allowed') else 'DISABLED by broker'}")
+                    print(f"• Engine Halt State: {'HALTED (Run mt5 reset to clear)' if getattr(engine, 'execution_halted', False) else 'Active'}")
+                    for bl in res.get("blockers", []):
+                        print(f"  🚨 BLOCKER: {bl}")
+                    for w in res.get("warnings", []):
+                        print(f"  ⚠️ WARNING: {w}")
+                else:
+                    print("Current broker does not support pre-flight diagnostics.")
+            elif sub in ("reset", "resethalt", "clearhalt", "unhalt"):
+                if hasattr(engine, "reset_halt"):
+                    engine.reset_halt()
+                print("MT5 execution halt cleared. All trading requests and order placements unblocked.")
             else:
-                print("Usage: mt5 [status|add|accounts|balance|switch|remove|live|paper|positions]")
+                print("Usage: mt5 [status|add|accounts|balance|switch|remove|live|paper|positions|check|reset]")
         elif name in ("switch", "switchbroker"):
             from mt5_accounts import get_account_manager, switch_broker_mode
             if len(parts) > 1:

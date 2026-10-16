@@ -12,6 +12,7 @@ from execution import (
 from mt5_broker import (
     MT5AccountInfo,
     MT5Broker,
+    MockMT5Broker,
     resolve_mt5_symbol,
 )
 from risk_manager import RiskManager
@@ -324,6 +325,122 @@ class TestMT5Broker(unittest.TestCase):
             close_ok = broker.close_position("BTCUSD", qty=0.10, price=61500.0)
             self.assertTrue(close_ok)
 
+    def test_mt5_account_info_warnings(self):
+        info_blocked = MT5AccountInfo(
+            login=555123,
+            server="Demo-Server",
+            trade_mode="live",
+            connected=True,
+            balance=10000.0,
+            equity=10000.0,
+            margin=0.0,
+            free_margin=10000.0,
+            margin_level_pct=999.0,
+            leverage=50.0,
+            trade_allowed=False,
+            trade_expert=False,
+            terminal_trade_allowed=False,
+        )
+        summary = info_blocked.summary()
+        self.assertIn("Algo Trading is DISABLED", summary)
+        self.assertIn("Account Trading is DISABLED", summary)
+        self.assertIn("Automated/EA Trading is DISABLED", summary)
+
+    def test_check_trading_readiness_mock(self):
+        broker = MockMT5Broker()
+        res = broker.check_trading_readiness(["XAUUSD", "BTCUSD"])
+        self.assertTrue(res["ready"])
+        self.assertTrue(res["terminal_algo_trading"])
+        self.assertTrue(res["account_trading_allowed"])
+        self.assertTrue(res["broker_expert_allowed"])
+        self.assertIn("XAUUSD", res["symbols"])
+        self.assertIn("BTCUSD", res["symbols"])
+        self.assertEqual(len(res["blockers"]), 0)
+
+    def test_order_send_preflight_checks(self):
+        import mt5_broker
+        from execution import ExecutionError
+        mock_mt5 = MagicMock()
+        mock_term = MagicMock()
+        mock_term.trade_allowed = False
+        mock_mt5.terminal_info.return_value = mock_term
+        mock_mt5.initialize.return_value = True
+        mock_mt5.login.return_value = True
+
+        with patch.object(mt5_broker, "native_mt5", mock_mt5):
+            broker = MT5Broker(mode="live", login=123456, password="pw", server="srv")
+            with self.assertRaises(ExecutionError) as ctx:
+                broker.place_order("BTCUSD", "buy", 0.01)
+            self.assertIn("Algo Trading is DISABLED", str(ctx.exception))
+
+            mock_term.trade_allowed = True
+            mock_acc = MagicMock()
+            mock_acc.trade_allowed = False
+            mock_acc.trade_expert = True
+            mock_mt5.account_info.return_value = mock_acc
+
+            with self.assertRaises(ExecutionError) as ctx:
+                broker.place_order("BTCUSD", "buy", 0.01)
+            self.assertIn("Trading is DISABLED for MT5 account", str(ctx.exception))
+
+    def test_dynamic_filling_mode_fallback(self):
+        import mt5_broker
+        mock_mt5 = MagicMock()
+        mock_term = MagicMock()
+        mock_term.trade_allowed = True
+        mock_acc = MagicMock()
+        mock_acc.trade_allowed = True
+        mock_acc.trade_expert = True
+        mock_acc.balance = 10000.0
+        mock_acc.leverage = 50.0
+        mock_acc.currency = "USD"
+        mock_acc.company = "Broker"
+        mock_mt5.terminal_info.return_value = mock_term
+        mock_mt5.account_info.return_value = mock_acc
+        mock_mt5.initialize.return_value = True
+        mock_mt5.login.return_value = True
+        mock_mt5.symbol_select.return_value = True
+        mock_sinfo = MagicMock()
+        mock_sinfo.trade_mode = 4
+        mock_sinfo.filling_mode = 3 # Both FOK and IOC
+        mock_sinfo.volume_min = 0.01
+        mock_sinfo.volume_max = 100.0
+        mock_sinfo.volume_step = 0.01
+        mock_mt5.symbol_info.return_value = mock_sinfo
+        mock_tick = MagicMock()
+        mock_tick.ask = 65000.0
+        mock_tick.bid = 64990.0
+        mock_mt5.symbol_info_tick.return_value = mock_tick
+        mock_mt5.ORDER_TYPE_BUY = 0
+        mock_mt5.ORDER_TYPE_SELL = 1
+        mock_mt5.TRADE_ACTION_DEAL = 1
+        mock_mt5.ORDER_TIME_GTC = 0
+        mock_mt5.ORDER_FILLING_IOC = 1
+        mock_mt5.ORDER_FILLING_FOK = 0
+        mock_mt5.ORDER_FILLING_RETURN = 2
+        mock_mt5.TRADE_RETCODE_DONE = 10009
+        mock_mt5.TRADE_RETCODE_UNSUPPORTED_FILLING_MODE = 10030
+
+        # First attempt with IOC returns 10030 (Unsupported filling mode)
+        res_fail = MagicMock()
+        res_fail.retcode = 10030
+        res_fail.comment = "Unsupported filling mode"
+        # Second attempt with FOK succeeds
+        res_ok = MagicMock()
+        res_ok.retcode = 10009
+        res_ok.order = 998877
+        res_ok.price = 65000.0
+        res_ok.volume = 0.05
+        mock_mt5.order_send.side_effect = [res_fail, res_ok]
+
+        with patch.object(mt5_broker, "native_mt5", mock_mt5):
+            broker = MT5Broker(mode="live", login=123456, password="pw", server="srv")
+            order = broker.place_order("BTCUSD", "buy", 0.05)
+            self.assertEqual(order.id, "998877")
+            self.assertEqual(order.status, "filled")
+            self.assertEqual(mock_mt5.order_send.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
+

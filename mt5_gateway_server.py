@@ -84,6 +84,10 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
             mg = float(acc.margin or 0.0)
             eq = float(acc.equity or 0.0)
             lvl = (eq / mg * 100.0) if mg > 0 else 999.0
+            term = mt5.terminal_info() if mt5 is not None else None
+            term_trade = bool(getattr(term, "trade_allowed", True)) if term else True
+            acc_trade = bool(getattr(acc, "trade_allowed", True))
+            acc_expert = bool(getattr(acc, "trade_expert", True))
             self._send_json(200, {
                 "ok": True,
                 "login": int(acc.login),
@@ -96,6 +100,73 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 "leverage": float(acc.leverage or 20.0),
                 "currency": str(acc.currency or "USD"),
                 "company": str(acc.company or "MetaQuotes"),
+                "trade_allowed": acc_trade,
+                "trade_expert": acc_expert,
+                "terminal_trade_allowed": term_trade,
+            })
+        elif path == "/check":
+            if mt5 is None:
+                self._send_json(200, {
+                    "ok": True,
+                    "connected": True,
+                    "terminal_algo_trading": True,
+                    "account_trading_allowed": True,
+                    "broker_expert_allowed": True,
+                    "ready": True,
+                    "symbols": {
+                        "XAUUSD": {"ok": True, "trade_mode": 4, "filling_mode": "FOK/IOC"},
+                        "BTCUSD": {"ok": True, "trade_mode": 4, "filling_mode": "FOK/IOC"},
+                    },
+                    "blockers": [],
+                    "warnings": [],
+                })
+                return
+            term = mt5.terminal_info()
+            acc = mt5.account_info()
+            term_trade = bool(getattr(term, "trade_allowed", True)) if term else True
+            acc_trade = bool(getattr(acc, "trade_allowed", True)) if acc else True
+            acc_expert = bool(getattr(acc, "trade_expert", True)) if acc else True
+            blockers = []
+            if not term_trade:
+                blockers.append("MT5 Algo Trading is DISABLED in MetaTrader 5 toolbar. Click 'Algo Trading' button in MT5 to turn it GREEN.")
+            if not acc_trade:
+                blockers.append("Trading is DISABLED on account. Check if logged in with read-only Investor password.")
+            if not acc_expert:
+                blockers.append("Broker has disabled automated/EA trading for this account.")
+            sym_checks = {}
+            for sym in ("XAUUSD", "BTCUSD"):
+                sinfo = mt5.symbol_info(sym)
+                target_sym = sym
+                if not sinfo:
+                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                        cand = f"{sym}{suf}"
+                        if mt5.symbol_select(cand, True):
+                            sinfo = mt5.symbol_info(cand)
+                            target_sym = cand
+                            break
+                if sinfo:
+                    tmode = getattr(sinfo, "trade_mode", 4)
+                    fmode = getattr(sinfo, "filling_mode", 0)
+                    sym_checks[sym] = {
+                        "ok": tmode != getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0),
+                        "resolved": target_sym,
+                        "trade_mode": tmode,
+                        "filling_mode": "IOC" if (fmode & 2) else ("FOK" if (fmode & 1) else "RETURN"),
+                        "min_volume": getattr(sinfo, "volume_min", 0.01),
+                        "volume_step": getattr(sinfo, "volume_step", 0.01),
+                    }
+                else:
+                    sym_checks[sym] = {"ok": False, "error": "Symbol not found in Market Watch"}
+            self._send_json(200, {
+                "ok": len(blockers) == 0,
+                "connected": bool(acc),
+                "terminal_algo_trading": term_trade,
+                "account_trading_allowed": acc_trade,
+                "broker_expert_allowed": acc_expert,
+                "ready": len(blockers) == 0,
+                "symbols": sym_checks,
+                "blockers": blockers,
+                "warnings": [],
             })
         elif path == "/positions":
             if mt5 is None:
@@ -157,6 +228,7 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": "MT5 account_info failed"})
                 return
 
+            term = mt5.terminal_info() if mt5 is not None else None
             self._send_json(200, {
                 "ok": True,
                 "connected": True,
@@ -167,6 +239,9 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 "leverage": float(acc.leverage or 20.0),
                 "currency": str(acc.currency or "USD"),
                 "company": str(acc.company or "MetaQuotes"),
+                "trade_allowed": bool(getattr(acc, "trade_allowed", True)),
+                "trade_expert": bool(getattr(acc, "trade_expert", True)),
+                "terminal_trade_allowed": bool(getattr(term, "trade_allowed", True)) if term else True,
             })
 
         elif path == "/order":
@@ -181,38 +256,114 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
             sym = str(data.get("symbol", "BTCUSD"))
             side = str(data.get("side", "buy")).lower()
             qty = float(data.get("qty", 0.01))
-            price = float(data.get("price", 0.0))
-            sl = float(data.get("stop_loss", 0.0) or data.get("sl", 0.0))
-            tp = float(data.get("take_profit", 0.0) or data.get("tp", 0.0))
             magic = int(data.get("magic", 112233))
             comment = str(data.get("comment", "TradingBot Gateway"))
 
-            order_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
-            req = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": sym,
-                "volume": qty,
-                "type": order_type,
-                "price": price,
-                "sl": sl,
-                "tp": tp,
-                "deviation": 20,
-                "magic": magic,
-                "comment": comment,
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
-            }
-            res = mt5.order_send(req)
-            if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
-                err = getattr(res, "comment", mt5.last_error())
-                retcode = getattr(res, "retcode", None)
-                self._send_json(400, {"ok": False, "error": f"order_send failed: {retcode} {err}"})
+            # 0. Pre-flight checks on terminal & account permissions
+            term = mt5.terminal_info()
+            if term and not getattr(term, "trade_allowed", True):
+                self._send_json(400, {
+                    "ok": False,
+                    "error": "MT5 Algo Trading is DISABLED in MetaTrader 5 toolbar! Click the 'Algo Trading' button in MT5 to turn it green, and verify Tools -> Options -> Expert Advisors -> 'Allow Algorithmic Trading' is checked."
+                })
                 return
+            acc = mt5.account_info()
+            if acc and not getattr(acc, "trade_allowed", True):
+                self._send_json(400, {
+                    "ok": False,
+                    "error": "Trading is DISABLED for this MT5 account. If you logged in with an Investor (read-only) password, please log in with your Master/Trading password."
+                })
+                return
+            if acc and not getattr(acc, "trade_expert", True):
+                self._send_json(400, {
+                    "ok": False,
+                    "error": "Automated/EA trading is DISABLED by broker for this MT5 account."
+                })
+                return
+
+            # 1. Market Watch symbol selection with suffix fallbacks
+            if not mt5.symbol_select(sym, True):
+                for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                    cand = f"{sym}{suf}"
+                    if mt5.symbol_select(cand, True):
+                        sym = cand
+                        break
+
+            sym_info = mt5.symbol_info(sym)
+            if sym_info is None:
+                self._send_json(400, {"ok": False, "error": f"Symbol '{sym}' not found in MT5 Market Watch."})
+                return
+
+            if getattr(sym_info, "trade_mode", 4) == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0):
+                self._send_json(400, {"ok": False, "error": f"Trading for '{sym}' is currently DISABLED by the broker (market closed)." })
+                return
+
+            # 2. Live Tick Price
+            tick = mt5.symbol_info_tick(sym)
+            order_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
+            if tick is not None:
+                order_price = float(tick.ask) if side == "buy" else float(tick.bid)
+            else:
+                order_price = float(data.get("price", 0.0) or 100.0)
+
+            # 3. Volume step & min/max normalization
+            v_min = float(getattr(sym_info, "volume_min", 0.01) or 0.01)
+            v_max = float(getattr(sym_info, "volume_max", 100.0) or 100.0)
+            v_step = float(getattr(sym_info, "volume_step", 0.01) or 0.01)
+            order_volume = max(v_min, min(v_max, qty))
+            if v_step > 0:
+                order_volume = round(round(order_volume / v_step) * v_step, 4)
+
+            sl = float(data.get("stop_loss", 0.0) or data.get("sl", 0.0))
+            tp = float(data.get("take_profit", 0.0) or data.get("tp", 0.0))
+
+            # 4. Dynamic Filling Mode Auto-Negotiation (IOC / FOK / RETURN)
+            filling_flags = getattr(sym_info, "filling_mode", 0) or 0
+            modes_to_try = []
+            if filling_flags & 2:
+                modes_to_try.append(getattr(mt5, "ORDER_FILLING_IOC", 1))
+            if filling_flags & 1:
+                modes_to_try.append(getattr(mt5, "ORDER_FILLING_FOK", 0))
+            modes_to_try.append(getattr(mt5, "ORDER_FILLING_RETURN", 2))
+            for m in (getattr(mt5, "ORDER_FILLING_IOC", 1), getattr(mt5, "ORDER_FILLING_FOK", 0)):
+                if m not in modes_to_try:
+                    modes_to_try.append(m)
+
+            res = None
+            last_err = ""
+            for fm in modes_to_try:
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": sym,
+                    "volume": order_volume,
+                    "type": order_type,
+                    "price": order_price,
+                    "sl": sl,
+                    "tp": tp,
+                    "deviation": 50,
+                    "magic": magic,
+                    "comment": comment,
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": fm,
+                }
+                res = mt5.order_send(req)
+                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                    break
+                retcode = getattr(res, "retcode", None)
+                err_cmt = getattr(res, "comment", mt5.last_error())
+                last_err = f"{retcode} {err_cmt}"
+                if retcode not in (getattr(mt5, "TRADE_RETCODE_UNSUPPORTED_FILLING_MODE", 10030), getattr(mt5, "TRADE_RETCODE_INVALID_REQUEST", 10013), 10030, 10013):
+                    break
+
+            if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
+                self._send_json(400, {"ok": False, "error": f"order_send failed: {last_err}"})
+                return
+
             self._send_json(200, {
                 "ok": True,
                 "ticket": int(res.order),
-                "price": float(res.price or price),
-                "volume": float(res.volume or qty),
+                "price": float(res.price or order_price),
+                "volume": float(res.volume or order_volume),
             })
 
         elif path == "/close":
@@ -233,25 +384,56 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
             pos = positions[0]
             close_side = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
             qty = float(data.get("qty") or pos.volume)
-            price = float(data.get("price") or pos.price_current)
-            req = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "position": pos.ticket,
-                "symbol": pos.symbol,
-                "volume": qty,
-                "type": close_side,
-                "price": price,
-                "deviation": 20,
-                "magic": int(data.get("magic", 112233)),
-                "comment": "Close Gateway",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
-            }
-            res = mt5.order_send(req)
+
+            tick = mt5.symbol_info_tick(pos.symbol)
+            if tick is not None:
+                close_price = float(tick.bid) if close_side == mt5.ORDER_TYPE_SELL else float(tick.ask)
+            else:
+                close_price = float(data.get("price") or pos.price_current)
+
+            sym_info = mt5.symbol_info(pos.symbol)
+            filling_flags = getattr(sym_info, "filling_mode", 0) or 0
+            modes_to_try = []
+            if filling_flags & 2:
+                modes_to_try.append(getattr(mt5, "ORDER_FILLING_IOC", 1))
+            if filling_flags & 1:
+                modes_to_try.append(getattr(mt5, "ORDER_FILLING_FOK", 0))
+            modes_to_try.append(getattr(mt5, "ORDER_FILLING_RETURN", 2))
+            for m in (getattr(mt5, "ORDER_FILLING_IOC", 1), getattr(mt5, "ORDER_FILLING_FOK", 0)):
+                if m not in modes_to_try:
+                    modes_to_try.append(m)
+
+            res = None
+            for fm in modes_to_try:
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "position": pos.ticket,
+                    "symbol": pos.symbol,
+                    "volume": qty,
+                    "type": close_side,
+                    "price": close_price,
+                    "deviation": 50,
+                    "magic": int(data.get("magic", 112233)),
+                    "comment": "Close Gateway",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": fm,
+                }
+                res = mt5.order_send(req)
+                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                    break
+                retcode = getattr(res, "retcode", None)
+                if retcode not in (getattr(mt5, "TRADE_RETCODE_UNSUPPORTED_FILLING_MODE", 10030), getattr(mt5, "TRADE_RETCODE_INVALID_REQUEST", 10013), 10030, 10013):
+                    break
+
             if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
                 self._send_json(400, {"ok": False, "error": f"close failed: {mt5.last_error()}"})
                 return
-            self._send_json(200, {"ok": True, "closed": True})
+            self._send_json(200, {
+                "ok": True,
+                "closed": True,
+                "price": float(res.price or close_price),
+                "volume": float(res.volume or qty),
+            })
 
         elif path == "/modify":
             if mt5 is None:

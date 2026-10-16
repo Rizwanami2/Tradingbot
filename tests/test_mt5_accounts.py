@@ -385,6 +385,43 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         self.message.reply_text.assert_called()
         self.assertIn("Add MetaTrader 5 Account", self.message.reply_text.call_args[0][0])
 
+        # 4. Check callback
+        self.message.reply_text.reset_mock()
+        query.data = "mt5:check"
+        from mt5_broker import MockMT5Broker
+        orig_broker = engine.broker
+        engine.broker = MockMT5Broker()
+        try:
+            await autotrade_callback_handler(self.update, self.ctx)
+            self.message.reply_text.assert_called()
+            self.assertIn("Pre-Flight Diagnostics Check", self.message.reply_text.call_args[0][0])
+        finally:
+            engine.broker = orig_broker
+
+    async def test_mt5_check_and_reset_commands(self):
+        from mt5_broker import MockMT5Broker
+        orig_broker = engine.broker
+        engine.broker = MockMT5Broker()
+        try:
+            # Test /mt5 check
+            self.ctx.args = ["check"]
+            await mt5_command(self.update, self.ctx)
+            self.message.reply_text.assert_called()
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("Pre-Flight Diagnostics Check", msg)
+            self.assertIn("READY FOR TRADING", msg)
+
+            # Test /mt5 reset
+            engine.execution_halted = True
+            self.ctx.args = ["reset"]
+            await mt5_command(self.update, self.ctx)
+            self.assertFalse(engine.execution_halted)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("Execution Halt Cleared", msg)
+        finally:
+            engine.broker = orig_broker
+
+
 
 class TestCLIInteractiveMT5(unittest.TestCase):
     def test_cli_mt5_and_switch(self):
@@ -416,3 +453,21 @@ class TestCLIInteractiveMT5(unittest.TestCase):
         broker = MT5Broker(login=999111, password="secret", server="MetaQuotes-Demo")
         self.assertEqual(broker.balance, getattr(config, "INITIAL_EQUITY", 10000.0))
         self.assertNotEqual(broker.balance, 1000.0)
+
+    def test_cli_mt5_check_and_reset(self):
+        from mt5_broker import MockMT5Broker
+        orig_broker = engine.broker
+        engine.broker = MockMT5Broker()
+        engine.execution_halted = True
+        try:
+            input_data = io.StringIO("mt5 check\nmt5 reset\nexit\n")
+            output_data = io.StringIO()
+            with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+                run_cli_interactive()
+            out = output_data.getvalue()
+            self.assertIn("MT5 Pre-Flight Diagnostics Check", out)
+            self.assertIn("MT5 execution halt cleared", out)
+            self.assertFalse(engine.execution_halted)
+        finally:
+            engine.broker = orig_broker
+

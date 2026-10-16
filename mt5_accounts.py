@@ -465,6 +465,20 @@ def switch_broker_mode(
         acc.equity = eq
         mgr._save()
 
+        warn_lines = []
+        if hasattr(live_broker, "get_account_info"):
+            try:
+                ai = live_broker.get_account_info()
+                if hasattr(ai, "terminal_trade_allowed") and not ai.terminal_trade_allowed:
+                    warn_lines.append("⚠️ **MT5 Algo Trading is DISABLED**: Click 'Algo Trading' toolbar button in MT5 to turn it GREEN.")
+                if hasattr(ai, "trade_allowed") and not ai.trade_allowed:
+                    warn_lines.append("⚠️ **Account Trading is DISABLED**: Check if logged in with read-only Investor password.")
+                if hasattr(ai, "trade_expert") and not ai.trade_expert:
+                    warn_lines.append("⚠️ **Automated/EA Trading is DISABLED by Broker** for this account.")
+            except Exception:
+                pass
+        warn_block = ("\n" + "\n".join(warn_lines) + "\n") if warn_lines else ""
+
         return (
             True,
             f"🟢 ⚠️ **LIVE MT5 EXECUTION ACTIVATED**\n"
@@ -473,7 +487,8 @@ def switch_broker_mode(
             f"• **Bridge:** {via_str}\n"
             f"• **Balance:** `${bal:,.2f}` | **Equity:** `${eq:,.2f}`\n"
             f"• **Leverage:** `{lev:.0f}x` | **Free Margin:** `${free_m:,.2f}`\n"
-            f"• **Protection:** Server-side SL/TP + Emergency Kill Switch Active\n\n"
+            f"• **Protection:** Server-side SL/TP + Emergency Kill Switch Active\n"
+            f"{warn_block}\n"
             f"⚠️ _Real capital is at risk. Automated order execution is enabled._",
             live_broker,
         )
