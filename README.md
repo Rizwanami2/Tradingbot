@@ -36,9 +36,9 @@ BOT_DATA_SOURCE=ccxt
 # MT5 remains disabled until a demo terminal is explicitly configured.
 MT5_ENABLED=false
 MT5_MODE=demo
-MT5_LOGIN=12345678          # Account number (integer)
-MT5_PASSWORD=YourPassword   # Account trading password
-MT5_SERVER=YourBroker-Live  # Broker server name (e.g., Exness-MT5Live, IC-Markets, etc.)
+MT5_LOGIN=                   # Demo account number only
+MT5_PASSWORD=               # Demo account password only
+MT5_SERVER=MetaQuotes-Demo  # Demo server only
 MT5_PATH=                   # Optional path to terminal64.exe (Windows/Wine)
 MT5_MAGIC=112233            # EA Magic identifier for order tagging
 MT5_GATEWAY_URL=            # Optional HTTP gateway for Linux/cloud execution
