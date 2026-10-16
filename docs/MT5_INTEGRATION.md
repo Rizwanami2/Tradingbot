@@ -50,50 +50,67 @@ MT5_GATEWAY_URL=             # Optional HTTP gateway for remote Linux execution
 
 ## 4. Telegram & CLI Commands
 
-### Checking MT5 Account Telemetry
+### MT5 Dashboard & Interactive Inline Controls
 ```text
 /mt5
 /mt5 status
 ```
-Outputs:
-```text
-🏦 MT5 Account Info (🟢 LIVE or ⚪ PAPER)
-• Status: 📶 Connected
-• Login: 12345678 | Server: Broker-Live
-• Balance: $10,000.00 | Equity: $10,240.50
-• Margin: $250.00 | Free Margin: $9,990.50
-• Margin Level: 4096.2% | Leverage: 20x
-• Currency: USD | Broker: Broker Financial Ltd.
-```
+Renders the real-time MT5 account dashboard with live telemetry and interactive inline buttons:
+- `[ 🟢 Switch to Live ]` — Switches active broker execution to MT5 Live.
+- `[ ⚪ Switch to Paper ]` — Switches active broker execution to MT5 Paper simulation.
+- `[ ➕ Add Account ]` — Shows instructions and examples for registering accounts.
+- `[ 📋 My Accounts ]` — Lists all saved MT5 accounts with masked passwords.
+- `[ 📊 Positions ]` — Shows open MT5 positions and unrealized PnL.
+- `[ 🔄 Refresh Telemetry ]` — Updates balance, equity, and margin levels.
 
-### Switching to MT5 Paper Simulation
+### Adding & Registering Live Accounts
 ```text
-/mt5 paper
+/mt5 add <LOGIN> <PASSWORD> <SERVER> [ALIAS] [GATEWAY_URL]
 ```
-Activates paper simulation mode with $0 capital risk.
-
-### Connecting to Live MT5 Account
-```text
-/mt5 live <LOGIN> <PASSWORD> <SERVER> [GATEWAY_URL]
-```
-Validates credentials and connects live. Fails closed safely if connection cannot be authorized.
+Saves the MT5 account into `.runtime/mt5_accounts.json` with masked passwords (`P@••••23`), verifies connection credentials immediately, and sets it as the active account.
 
 Examples:
-- Direct Windows: `/mt5 live 10054330 MyPassword Mtrading-live`
-- Linux via Gateway: `/mt5 live 10054330 MyPassword Mtrading-live http://192.168.1.50:5000`
+- Direct Windows / AWS EC2: `/mt5 add 10054330 Secret123 Exness-Real primary`
+- Remote Linux via Gateway: `/mt5 add 10054330 Secret123 Exness-Real primary http://192.168.1.50:5000`
+- Prop Firm / FTMO: `/mt5 add 2098711 Pass123 FTMO-Server prop1`
+
+### Switching Execution Modes & Accounts
+```text
+/switch live             # Switch to MT5 Live execution
+/switch paper            # Switch to MT5 Paper simulation
+/switch <alias|login>    # Switch active live account by alias or login number
+/mt5 switch live [login] # Switch to live mode using specific or active account
+/mt5 switch paper        # Switch to paper mode
+/broker live             # Switch to live broker execution
+```
+
+### Quick Live Mode Control
+```text
+/live on                 # Activate MT5 Live trading immediately
+/live off                # Revert to MT5 Paper simulation safely
+/live <login> <pass> <srv> # Save account and switch to live in one command
+```
+
+### Managing Registered Accounts
+```text
+/mt5 accounts            # View list of saved accounts, servers, and active flag
+/mt5 remove <alias|login> # Remove a saved account from disk
+```
 
 ### Viewing Active MT5 Positions
 ```text
 /mt5 positions
 ```
-Lists open positions, lots, entry prices, and floating PnL on MT5 terminal.
+Lists open positions, lots, entry prices, mark prices, and floating PnL on the MT5 broker.
 
-### Switching Broker Engine
-```text
-/broker paper
-/broker mt5
-/broker mt5_live
-```
+### Terminal Interactive CLI
+The interactive CLI (`python main.py --cli`) provides equivalent commands:
+- `mt5 add <login> <pass> <server> [alias] [gateway_url]`
+- `mt5 accounts`
+- `mt5 switch [live|paper|<alias>]`
+- `mt5 remove <alias|login>`
+- `switch [live|paper|<alias>]`
+- `live [on|off|<login> <pass> <server>]`
 
 ---
 

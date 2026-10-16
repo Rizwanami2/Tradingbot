@@ -226,7 +226,10 @@ nssm.exe start NimbleDarwinBot
 ### Check Status via Telegram
 Once running, send these commands to your bot in Telegram:
 - `/status`: Verify current profile, equity, risk metrics, and active positions.
-- `/mt5`: Inspect broker connectivity, balance, equity, leverage, and server ping.
+- `/mt5`: Inspect interactive broker dashboard, balance, equity, leverage, and server ping.
+- `/mt5 add <login> <password> <server> [alias]`: Add and save a live MT5 trading account with connection verification.
+- `/switch live` or `/switch paper`: Toggle between live real execution and paper simulation.
+- `/live on` or `/live off`: Instant toggle for live trading.
 - `/positions`: List all open trades across Gold and Bitcoin.
 - `/kill`: Instantly activate the emergency kill switch and close all open orders.
 
