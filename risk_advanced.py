@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone, time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 STATE_FILE = "risk_advanced_state.json"
 

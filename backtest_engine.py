@@ -13,9 +13,7 @@ import argparse
 import math
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
@@ -93,7 +91,6 @@ class SimpleBacktester:
             candle = df.iloc[i]
             high = float(candle["high"])
             low = float(candle["low"])
-            close = float(candle["close"])
             ts = df.index[i]
 
             if position is not None:

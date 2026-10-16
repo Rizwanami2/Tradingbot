@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
-import pytest
 
 
 def _ohlcv(n: int = 200, start: float = 2650.0) -> pd.DataFrame:

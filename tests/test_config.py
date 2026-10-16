@@ -2,10 +2,9 @@
 Unit tests for configuration loader and utilities.
 """
 
-import os
 import unittest
 from datetime import datetime, timezone, timedelta
-from config import _safe_int, _safe_float, load_dotenv
+from config import _safe_int, _safe_float
 import config
 from multi_agent_trading_bot import NewsAgent
 

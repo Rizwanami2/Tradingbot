@@ -6,7 +6,7 @@ Requires daily / 4H / 1H structure alignment before allowing lower-TF entries.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import pandas as pd
 

@@ -4,7 +4,6 @@ Uses Google's official Gemini REST API directly with zero SDK version issues.
 Includes intelligent fallback trading assistant if GEMINI_API_KEY is not configured.
 """
 
-import os
 import re
 import requests
 from typing import Dict, List, Optional

@@ -4,7 +4,7 @@ Unit tests for RiskManager.
 
 import os
 import unittest
-from risk_manager import RiskManager, RiskConfig, INSTRUMENTS, TradeRiskResult
+from risk_manager import RiskManager
 
 
 class TestRiskManager(unittest.TestCase):

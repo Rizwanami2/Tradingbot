@@ -6,14 +6,12 @@ Priority: realtime_prices (geo-safe) → CCXT → yfinance → Demo
 Caches candles in Parquet for speed and reliability.
 """
 
-import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 import pandas as pd
 import numpy as np
-import requests
 
 CACHE_DIR = Path("data_cache")
 CACHE_DIR.mkdir(exist_ok=True)

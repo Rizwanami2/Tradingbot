@@ -3,13 +3,11 @@ Unit tests for Autotrade selection and BTC / Gold Watchlist.
 """
 
 import json
-import os
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import config
-from autotrade_worker import live_monitoring_worker
 import main
 
 

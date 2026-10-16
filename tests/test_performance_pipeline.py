@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from performance_analytics import PerformanceTracker, TradeRecord
 from trade_journal import TradeJournal
-from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
+from execution_engine import ExecutionEngine
 from risk_manager import RiskManager
 
 
@@ -108,7 +108,7 @@ class TestPerformancePipeline(unittest.TestCase):
             with open(j_path, "w", encoding="utf-8") as f:
                 json.dump(journal_data, f)
 
-            with patch("performance_analytics.STATS_FILE", stats_path), patch("performance_analytics.PerformanceTracker._sync_from_journal") as mock_sync:
+            with patch("performance_analytics.STATS_FILE", stats_path), patch("performance_analytics.PerformanceTracker._sync_from_journal"):
                 # Custom sync with test path
                 tracker = PerformanceTracker(path=stats_path)
                 with patch("os.path.exists", return_value=True), patch("builtins.open", patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps(journal_data)))):
@@ -151,6 +151,7 @@ class TestPerformancePipeline(unittest.TestCase):
                     "reason": "Test setup",
                 }
                 order = engine.register_setup(sig)
+                self.assertIsNotNone(order)
                 # Fill order
                 engine.update_market_candle("XAUUSD", {"open": 2000.0, "high": 2001.0, "low": 1999.0, "close": 2000.0})
                 

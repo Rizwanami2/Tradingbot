@@ -4,7 +4,6 @@ Unit tests for Multi-Agent Voting, Arbiter Consensus, and Symbol Evaluation.
 
 import unittest
 from multi_agent_trading_bot import (
-    Arbiter,
     TrendAgent,
     LiquidityAgent,
     IndicatorAgent,

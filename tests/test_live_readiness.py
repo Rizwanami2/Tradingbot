@@ -9,15 +9,10 @@ Verifies production readiness for:
 
 import os
 import unittest
-import pandas as pd
-from datetime import datetime, timezone
-
 from delta_broker import MockDeltaBroker
 from mt5_broker import MockMT5Broker
 from execution_engine import ExecutionEngine, OrderStatus
 from risk_manager import RiskManager
-from multi_agent_trading_bot import Arbiter
-import config
 
 
 class TestLiveTradingReadiness(unittest.TestCase):

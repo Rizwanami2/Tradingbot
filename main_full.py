@@ -29,8 +29,6 @@ import logging
 from datetime import datetime, timezone
 import os
 import sys
-import threading
-import time as time_module
 from typing import Dict, Optional
 
 if sys.platform == "win32":
@@ -64,18 +62,15 @@ from telegram.ext import (
 )
 
 import config
-from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
+from execution_engine import ExecutionEngine
 from gemini_client import GeminiClient
 from multi_agent_trading_bot import (
     Arbiter,
     MarketDataFeed,
-    NewsAgent,
     evaluate_symbol,
-    send_telegram,
 )
 from risk_manager import RiskManager
-from backtest_engine import BacktestConfig, run_backtest
-from ops_dashboard import StatusStore, health_from_snapshot
+from ops_dashboard import StatusStore
 
 
 async def _to_thread(func, *args, **kwargs):
@@ -368,7 +363,7 @@ def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_e
     global autotrade_active
     s_scope = (scope or "all").lower().strip()
     if s_scope in ("day", "daily", "d"):
-        res = risk_mgr.reset_daily_risk()
+        risk_mgr.reset_daily_risk()
         scope_title = "DAILY"
         try:
             from risk_tiers import RiskTiers
@@ -386,7 +381,7 @@ def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_e
         except Exception:
             pass
     elif s_scope in ("week", "weekly", "w"):
-        res = risk_mgr.reset_weekly_risk()
+        risk_mgr.reset_weekly_risk()
         scope_title = "WEEKLY"
         try:
             from risk_tiers import RiskTiers
@@ -404,7 +399,7 @@ def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_e
         except Exception:
             pass
     else:
-        res = risk_mgr.reset_all_risk(new_equity=new_equity)
+        risk_mgr.reset_all_risk(new_equity=new_equity)
         scope_title = "ALL"
         try:
             from risk_tiers import RiskTiers
@@ -465,7 +460,7 @@ def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_e
         f"• **Daily PnL:** `${s.daily_pnl:+,.2f}` | **Weekly PnL:** `${s.weekly_pnl:+,.2f}`",
         f"• **Consecutive Losses:** `{s.consecutive_losses}` (Streak reset)",
         f"• **Risk Mode:** 🟢 `{s.mode.upper()}` | **Risk Factor (RF):** `{rf_val:.2f}`",
-        f"• **Circuit Breakers:** 🟢 Cleared (Engine halt lifted, Kill switch deactivated)",
+        "• **Circuit Breakers:** 🟢 Cleared (Engine halt lifted, Kill switch deactivated)",
         auto_note,
     ]
     return "\n".join(lines)
@@ -961,7 +956,7 @@ async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             m, trades, _ = sim.run(df, ema_cross_signal, symbol)
             out = m.summary()
             if trades:
-                out += f"\nLast trades (up to 5):\n"
+                out += "\nLast trades (up to 5):\n"
                 for t in trades[-5:]:
                     out += f"  {t.direction.upper()} R={t.r_multiple:+.2f} PnL={t.pnl:+.2f} ({t.reason})\n"
             return out

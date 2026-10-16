@@ -75,7 +75,7 @@ def detect_order_blocks(df: pd.DataFrame, lookback: int = 30) -> List[SMCSetup]:
         return out
     window = df.iloc[-lookback:]
     for i in range(1, len(window) - 1):
-        prev, cur, nxt = window.iloc[i - 1], window.iloc[i], window.iloc[i + 1]
+        cur, nxt = window.iloc[i], window.iloc[i + 1]
         # bullish OB: down candle then strong up displacement
         if float(cur["close"]) < float(cur["open"]) and float(nxt["close"]) > float(nxt["open"]):
             if float(nxt["close"]) > float(cur["high"]):

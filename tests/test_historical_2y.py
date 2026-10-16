@@ -105,6 +105,7 @@ class TestHistorical2Y(unittest.TestCase):
     def test_analyze_2y_degraded_and_empty(self):
         # Empty df
         h_empty = analyze_2y("BTCUSDT", df=pd.DataFrame())
+        self.assertIsNotNone(h_empty)
         # With patch ensuring fetch returns empty
         with patch("historical_2y.fetch_daily_2y", return_value=pd.DataFrame()):
             h_none = analyze_2y("BTCUSDT", df=None)

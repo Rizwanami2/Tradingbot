@@ -9,10 +9,10 @@ import pandas as pd
 
 from data_feed import DataFeed
 from risk_manager import RiskManager, INSTRUMENTS
-from autonomous_learner import AutonomousLearner, Knowledge
+from autonomous_learner import AutonomousLearner
 from trading_strategy_indicators_pro import IndicatorEngine
 from advanced_backtest import SimConfig, AdvancedSimulator, ema_cross_signal
-from main import get_price_info, format_price_string
+from main import format_price_string
 
 
 class TestSystemImprovements(unittest.TestCase):

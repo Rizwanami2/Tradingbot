@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 from execution import (
     BrokerConfigurationError,
     create_broker,
-    create_broker_fail_closed,
 )
 from mt5_broker import (
     MT5AccountInfo,
@@ -126,6 +125,7 @@ class TestMT5Broker(unittest.TestCase):
         # Feed candle triggering entry
         candle = {"high": 60100.0, "low": 59900.0, "close": 60050.0, "open": 60000.0}
         events = eng.update_market_candle("BTCUSDT", candle)
+        self.assertIsNotNone(events)
         self.assertIn("BTCUSDT", eng.active_positions)
         self.assertEqual(eng.active_positions["BTCUSDT"].status, OrderStatus.OPEN)
 

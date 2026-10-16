@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from trade_journal import TradeJournal
 from position_manager import PositionManager
-from risk_tiers import RiskTiers, RiskTierConfig
+from risk_tiers import RiskTiers
 from agent_stats import AgentStats
 from state_persistence import StateStore
 

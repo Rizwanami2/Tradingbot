@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from execution import OrderStateUnknownError
 from risk_manager import RiskManager

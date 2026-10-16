@@ -22,7 +22,7 @@ Educational only. Not financial advice.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Tuple
+from typing import Optional
 from enum import Enum
 from datetime import datetime, time
 import pandas as pd
@@ -369,7 +369,7 @@ class AIPredictor:
         c = df["close"].values.astype(float)
         if not np.isfinite(c[-1]) or abs(float(c[-1])) < 1e-12:
             return AIPrediction(Direction.FLAT, 0.0, 0.0, horizon, "Invalid price")
-        h, l, o = df["high"].values, df["low"].values, df["open"].values
+        h, l = df["high"].values, df["low"].values
         def mom(n):
             if len(c) <= n or abs(float(c[-n-1])) < 1e-12: return 0.0
             return float((c[-1]-c[-n-1])/c[-n-1])

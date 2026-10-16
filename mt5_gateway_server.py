@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict
 

@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
-from instrument_limits import clamp_leverage, get_max_leverage
+from instrument_limits import clamp_leverage
 from structure_trailing import structure_trail_stop
 
 

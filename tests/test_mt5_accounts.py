@@ -5,7 +5,6 @@ Telegram bot commands (/mt5, /switch, /live, /broker live), and interactive CLI.
 """
 
 import io
-import json
 import os
 import shutil
 import tempfile
@@ -19,7 +18,6 @@ import config
 from mt5_accounts import (
     MT5Account,
     MT5AccountManager,
-    connect_and_verify,
     switch_broker_mode,
     get_account_manager,
 )
@@ -30,10 +28,8 @@ from main import (
     live_command,
     broker_command,
     autotrade_callback_handler,
-    build_mt5_dashboard,
     run_cli_interactive,
     engine,
-    risk_mgr,
 )
 
 

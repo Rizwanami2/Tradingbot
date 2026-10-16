@@ -6,9 +6,8 @@ and expands modestly in calm trending conditions.
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
-import numpy as np
 import pandas as pd
 
 

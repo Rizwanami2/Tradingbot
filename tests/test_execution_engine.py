@@ -4,8 +4,8 @@ Unit tests for Automated Trade Execution Engine & Order Manager.
 
 import os
 import unittest
-from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
-from risk_manager import RiskManager, RiskConfig
+from execution_engine import ExecutionEngine, OrderStatus
+from risk_manager import RiskManager
 
 
 class TestExecutionEngine(unittest.TestCase):
@@ -471,6 +471,7 @@ class TestExecutionEngine(unittest.TestCase):
             "margin_required": 64.0, "risk_amount": 10.0, "rr": 2.0, "current_price": 64100.0,
         }
         order = self.engine.register_setup(sig_btc)
+        self.assertIsNotNone(order)
         # Simulate trigger and fill into active_positions
         candle = {"open": 64000.0, "high": 64500.0, "low": 63800.0, "close": 64200.0}
         self.engine.update_market_candle("BTCUSDT", candle)

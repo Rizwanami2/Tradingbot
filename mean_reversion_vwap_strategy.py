@@ -159,7 +159,6 @@ def detect_pinbar(df: pd.DataFrame) -> Tuple[bool, bool]:
         if bar_range <= 1e-8:
             return False, False
 
-        body = abs(close_p - open_p)
         upper_wick = high_p - max(open_p, close_p)
         lower_wick = min(open_p, close_p) - low_p
 

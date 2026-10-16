@@ -1,4 +1,3 @@
-import io
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
@@ -7,7 +6,7 @@ import config
 from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
 from multi_agent_trading_bot import Arbiter, Dir
 from risk_manager import RiskManager
-from strategy_profiles import StrategyProfile, load_profiles, get_profile, apply_profile, CURRENT_PROFILE
+from strategy_profiles import load_profiles, apply_profile
 
 
 class TestScalpProfileAndSpamTrading(unittest.TestCase):
@@ -137,6 +136,7 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
             "fast_market_fill": True,
         }
         order = self.engine.register_setup(sig, reason="Scalp LONG")
+        self.assertIsNotNone(order)
         self.assertIn("BTCUSDT", self.engine.pending_setups)
 
         # Even if candle does not cross 83450.0, fast_market_fill triggers immediately at curr_price

@@ -17,6 +17,6 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --upgrade pip numpy pandas pytest requests python-telegram-bot
       - name: Compile changed Python modules
-        run: python -m py_compile main.py config.py execution.py data_feed.py backtest_engine.py strategy_research.py market_regime.py ops_dashboard.py mt5_broker.py delta_broker.py execution_engine.py
+        run: python -m py_compile main.py config.py execution.py data_feed.py backtest_engine.py strategy_research.py market_regime.py ops_dashboard.py mt5_broker.py delta_broker.py execution_engine.py multi_agent_trading_bot.py autonomous_learner.py strategy_profiles.py mt5_accounts.py signal_pipeline.py
       - name: Run backtesting, execution, broker safety, and fault recovery regression tests
-        run: python -m pytest -q tests/test_backtest_engine.py tests/test_execution_engine.py tests/test_paper_broker_accounting.py tests/test_strategy_research.py tests/test_market_regime.py tests/test_ops_dashboard.py tests/test_data_feed.py tests/test_delta_broker.py tests/test_mt5_broker.py tests/test_live_readiness.py tests/test_fault_recovery.py tests/test_commands_list.py tests/test_risk_manager.py
+        run: python -m pytest -q

@@ -14,6 +14,7 @@ and shock detection.
 # Re-export from the new module so old imports still work
 try:
     from news_agent import NewsAgent, Dir, Vote
+    __all__ = ["NewsAgent", "Dir", "Vote"]
 except ImportError:
     raise ImportError(
         "NewsAgent.py is deprecated. Please use: from news_agent import NewsAgent"

@@ -233,7 +233,7 @@ def run_signal(
                     if cur_size > 0:
                         sig["size"] = max(0.01, round(cur_size * size_mult, 4))
                     res["status"] = f"{res.get('status', '')} | 🧠 Sized {size_mult:.0%} by Brain"
-    except Exception as _b_err:
+    except Exception:
         pass
 
     res["symbol"] = sym

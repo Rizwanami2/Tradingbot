@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 from execution import (
     BrokerConfigurationError,
-    ExecutionError,
     ExecutionStatus,
     OrderResult,
     OrderStateUnknownError,

@@ -13,12 +13,11 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock
 
-from execution import OrderStateUnknownError, Position
+from execution import OrderStateUnknownError
 from execution_engine import ExecutionEngine, OrderStatus, TradeOrder
 from delta_broker import MockDeltaBroker
 from mt5_broker import MockMT5Broker
 from risk_manager import RiskManager
-import config
 
 
 class TestFaultRecoveryAndBrokerSafety(unittest.TestCase):
@@ -267,6 +266,7 @@ class TestFaultRecoveryAndBrokerSafety(unittest.TestCase):
         """Verify broker-side SL/TP bracket synchronization on MT5 and Delta Exchange."""
         mt5_broker = MockMT5Broker()
         order = mt5_broker.place_order("BTCUSD", "buy", 0.02, price=68000.0, stop_loss=67000.0, take_profit=70000.0)
+        self.assertIsNotNone(order)
         self.assertTrue(mt5_broker.modify_position("BTCUSD", stop_loss=67500.0, take_profit=71000.0))
         pos = mt5_broker.positions["BTCUSD"]
         self.assertEqual(pos.stop_loss, 67500.0)
@@ -274,6 +274,7 @@ class TestFaultRecoveryAndBrokerSafety(unittest.TestCase):
 
         delta_broker = MockDeltaBroker(balance=20000.0)
         delta_order = delta_broker.place_order("BTCUSDT", "buy", 0.02, price=68000.0, stop_loss=67000.0, take_profit=70000.0)
+        self.assertIsNotNone(delta_order)
         self.assertTrue(delta_broker.modify_position("BTCUSDT", stop_loss=67500.0, take_profit=71000.0))
         d_pos = delta_broker.positions["BTCUSD"]
         self.assertEqual(d_pos.stop_loss, 67500.0)

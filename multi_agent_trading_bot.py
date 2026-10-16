@@ -11,20 +11,20 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 
 import config
-from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
+from execution_engine import ExecutionEngine, TradeOrder
 
 # Backward-compatible alias (main.py historically imported Position)
 Position = TradeOrder
-from risk_manager import RiskManager, RiskConfig, INSTRUMENTS, TradeRiskResult
-from trading_strategy_indicators_pro import IndicatorEngine, IndicatorSnapshot
+from risk_manager import RiskManager
+from trading_strategy_indicators_pro import IndicatorEngine
 
 try:
     from data_feed import DataFeed as _ImprovedDataFeed
@@ -267,7 +267,7 @@ class LiquidityAgent:
                 if direction == SMCDir.BEARISH:
                     return Vote(self.name, Dir.SHORT, float(strength), reason)
                 return Vote(self.name, Dir.FLAT, 0.0, reason)
-            except Exception as e:
+            except Exception:
                 pass
         # Fallback classic SMC heuristics
         if len(df) < 20:
@@ -557,7 +557,6 @@ class Arbiter:
         entry = float(df1["close"].iloc[-1])
         if getattr(self, "is_scalp", False):
             sl_pct = float(getattr(self, "scalp_sl_pct", 0.12)) / 100.0
-            tp_pct = float(getattr(self, "scalp_tp_pct", 0.10)) / 100.0
             atr_val = atr(df1) or (entry * 0.001)
             stop_dist = min(max(atr_val * 0.5, entry * (sl_pct * 0.6)), entry * (sl_pct * 1.5))
             if direction == Dir.LONG:

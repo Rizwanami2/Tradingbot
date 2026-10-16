@@ -10,7 +10,6 @@ import pandas as pd
 from mean_reversion_vwap_strategy import (
     MeanReversionVWAPAgent,
     MRDir,
-    MRVote,
     calc_vwap_bands,
     calc_rvol,
     calc_rsi,
