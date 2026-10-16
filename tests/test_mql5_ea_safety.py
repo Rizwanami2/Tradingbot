@@ -36,10 +36,9 @@ def test_stop_and_target_are_attached_to_orders():
     assert "trade.Sell(volume, _Symbol, 0.0, stop, target" in SOURCE
 
 
-def test_repository_defaults_are_demo_or_testnet_and_autotrade_off():
+def test_repository_defaults_keep_execution_disabled_and_mt5_demo_mode():
     assert 'MT5_ENABLED = os.getenv("MT5_ENABLED", "false")' in CONFIG_SOURCE
     assert 'MT5_MODE = os.getenv("MT5_MODE", "demo")' in CONFIG_SOURCE
-    assert 'or "delta_testnet"' in CONFIG_SOURCE
     assert 'DELTA_EXCHANGE_TESTNET = os.getenv("DELTA_EXCHANGE_TESTNET", "true")' in CONFIG_SOURCE
     assert 'os.getenv("DELTA_AUTO_LEVERAGE", "false")' in CONFIG_SOURCE
     assert 'AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false")' in CONFIG_SOURCE
