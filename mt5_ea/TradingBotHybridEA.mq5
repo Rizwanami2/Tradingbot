@@ -12,6 +12,7 @@
 input bool   InpEnableDemoExecution = false; // Must be explicitly enabled on a DEMO account
 input long   InpMagicNumber = 112233;
 input int    InpTimerSeconds = 1;
+input double InpMaxEntryDeviationPct = 0.25; // Reject stale price levels beyond this percent
 input string InpSignalFile = "TradingBot\\signal.csv";
 input string InpGoldSymbol = "XAUUSD";   // Set to broker symbol, e.g. XAUUSD.m or GOLD
 input string InpBitcoinSymbol = "BTCUSD"; // Set to broker symbol, e.g. BTCUSD.raw
@@ -218,6 +219,14 @@ void OnTimer()
       (side == "SELL" && !(take_profit < tick.bid && tick.bid < stop_loss)))
    {
       DiscardSignal("stop/target no longer bracket the current quote");
+      return;
+   }
+
+   double reference_price = (side == "BUY") ? tick.ask : tick.bid;
+   double deviation_pct = MathAbs(reference_price - entry) / entry * 100.0;
+   if(InpMaxEntryDeviationPct <= 0.0 || deviation_pct > InpMaxEntryDeviationPct)
+   {
+      DiscardSignal("current quote is too far from the Python signal entry");
       return;
    }
 
