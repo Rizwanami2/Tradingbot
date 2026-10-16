@@ -5,7 +5,7 @@ Hard limits per asset class to prevent dangerous over-leverage.
 """
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 # Max leverage by instrument / class
 LEVERAGE_CAPS: Dict[str, float] = {

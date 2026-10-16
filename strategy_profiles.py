@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Tuple
 
 PROFILES_FILE = "strategy_profiles.json"
 

@@ -725,21 +725,6 @@ class CCXTBroker(Broker):
             "CCXTBroker has been removed. MetaTrader 5 Live ('mt5_live') is the sole supported broker."
         )
 
-        self.exchange = exchange_class(config_dict)
-        if self.is_testnet:
-            try:
-                self.exchange.set_sandbox_mode(True)
-            except Exception:
-                pass
-
-        self._markets_loaded = False
-        self._cached_balance: float = 0.0
-        self._cached_equity: float = 0.0
-        self._cached_margin: float = 0.0
-        self._cached_free: float = 0.0
-        self.currency: str = "USDT"
-        self._connected: bool = bool(api_key and api_secret)
-
     @property
     def is_connected(self) -> bool:
         return self._connected

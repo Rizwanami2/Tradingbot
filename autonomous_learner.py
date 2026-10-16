@@ -681,7 +681,7 @@ class AutonomousLearner:
             f"• Min R:R Ratio: `1:{k.min_rr:.2f}`",
             f"• Min Agent Agreement: `{k.min_agreement}` agents",
             f"• Conviction Floor: `{k.conviction_floor:.0%}`",
-            f"• Scalp Overrides: `RR ≥ 1:0.95 | Score ≥ 1.00 | Agree ≥ 2`",
+            "• Scalp Overrides: `RR ≥ 1:0.95 | Score ≥ 1.00 | Agree ≥ 2`",
             "",
             "🚫 *Learned Bans:*",
             f"• Banned UTC Hours: `{banned_hrs_str}`",

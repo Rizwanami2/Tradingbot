@@ -18,12 +18,13 @@ Supports:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 import logging
 import math
 import time
+
+import config
 
 from execution import (
     Broker,
@@ -332,72 +333,6 @@ class MT5Broker(Broker):
             except Exception:
                 pass
         self._connected = False
-
-    def get_account_info(self) -> MT5AccountInfo:
-        """Fetch current MT5 account status, balance, equity, and margin details."""
-        margin_used = self.margin
-        eq = self.equity
-        margin_level = (eq / margin_used * 100.0) if margin_used > 0 else 999.0
-
-        if self.mode == "live" and native_mt5 is not None and self._connected:
-            try:
-                acc = native_mt5.account_info()
-                if acc:
-                    return MT5AccountInfo(
-                        login=int(acc.login),
-                        server=str(acc.server),
-                        trade_mode="live",
-                        connected=True,
-                        balance=float(acc.balance),
-                        equity=float(acc.equity),
-                        margin=float(acc.margin),
-                        free_margin=float(acc.margin_free),
-                        margin_level_pct=float(acc.margin_level or 999.0),
-                        leverage=float(acc.leverage),
-                        currency=str(acc.currency or "USD"),
-                        company=str(acc.company or "MetaQuotes"),
-                    )
-            except Exception as e:
-                logger.warning("[MT5Broker] account_info error: %s", e)
-
-        return MT5AccountInfo(
-            login=self.login if self.login else 0,
-            server=self.server,
-            trade_mode=self.mode,
-            connected=self._connected,
-            balance=round(self.balance, 2),
-            equity=round(eq, 2),
-            margin=round(margin_used, 2),
-            free_margin=round(self.free_margin, 2),
-            margin_level_pct=round(margin_level, 1),
-            leverage=self.leverage,
-            currency=self.currency,
-            company=self.company,
-        )
-
-    def switch_mode(self, mode: str, login: Optional[int] = None, password: Optional[str] = None, server: Optional[str] = None) -> bool:
-        """Switch between paper and live account mode dynamically."""
-        target_mode = "live" if str(mode).strip().lower() == "live" else "paper"
-        if login is not None:
-            self.login = int(login)
-        if password is not None:
-            self.password = str(password)
-        if server is not None:
-            self.server = str(server)
-        self.mode = target_mode
-        return self.connect()
-
-    def update_mark_price(self, symbol: str, mark_price: float) -> None:
-        """Update current market mark price on open positions to compute floating PnL."""
-        if mark_price <= 0 or not math.isfinite(mark_price):
-            return
-        sym = resolve_mt5_symbol(symbol)
-        for key in (sym, symbol.upper()):
-            if key in self._sim_positions:
-                pos = self._sim_positions[key]
-                pos.current_price = mark_price
-                diff = (mark_price - pos.entry_price) if pos.side.lower() == "buy" else (pos.entry_price - mark_price)
-                pos.unrealized_pnl = round(diff * pos.qty, 2)
 
     def place_order(
         self,

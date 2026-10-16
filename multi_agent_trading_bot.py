@@ -691,10 +691,10 @@ def run_backtest(args=None):
     if risk > 1.0:
         risk = risk / 100.0
 
-    print(f"\n==================================================")
+    print("\n==================================================")
     print(f" [Multi-Agent Backtest] Symbol: {symbol} | Bars: {bars}")
     print(f" Source: {source} | Equity: ${equity:,.2f} | Risk: {risk:.2%}")
-    print(f"==================================================\n")
+    print("==================================================\n")
 
     try:
         from auto_backtest import run_auto_backtest
@@ -737,13 +737,13 @@ def run_live(args=None):
     risk_pct = float(getattr(args, "risk", None) or (args.get("risk") if isinstance(args, dict) else None) or config.DEFAULT_RISK_PCT)
     leverage = float(getattr(args, "leverage", None) or (args.get("leverage") if isinstance(args, dict) else None) or config.DEFAULT_LEVERAGE)
 
-    print(f"\n==================================================")
-    print(f" [Multi-Agent Live Trader] Initializing")
+    print("\n==================================================")
+    print(" [Multi-Agent Live Trader] Initializing")
     print(f" Symbol:   {symbol}")
     print(f" Source:   {source} (Exchange: {exchange})")
     print(f" Equity:   ${equity:,.2f} | Leverage: {leverage:.0f}x")
     print(f" Risk Pct: {risk_pct}% | Poll Interval: {poll_sec}s")
-    print(f"==================================================\n")
+    print("==================================================\n")
 
     risk_mgr = RiskManager(equity=equity, symbol=symbol)
     if leverage:

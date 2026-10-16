@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from telegram import Update, Message, Chat
-from telegram.ext import ContextTypes, ApplicationBuilder
+from telegram.ext import ContextTypes
 
 import config
 from main import (
@@ -328,6 +328,13 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         await leverage_command(self.update, self.ctx)
         text2 = self.message.reply_text.call_args[0][0]
         self.assertIn("Leverage set to `15x`", text2)
+
+    async def test_close_command(self):
+        self.ctx.args = ["all"]
+        await close_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("No open positions to close", text)
 
     async def test_cancel_command(self):
         self.ctx.args = ["BTCUSDT"]

@@ -642,7 +642,7 @@ def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_e
         f"• **Daily PnL:** `${s.daily_pnl:+,.2f}` | **Weekly PnL:** `${s.weekly_pnl:+,.2f}`",
         f"• **Consecutive Losses:** `{s.consecutive_losses}` (Streak reset)",
         f"• **Risk Mode:** 🟢 `{s.mode.upper()}` | **Risk Factor (RF):** `{rf_val:.2f}`",
-        f"• **Circuit Breakers:** 🟢 Cleared (Engine halt lifted, Kill switch deactivated)",
+        "• **Circuit Breakers:** 🟢 Cleared (Engine halt lifted, Kill switch deactivated)",
         auto_note,
     ]
     return "\n".join(lines)
@@ -1341,7 +1341,7 @@ async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             m, trades, _ = sim.run(df, ema_cross_signal, symbol)
             out = m.summary()
             if trades:
-                out += f"\nLast trades (up to 5):\n"
+                out += "\nLast trades (up to 5):\n"
                 for t in trades[-5:]:
                     out += f"  {t.direction.upper()} R={t.r_multiple:+.2f} PnL={t.pnl:+.2f} ({t.reason})\n"
             return out
