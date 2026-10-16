@@ -241,8 +241,9 @@ class MT5AccountManager:
         """Return formatted Markdown listing of all accounts."""
         if not self._accounts:
             return (
-                "ℹ️ **No MT5 accounts saved.**\n"
-                "Add an account with:\n"
+                "📋 **MetaTrader 5 Accounts**\n\n"
+                "ℹ️ No MT5 accounts saved yet.\n"
+                "Add a demo account with:\n"
                 "`/mt5 add <login> <password> <server> [alias]`"
             )
 
