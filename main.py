@@ -116,24 +116,17 @@ try:
 except Exception as _sync_err:
     pass
 
+from execution import create_broker_fail_closed
+
 try:
-    from execution import create_broker
-    _broker = create_broker(
-        broker_mode=getattr(config, "BROKER_MODE", "mt5_live"),
-        mt5_mode=getattr(config, "MT5_MODE", "live"),
-        mt5_login=getattr(config, "MT5_LOGIN", 0),
-        mt5_password=getattr(config, "MT5_PASSWORD", ""),
-        mt5_server=getattr(config, "MT5_SERVER", "MetaQuotes-Demo"),
-        mt5_path=getattr(config, "MT5_PATH", ""),
-        mt5_magic=getattr(config, "MT5_MAGIC", 112233),
-        mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+    _broker = create_broker_fail_closed(
+        broker_mode=getattr(config, "BROKER_MODE", ""),
     )
 except Exception as _broker_err:
-    try:
-        from mt5_broker import MockMT5Broker
-        _broker = MockMT5Broker()
-    except Exception:
-        _broker = None
+    logger.exception(
+        "Broker initialization failed; refusing to start the trading bot."
+    )
+    raise SystemExit(1) from _broker_err
 engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)
 try:
     from strategy_profiles import apply_profile
