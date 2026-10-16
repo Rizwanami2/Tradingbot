@@ -334,9 +334,10 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/mt5` — Interactive MT5 dashboard & controls\n"
             "• `/mt5 add <login> <pass> <server> [alias]` — Add & save MT5 Live account\n"
             "• `/mt5 switch [<login>|<alias>]` — Switch active MT5 account\n"
+            "• `/mt5 balance [amount]` — View or update MT5 live balance\n"
             "• `/mt5 accounts` — List registered MT5 accounts\n"
-            "• `/mt5 remove <login|alias>` — Remove a saved MT5 account\n"
-            "• `/balance` — View active broker balance, equity, and margin\n"
+            "• `/mt5 remove <login|alias|all>` — Remove a saved account or all accounts\n"
+            "• `/balance [amount]` — View or update active broker balance, equity, and margin\n"
             "• `/broker` — View active broker environment & telemetry\n"
             "• `/broker [mt5|delta]` — Switch active execution broker engine"
         )
@@ -1453,6 +1454,8 @@ def build_mt5_dashboard() -> tuple:
         f"• `/mt5 switch live` — Connect / switch active live MT5 account\n"
         f"• `/mt5 switch <alias|login>` — Switch to a saved live account\n"
         f"• `/mt5 add <login> <pass> <server> [alias]` — Save live account\n"
+        f"• `/mt5 balance [amount]` — View or update MT5 live balance\n"
+        f"• `/mt5 remove <alias|login|all>` — Remove saved account(s)\n"
         f"• `/mt5 accounts` — List all saved accounts\n"
         f"• `/switch <alias|login>` | `/live`"
     )
