@@ -13,6 +13,8 @@ input bool   InpEnableDemoExecution = false; // Must be explicitly enabled on a 
 input long   InpMagicNumber = 112233;
 input int    InpTimerSeconds = 1;
 input string InpSignalFile = "TradingBot\\signal.csv";
+input string InpGoldSymbol = "XAUUSD";   // Set to broker symbol, e.g. XAUUSD.m or GOLD
+input string InpBitcoinSymbol = "BTCUSD"; // Set to broker symbol, e.g. BTCUSD.raw
 
 CTrade g_trade;
 bool g_warned_disabled = false;
@@ -144,6 +146,10 @@ void OnTimer()
    signal_id = Trimmed(signal_id);
    symbol = Trimmed(symbol);
    StringToUpper(symbol);
+   if(symbol == "XAUUSD" || symbol == "GOLD" || symbol == "XAU")
+      symbol = Trimmed(InpGoldSymbol);
+   else if(symbol == "BTCUSDT" || symbol == "BTC" || symbol == "BTCUSD")
+      symbol = Trimmed(InpBitcoinSymbol);
    side = Trimmed(side);
    StringToUpper(side);
 
