@@ -157,7 +157,8 @@ void OnTimer()
       DiscardSignal("duplicate signal id");
       return;
    }
-   if(created_at <= 0 || expires_at <= created_at || TimeGMT() > expires_at || created_at > TimeGMT() + 30)
+   if(created_at <= 0 || expires_at <= created_at || expires_at - created_at > 300 ||
+      TimeGMT() > expires_at || TimeGMT() - created_at > 300 || created_at > TimeGMT() + 30)
    {
       DiscardSignal("expired or invalid timestamps");
       return;
