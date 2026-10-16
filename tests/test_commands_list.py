@@ -25,6 +25,7 @@ from main import (
     positions_command,
     autotrade_command,
     balance_command,
+    delta_command,
     broker_command,
     oanda_command,
     alpaca_command,
@@ -70,6 +71,7 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/closed", text)
         self.assertIn("/cancel", text)
         self.assertIn("/mt5", text)
+        self.assertIn("/delta", text)
         self.assertIn("/broker", text)
         self.assertIn("/status", text)
         self.assertIn("/health", text)
@@ -112,12 +114,20 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Execution & Positions", text)
         self.assertIn("/positions", text)
 
-        # MT5 category
+        # MT5 / Broker category
         self.ctx.args = ["mt5"]
         await help_command(self.update, self.ctx)
         text = self.message.reply_text.call_args[0][0]
         self.assertIn("MetaTrader 5 & Broker Accounts", text)
         self.assertIn("/mt5", text)
+        self.assertIn("/delta", text)
+
+        # Delta category filter
+        self.ctx.args = ["delta"]
+        await help_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("MetaTrader 5 & Broker Accounts", text)
+        self.assertIn("/delta", text)
 
         # Risk category
         self.ctx.args = ["risk"]
@@ -442,6 +452,62 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"{name} Broker Removed", rep)
             self.assertIn("MetaTrader 5 (`/mt5`) is the sole live broker", rep)
 
+    async def test_delta_command_flow(self):
+        from delta_broker import MockDeltaBroker
+        orig_broker = engine.broker
+        engine.broker = None
+        self.ctx.args = []
+        with patch.object(config, "DELTA_EXCHANGE_API_KEY", ""), patch.object(config, "DELTA_EXCHANGE_API_SECRET", ""):
+            await delta_command(self.update, self.ctx)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("Delta Exchange India Live Broker", msg)
+            self.assertIn("/delta live <API_KEY> <API_SECRET>", msg)
+
+        mock_delta = MockDeltaBroker(balance=12500.0, leverage=25.0)
+        engine.broker = mock_delta
+        self.ctx.args = []
+        await delta_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("Delta Exchange India Broker Telemetry", msg)
+        self.assertIn("12,500.00", msg)
+
+        self.ctx.args = ["status"]
+        await delta_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("Delta Exchange India Telemetry", msg)
+        self.assertIn("12,500.00", msg)
+
+        self.ctx.args = ["leverage", "75"]
+        await delta_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("Delta Exchange Leverage Updated", msg)
+        self.assertIn("75x", msg)
+
+        self.ctx.args = ["auto_leverage", "on"]
+        await delta_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("Delta Exchange Auto-Leverage", msg)
+        self.assertIn("ENABLED", msg)
+
+        self.ctx.args = ["positions"]
+        await delta_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("No active open positions on Delta Exchange India", msg)
+
+        mock_delta.place_order(symbol="BTCUSD", side="buy", qty=0.1, price=65000.0)
+        self.ctx.args = ["positions"]
+        await delta_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("Delta Exchange Active Positions", msg)
+        self.assertIn("BTCUSD", msg)
+
+        self.ctx.args = ["close", "BTCUSD"]
+        await delta_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("closed successfully", msg)
+
+        engine.broker = orig_broker
+
     def test_cli_balance_and_native_broker_removal(self):
         input_data = io.StringIO("balance\nbalance 75000\noanda status\nalpaca status\nccxt status\nexit\n")
         output_data = io.StringIO()
@@ -452,6 +518,15 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Native live broker 'OANDA' has been removed", out)
         self.assertIn("Native live broker 'ALPACA' has been removed", out)
         self.assertIn("Native live broker 'CCXT' has been removed", out)
+
+    def test_cli_delta_interactive(self):
+        input_data = io.StringIO("help\ndelta\ndelta status\nswitch delta\nbroker delta\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("delta [CMD]", out)
+        self.assertIn("Delta Exchange", out)
 
 
 if __name__ == "__main__":

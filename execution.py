@@ -380,7 +380,7 @@ def create_broker_fail_closed(
 ):
     """
     Create the requested broker without silently falling back between modes.
-    Exclusively supports MetaTrader 5 Live ('mt5_live').
+    Exclusively supports MetaTrader 5 Live ('mt5_live') and Delta Exchange ('delta_live').
     All paper trading and legacy brokers have been removed.
     """
     mode = (broker_mode or "").strip().lower()
@@ -405,15 +405,25 @@ def create_broker_fail_closed(
         if delta_factory is not None:
             return delta_factory()
         from delta_broker import DeltaBroker
-        key = api_key or os.getenv("DELTA_EXCHANGE_API_KEY") or os.getenv("EXCHANGE_API_KEY") or ""
-        sec = api_secret or os.getenv("DELTA_EXCHANGE_API_SECRET") or os.getenv("EXCHANGE_API_SECRET") or ""
-        testnet = mode == "delta_testnet" or (os.getenv("DELTA_EXCHANGE_TESTNET", "false").lower() in ("true", "1", "yes", "on"))
-        base_url = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+        try:
+            import config as _cfg
+        except Exception:
+            _cfg = None
+        key = api_key or getattr(_cfg, "DELTA_EXCHANGE_API_KEY", "") or getattr(_cfg, "EXCHANGE_API_KEY", "") or os.getenv("DELTA_EXCHANGE_API_KEY") or os.getenv("EXCHANGE_API_KEY") or ""
+        sec = api_secret or getattr(_cfg, "DELTA_EXCHANGE_API_SECRET", "") or getattr(_cfg, "EXCHANGE_API_SECRET", "") or os.getenv("DELTA_EXCHANGE_API_SECRET") or os.getenv("EXCHANGE_API_SECRET") or ""
+        testnet = mode == "delta_testnet" or getattr(_cfg, "DELTA_EXCHANGE_TESTNET", False) or (os.getenv("DELTA_EXCHANGE_TESTNET", "false").lower() in ("true", "1", "yes", "on"))
+        base_url = getattr(_cfg, "DELTA_EXCHANGE_BASE_URL", "") or os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+        lev = float(getattr(_cfg, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0) or os.getenv("DELTA_EXCHANGE_DEFAULT_LEVERAGE", "20.0"))
+        auto_lev = bool(getattr(_cfg, "DELTA_EXCHANGE_AUTO_LEVERAGE", True) if getattr(_cfg, "DELTA_EXCHANGE_AUTO_LEVERAGE", None) is not None else (os.getenv("DELTA_EXCHANGE_AUTO_LEVERAGE", "true").lower() in ("true", "1", "yes", "on")))
+        max_lev = float(getattr(_cfg, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0) or os.getenv("DELTA_EXCHANGE_MAX_LEVERAGE", "200.0"))
         return DeltaBroker(
             api_key=key,
             api_secret=sec,
             base_url=base_url,
             is_testnet=testnet,
+            leverage=lev,
+            auto_leverage=auto_lev,
+            max_leverage=max_lev,
         )
 
     if mode in ("mt5", "mt5_live"):
@@ -444,7 +454,7 @@ def create_broker_fail_closed(
             raise BrokerConfigurationError(f"MT5 Live broker initialization failed: {exc}") from exc
 
     raise BrokerConfigurationError(
-        f"Unsupported broker mode {broker_mode!r}; MetaTrader 5 Live ('mt5_live') is the sole supported broker."
+        f"Unsupported broker mode {broker_mode!r}; MetaTrader 5 Live ('mt5_live') and Delta Exchange ('delta_live') are supported."
     )
 
 

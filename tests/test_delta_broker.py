@@ -1,6 +1,9 @@
+import asyncio
 import os
 import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import config
 from delta_broker import DeltaBroker, MockDeltaBroker, resolve_delta_symbol
 from execution import (
     BrokerConfigurationError,
@@ -187,6 +190,61 @@ class TestDeltaBroker(unittest.TestCase):
 
         if os.path.exists(state_file):
             os.remove(state_file)
+
+    def test_telegram_delta_command_live_and_testnet_connect(self):
+        from main import delta_command, engine
+
+        orig_broker = engine.broker
+        orig_mode = getattr(config, "BROKER_MODE", "mt5_live")
+
+        update = MagicMock()
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        ctx = MagicMock()
+
+        # 1. Test live connect with mocked DeltaBroker
+        mock_instance = MagicMock()
+        mock_instance.balance = 50000.0
+        mock_instance.equity = 50000.0
+        mock_instance.free_margin = 50000.0
+        mock_instance.currency = "USD"
+        mock_instance.base_url = "https://api.india.delta.exchange"
+        mock_instance.is_testnet = False
+        mock_instance.get_positions.return_value = []
+
+        with patch("delta_broker.DeltaBroker", return_value=mock_instance):
+            ctx.args = ["live", "test_key", "test_secret"]
+            asyncio.run(delta_command(update, ctx))
+            self.assertTrue(update.message.reply_text.called)
+            call_msg = update.message.reply_text.call_args[0][0]
+            self.assertIn("Delta Exchange India LIVE Connected Successfully", call_msg)
+            self.assertIn("50,000.00", call_msg)
+            self.assertEqual(config.BROKER_MODE, "delta_live")
+            self.assertEqual(engine.broker, mock_instance)
+
+        # 2. Test testnet connect with mocked DeltaBroker
+        mock_testnet_instance = MagicMock()
+        mock_testnet_instance.balance = 25000.0
+        mock_testnet_instance.equity = 25000.0
+        mock_testnet_instance.free_margin = 25000.0
+        mock_testnet_instance.currency = "USD"
+        mock_testnet_instance.base_url = "https://cdn-ind.testnet.deltaex.org"
+        mock_testnet_instance.is_testnet = True
+        mock_testnet_instance.get_positions.return_value = []
+
+        with patch("delta_broker.DeltaBroker", return_value=mock_testnet_instance):
+            ctx.args = ["testnet", "testnet_key", "testnet_secret"]
+            asyncio.run(delta_command(update, ctx))
+            self.assertTrue(update.message.reply_text.called)
+            call_msg = update.message.reply_text.call_args[0][0]
+            self.assertIn("Delta Exchange Testnet Connected Successfully", call_msg)
+            self.assertEqual(config.BROKER_MODE, "delta_testnet")
+            self.assertEqual(engine.broker, mock_testnet_instance)
+
+        # Restore
+        engine.broker = orig_broker
+        config.BROKER_MODE = orig_mode
 
 
 if __name__ == "__main__":
