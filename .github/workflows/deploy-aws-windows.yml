@@ -1,0 +1,102 @@
+name: Deploy to AWS Windows
+
+# Deploys on manual run by default (safer for live MT5).
+# Uncomment the push trigger only after the self-hosted runner is online
+# and you are comfortable auto-restarting the bot on every main commit.
+on:
+  workflow_dispatch:
+    inputs:
+      restart_bot:
+        description: "Restart TradingBot after git pull"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+  # push:
+  #   branches: [ main ]
+
+jobs:
+  deploy:
+    name: Pull and restart on AWS Windows
+    runs-on: self-hosted
+    # Optional: require a labeled runner, e.g. runs-on: [self-hosted, windows, mt5]
+
+    steps:
+      - name: Ensure project directory exists
+        shell: powershell
+        run: |
+          if (-not (Test-Path "C:\Tradingbot")) {
+            throw "C:\Tradingbot not found. Clone the repo on the EC2 host first."
+          }
+
+      - name: Refresh PATH (Git / Python)
+        shell: powershell
+        run: |
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                      [System.Environment]::GetEnvironmentVariable("Path","User")
+          git --version
+          python --version
+
+      - name: Stop bot processes (avoid Telegram token conflict)
+        shell: powershell
+        run: |
+          Get-Process python* -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (Get-Command nssm -ErrorAction SilentlyContinue) {
+            nssm stop TradingBot 2>$null
+          }
+          Start-Sleep -Seconds 2
+
+      - name: Git pull latest main
+        working-directory: C:\Tradingbot
+        shell: powershell
+        run: |
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                      [System.Environment]::GetEnvironmentVariable("Path","User")
+          git fetch origin main
+          git checkout main
+          git pull origin main
+          git log -1 --oneline
+
+      - name: Install Python dependencies
+        working-directory: C:\Tradingbot
+        shell: powershell
+        run: |
+          if (-not (Test-Path ".\venv\Scripts\Activate.ps1")) {
+            python -m venv venv
+          }
+          .\venv\Scripts\Activate.ps1
+          python -m pip install --upgrade pip -q
+          pip install -r requirements.txt -q
+
+      - name: Restart bot service
+        if: ${{ github.event.inputs.restart_bot != 'false' }}
+        working-directory: C:\Tradingbot
+        shell: powershell
+        run: |
+          if (Get-Command nssm -ErrorAction SilentlyContinue) {
+            $status = nssm status TradingBot 2>$null
+            if ($LASTEXITCODE -eq 0 -or $status) {
+              nssm restart TradingBot
+              Start-Sleep -Seconds 2
+              nssm status TradingBot
+            } else {
+              Write-Host "NSSM service TradingBot not installed; starting python run_bot.py in background"
+              Start-Process -FilePath "C:\Tradingbot\venv\Scripts\python.exe" `
+                -ArgumentList "C:\Tradingbot\run_bot.py" `
+                -WorkingDirectory "C:\Tradingbot" `
+                -WindowStyle Hidden
+            }
+          } else {
+            Write-Host "NSSM not found; starting python run_bot.py in background"
+            Start-Process -FilePath "C:\Tradingbot\venv\Scripts\python.exe" `
+              -ArgumentList "C:\Tradingbot\run_bot.py" `
+              -WorkingDirectory "C:\Tradingbot" `
+              -WindowStyle Hidden
+          }
+
+      - name: Deploy summary
+        shell: powershell
+        run: |
+          Write-Host "Deploy finished. Verify on Telegram: /start /status /mt5"
