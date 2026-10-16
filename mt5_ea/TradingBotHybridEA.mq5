@@ -138,7 +138,6 @@ void OnTimer()
    double take_profit = StringToDouble(FileReadString(handle));
    long created_at = (long)StringToInteger(FileReadString(handle));
    long expires_at = (long)StringToInteger(FileReadString(handle));
-   bool read_ok = !FileIsEnding(handle);
    FileClose(handle);
 
    schema = Trimmed(schema);
@@ -148,7 +147,7 @@ void OnTimer()
    side = Trimmed(side);
    StringToUpper(side);
 
-   if(!read_ok || schema != "1" || signal_id == "" || symbol == "")
+   if(schema != "1" || signal_id == "" || symbol == "")
    {
       DiscardSignal("malformed or unsupported signal row");
       return;
