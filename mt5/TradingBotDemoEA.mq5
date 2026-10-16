@@ -1,207 +1,411 @@
 //+------------------------------------------------------------------+
-//| TradingBotDemoEA.mq5                                             |
-//| Native MQL5 demo/tester EA; no live-account execution permitted.  |
+//| TradingBot_DemoEA.mq5                                            |
+//| Educational MT5 Expert Advisor - demo / Strategy Tester only     |
+//| Automated trading is OFF by default. Review and test before use.  |
 //+------------------------------------------------------------------+
 #property strict
 #property version   "1.00"
-#property description "TradingBot daily liquidity sweep confirmation EA (demo/tester only)"
+#property description "Previous completed D1 high/low sweep and rejection EA."
+#property description "Disabled by default; permits orders only in Tester or DEMO."
 
 #include <Trade/Trade.mqh>
 
-input bool   EnableTrading = false;       // Must be explicitly enabled for demo/tester
-input double RiskPercent = 0.20;          // Percent of equity at risk per trade
-input double MaxDailyLossPercent = 2.0;   // Halt new entries after this daily equity drawdown
-input double RewardRisk = 1.5;
-input int    MaxSpreadPoints = 35;
-input int    StopBufferPoints = 10;
-input ulong  MagicNumber = 112233;
-input ENUM_TIMEFRAMES SignalTimeframe = PERIOD_M1;
-input bool   OnePositionPerSymbol = true;
-
 CTrade trade;
-datetime last_bar_time = 0;
-datetime day_start_time = 0;
-double day_start_equity = 0.0;
-bool daily_halt = false;
 
+// ---- Safety switches ----
+input bool            EnableTrading             = false;       // Must be enabled manually for demo/tester
+input ENUM_TIMEFRAMES SignalTimeframe           = PERIOD_M1;
+input ulong           MagicNumber               = 26101601;
+
+// ---- Strategy settings ----
+input double          RiskPercent               = 0.20;        // Per-trade equity risk; hard-capped at 1%
+input double          RewardRiskRatio           = 2.0;
+input int             StopBufferPoints          = 30;
+input int             MaxSpreadPoints           = 50;
+input int             SetupExpiryBars           = 3;           // Pending confirmation expires after this many bars
+input bool            OnePositionPerSymbol      = true;
+
+// ---- Risk guards ----
+input double          MaxDailyDrawdownPercent   = 2.0;         // Block new orders after this daily equity loss
+input double          MaxAllowedRiskPercent     = 1.0;         // Hard safety cap for RiskPercent
+
+datetime g_lastBarTime = 0;
+bool     g_pendingBuy = false;
+bool     g_pendingSell = false;
+double   g_buyTrigger = 0.0;
+double   g_buySL      = 0.0;
+double   g_sellTrigger= 0.0;
+double   g_sellSL     = 0.0;
+int      g_setupBarsRemaining = 0;
+int      g_pendingBarsRemaining = 0;
+string   g_dailyEquityKey = "";
+
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   if(RiskPercent <= 0.0 || RiskPercent > MathMin(MaxAllowedRiskPercent, 1.0))
+   {
+      Print("Safety stop: RiskPercent must be > 0 and <= the 1% hard cap.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(RewardRiskRatio <= 0.0 || StopBufferPoints < 0 || MaxSpreadPoints < 0 ||
+      SetupExpiryBars < 1 || MaxDailyDrawdownPercent <= 0.0 ||
+      MaxDailyDrawdownPercent > 10.0)
+   {
+      Print("Safety stop: one or more risk/strategy inputs are invalid.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(10);
+   trade.SetTypeFillingBySymbol(_Symbol);
+
+   g_lastBarTime = iTime(_Symbol, SignalTimeframe, 0);
+   RefreshDailyEquityBaseline();
+   Print("TradingBot_DemoEA initialized. EnableTrading=", EnableTrading,
+         ". Orders are restricted to Strategy Tester or DEMO accounts.");
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   RefreshDailyEquityBaseline();
+
+   // Pending confirmation can trigger intrabar, but only from a closed signal candle.
+   if(g_pendingBuy || g_pendingSell)
+      CheckPendingEntry();
+
+   datetime barTime = iTime(_Symbol, SignalTimeframe, 0);
+   if(barTime == 0 || barTime == g_lastBarTime)
+      return;
+
+   g_lastBarTime = barTime;
+   UpdatePendingSetupLifetime();
+   DetectNewSetup();
+}
+
+//+------------------------------------------------------------------+
 bool IsDemoOrTester()
 {
-   if (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION))
+   if((bool)MQLInfoInteger(MQL_TESTER) ||
+      (bool)MQLInfoInteger(MQL_OPTIMIZATION))
       return true;
-   return ((ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO);
+
+   ENUM_ACCOUNT_TRADE_MODE mode =
+      (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   return (mode == ACCOUNT_TRADE_MODE_DEMO);
 }
 
-void RefreshDailyGuard()
+//+------------------------------------------------------------------+
+bool TradingSafetyChecksPass()
 {
-   MqlDateTime now_parts;
-   TimeToStruct(TimeCurrent(), now_parts);
-   now_parts.hour = 0; now_parts.min = 0; now_parts.sec = 0;
-   datetime today = StructToTime(now_parts);
-   if (today != day_start_time)
+   if(!EnableTrading)
    {
-      day_start_time = today;
-      day_start_equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      daily_halt = false;
+      Print("Entry blocked: EnableTrading=false.");
+      return false;
    }
-   if (day_start_equity > 0.0)
-   {
-      double drawdown_pct = 100.0 * (day_start_equity - AccountInfoDouble(ACCOUNT_EQUITY)) / day_start_equity;
-      if (drawdown_pct >= MaxDailyLossPercent)
-         daily_halt = true;
-   }
-}
 
-bool IsNewBar()
-{
-   datetime bar_time = iTime(_Symbol, SignalTimeframe, 0);
-   if (bar_time <= 0 || bar_time == last_bar_time) return false;
-   last_bar_time = bar_time;
+   if(!IsDemoOrTester())
+   {
+      Print("Entry blocked: this EA only permits Strategy Tester or DEMO accounts.");
+      return false;
+   }
+
+   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
+      !MQLInfoInteger(MQL_TRADE_ALLOWED) ||
+      !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+   {
+      Print("Entry blocked: terminal, EA, or account trading permission is disabled.");
+      return false;
+   }
+
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick) || tick.ask <= 0.0 || tick.bid <= 0.0)
+      return false;
+
+   double spreadPoints = (tick.ask - tick.bid) / _Point;
+   if(spreadPoints > MaxSpreadPoints)
+   {
+      Print("Entry blocked: spread ", DoubleToString(spreadPoints, 1),
+            " points exceeds limit ", MaxSpreadPoints, ".");
+      return false;
+   }
+
+   if(DailyDrawdownLimitReached())
+   {
+      Print("Entry blocked: daily equity drawdown guard reached.");
+      return false;
+   }
+
+   if(OnePositionPerSymbol && HasPositionForThisEA())
+   {
+      Print("Entry blocked: this EA already has a position on ", _Symbol, ".");
+      return false;
+   }
+
    return true;
 }
 
-bool HasOurPosition()
+//+------------------------------------------------------------------+
+void DetectNewSetup()
 {
-   for (int i = PositionsTotal() - 1; i >= 0; --i)
+   // Shift 1 is the most recently completed signal candle.
+   MqlRates bars[];
+   ArraySetAsSeries(bars, true);
+   if(CopyRates(_Symbol, SignalTimeframe, 1, 2, bars) != 2)
+      return;
+
+   double priorDayHigh = iHigh(_Symbol, PERIOD_D1, 1);
+   double priorDayLow  = iLow(_Symbol, PERIOD_D1, 1);
+   if(priorDayHigh <= 0.0 || priorDayLow <= 0.0 || priorDayHigh <= priorDayLow)
+      return;
+
+   MqlRates signal = bars[0];
+
+   // Bearish sweep/rejection: signal candle trades above the prior D1 high,
+   // then closes back below it as a bearish candle.
+   if(signal.high > priorDayHigh && signal.close < priorDayHigh &&
+      signal.close < signal.open)
+   {
+      g_pendingSell = true;
+      g_pendingBuy = false;
+      g_sellTrigger = signal.low;
+      g_sellSL = signal.high + StopBufferPoints * _Point;
+      g_pendingBarsRemaining = SetupExpiryBars;
+      Print("Bearish D1-high sweep detected. Waiting for a break below ",
+            DoubleToString(g_sellTrigger, _Digits));
+      return;
+   }
+
+   // Bullish sweep/rejection: signal candle trades below the prior D1 low,
+   // then closes back above it as a bullish candle.
+   if(signal.low < priorDayLow && signal.close > priorDayLow &&
+      signal.close > signal.open)
+   {
+      g_pendingBuy = true;
+      g_pendingSell = false;
+      g_buyTrigger = signal.high;
+      g_buySL = signal.low - StopBufferPoints * _Point;
+      g_pendingBarsRemaining = SetupExpiryBars;
+      Print("Bullish D1-low sweep detected. Waiting for a break above ",
+            DoubleToString(g_buyTrigger, _Digits));
+   }
+}
+
+//+------------------------------------------------------------------+
+void CheckPendingEntry()
+{
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick))
+      return;
+
+   if(g_pendingSell && tick.bid <= g_sellTrigger)
+   {
+      double entry = tick.bid;
+      double sl = NormalizeDouble(g_sellSL, _Digits);
+      double riskDistance = sl - entry;
+      if(riskDistance <= 0.0)
+      {
+         g_pendingSell = false;
+         return;
+      }
+      double tp = NormalizeDouble(entry - riskDistance * RewardRiskRatio, _Digits);
+      if(TradingSafetyChecksPass())
+         SubmitMarketOrder(ORDER_TYPE_SELL, entry, sl, tp);
+      g_pendingSell = false;
+   }
+   else if(g_pendingBuy && tick.ask >= g_buyTrigger)
+   {
+      double entry = tick.ask;
+      double sl = NormalizeDouble(g_buySL, _Digits);
+      double riskDistance = entry - sl;
+      if(riskDistance <= 0.0)
+      {
+         g_pendingBuy = false;
+         return;
+      }
+      double tp = NormalizeDouble(entry + riskDistance * RewardRiskRatio, _Digits);
+      if(TradingSafetyChecksPass())
+         SubmitMarketOrder(ORDER_TYPE_BUY, entry, sl, tp);
+      g_pendingBuy = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+void UpdatePendingSetupLifetime()
+{
+   if(g_pendingBuy || g_pendingSell)
+   {
+      g_pendingBarsRemaining--;
+      if(g_pendingBarsRemaining <= 0)
+      {
+         g_pendingBuy = false;
+         g_pendingSell = false;
+         Print("Pending setup expired without confirmation.");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+void SubmitMarketOrder(ENUM_ORDER_TYPE orderType, double requestedEntry,
+                       double sl, double tp)
+{
+   // Repeat account restrictions immediately before sending an order.
+   if(!EnableTrading || !IsDemoOrTester())
+   {
+      Print("Order cancelled by final safety gate.");
+      return;
+   }
+
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick))
+      return;
+
+   double entry = (orderType == ORDER_TYPE_BUY) ? tick.ask : tick.bid;
+   if(orderType == ORDER_TYPE_BUY && (sl >= entry || tp <= entry))
+   {
+      Print("Order cancelled: invalid BUY SL/TP geometry.");
+      return;
+   }
+   if(orderType == ORDER_TYPE_SELL && (sl <= entry || tp >= entry))
+   {
+      Print("Order cancelled: invalid SELL SL/TP geometry.");
+      return;
+   }
+
+   // Respect broker minimum stop distance.
+   long stopsLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDistance = (double)stopsLevel * _Point;
+   if(orderType == ORDER_TYPE_BUY &&
+      ((entry - sl) < minDistance || (tp - entry) < minDistance))
+   {
+      Print("Order cancelled: BUY stop/target is inside broker stop distance.");
+      return;
+   }
+   if(orderType == ORDER_TYPE_SELL &&
+      ((sl - entry) < minDistance || (entry - tp) < minDistance))
+   {
+      Print("Order cancelled: SELL stop/target is inside broker stop distance.");
+      return;
+   }
+
+   double volume = CalculateRiskBasedVolume(orderType, entry, sl);
+   if(volume <= 0.0)
+   {
+      Print("Order cancelled: risk-sized volume is below broker minimum or invalid.");
+      return;
+   }
+
+   bool sent = false;
+   if(orderType == ORDER_TYPE_BUY)
+      sent = trade.Buy(volume, _Symbol, 0.0, sl, tp, "TradingBot D1 sweep BUY");
+   else
+      sent = trade.Sell(volume, _Symbol, 0.0, sl, tp, "TradingBot D1 sweep SELL");
+
+   if(!sent)
+      Print("Order request failed. Retcode=", trade.ResultRetcode(),
+            " ", trade.ResultRetcodeDescription());
+   else
+      Print("Demo/tester order accepted. Volume=", DoubleToString(volume, 2),
+            " SL=", DoubleToString(sl, _Digits),
+            " TP=", DoubleToString(tp, _Digits));
+}
+
+//+------------------------------------------------------------------+
+double CalculateRiskBasedVolume(ENUM_ORDER_TYPE orderType, double entry, double sl)
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double riskPct = MathMin(RiskPercent, MathMin(MaxAllowedRiskPercent, 1.0));
+   double riskCash = equity * riskPct / 100.0;
+   if(equity <= 0.0 || riskCash <= 0.0)
+      return 0.0;
+
+   double profitAtStop = 0.0;
+   if(!OrderCalcProfit(orderType, _Symbol, 1.0, entry, sl, profitAtStop))
+   {
+      Print("OrderCalcProfit failed; refusing to guess position size.");
+      return 0.0;
+   }
+
+   double lossPerLot = MathAbs(profitAtStop);
+   if(lossPerLot <= 0.0)
+      return 0.0;
+
+   double rawVolume = riskCash / lossPerLot;
+   double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(minVolume <= 0.0 || maxVolume <= 0.0 || step <= 0.0)
+      return 0.0;
+
+   // Round DOWN only. Never round up to the broker's minimum lot.
+   double volume = MathFloor(rawVolume / step) * step;
+   volume = MathMin(volume, maxVolume);
+   if(volume < minVolume)
+   {
+      Print("Risk-sized volume ", DoubleToString(volume, 4),
+            " is below broker minimum ", DoubleToString(minVolume, 4),
+            "; trade skipped to avoid increasing risk.");
+      return 0.0;
+   }
+
+   int volumeDigits = 0;
+   double stepCheck = step;
+   while(volumeDigits < 8 && MathAbs(stepCheck - MathRound(stepCheck)) > 1e-8)
+   {
+      stepCheck *= 10.0;
+      volumeDigits++;
+   }
+   return NormalizeDouble(volume, volumeDigits);
+}
+
+//+------------------------------------------------------------------+
+bool HasPositionForThisEA()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
-      if (ticket == 0) continue;
-      if (PositionGetString(POSITION_SYMBOL) == _Symbol &&
-          (ulong)PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+         (ulong)PositionGetInteger(POSITION_MAGIC) == MagicNumber)
          return true;
    }
    return false;
 }
 
-double NormalizeVolume(double volume)
+//+------------------------------------------------------------------+
+void RefreshDailyEquityBaseline()
 {
-   double min_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double max_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   if (step <= 0.0) return 0.0;
-   volume = MathFloor(volume / step) * step;
-   volume = MathMin(volume, max_volume);
-   if (volume < min_volume) return 0.0; // Never round risk up to broker minimum.
-   int digits = 0;
-   double tmp = step;
-   while (digits < 8 && MathAbs(tmp - MathRound(tmp)) > 1e-8) { tmp *= 10.0; digits++; }
-   return NormalizeDouble(volume, digits);
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   string datePart = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+   g_dailyEquityKey = StringFormat("TB_D1EQ_%I64d_%s_%I64u",
+                                   AccountInfoInteger(ACCOUNT_LOGIN),
+                                   _Symbol, MagicNumber);
+   string todayKey = g_dailyEquityKey + "_" + datePart;
+
+   // Preserve today's baseline across terminal restarts via terminal global variables.
+   if(!GlobalVariableCheck(todayKey))
+      GlobalVariableSet(todayKey, AccountInfoDouble(ACCOUNT_EQUITY));
+
+   // Keep the current key for the drawdown guard.
+   g_dailyEquityKey = todayKey;
 }
 
-double CalculateVolume(ENUM_ORDER_TYPE order_type, double entry, double stop)
+//+------------------------------------------------------------------+
+bool DailyDrawdownLimitReached()
 {
-   double risk_money = AccountInfoDouble(ACCOUNT_EQUITY) * RiskPercent / 100.0;
-   double loss_for_one_lot = 0.0;
-   if (risk_money <= 0.0 || !OrderCalcProfit(order_type, _Symbol, 1.0, entry, stop, loss_for_one_lot))
-      return 0.0;
-   loss_for_one_lot = MathAbs(loss_for_one_lot);
-   if (loss_for_one_lot <= 0.0) return 0.0;
-   return NormalizeVolume(risk_money / loss_for_one_lot);
+   if(g_dailyEquityKey == "" || !GlobalVariableCheck(g_dailyEquityKey))
+      return false;
+
+   double baseline = GlobalVariableGet(g_dailyEquityKey);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(baseline <= 0.0)
+      return true;
+
+   double drawdownPct = (baseline - equity) / baseline * 100.0;
+   return (drawdownPct >= MaxDailyDrawdownPercent);
 }
-
-bool SpreadAllowed()
-{
-   MqlTick tick;
-   if (!SymbolInfoTick(_Symbol, tick)) return false;
-   if (_Point <= 0.0) return false;
-   return ((tick.ask - tick.bid) / _Point <= MaxSpreadPoints);
-}
-
-void SubmitDemoOrder(ENUM_ORDER_TYPE side, double stop, double target)
-{
-   if (!EnableTrading || !IsDemoOrTester() || daily_halt || !SpreadAllowed()) return;
-   if (OnePositionPerSymbol && HasOurPosition()) return;
-
-   MqlTick tick;
-   if (!SymbolInfoTick(_Symbol, tick)) return;
-   double entry = (side == ORDER_TYPE_BUY) ? tick.ask : tick.bid;
-   stop = NormalizeDouble(stop, _Digits);
-   target = NormalizeDouble(target, _Digits);
-   if ((side == ORDER_TYPE_BUY && (stop >= entry || target <= entry)) ||
-       (side == ORDER_TYPE_SELL && (stop <= entry || target >= entry))) return;
-
-   double volume = CalculateVolume(side, entry, stop);
-   if (volume <= 0.0)
-   {
-      Print("EA safety block: calculated volume below broker minimum or invalid risk inputs.");
-      return;
-   }
-
-   trade.SetExpertMagicNumber(MagicNumber);
-   trade.SetDeviationInPoints(10);
-   bool sent = false;
-   if (side == ORDER_TYPE_BUY)
-      sent = trade.Buy(volume, _Symbol, 0.0, stop, target, "TradingBot demo sweep long");
-   else
-      sent = trade.Sell(volume, _Symbol, 0.0, stop, target, "TradingBot demo sweep short");
-
-   if (!sent)
-      PrintFormat("Order rejected/failed. retcode=%u, %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
-   else
-      PrintFormat("Demo/tester order submitted. ticket=%I64u volume=%.4f", trade.ResultOrder(), volume);
-}
-
-int OnInit()
-{
-   if (RiskPercent <= 0.0 || RiskPercent > 1.0 || MaxDailyLossPercent <= 0.0 ||
-       RewardRisk <= 0.0 || MaxSpreadPoints <= 0 || StopBufferPoints < 0)
-      return INIT_PARAMETERS_INCORRECT;
-   if (EnableTrading && !IsDemoOrTester())
-   {
-      Print("SAFETY BLOCK: This EA permits order submission only in Strategy Tester or an MT5 DEMO account.");
-      return INIT_FAILED;
-   }
-   trade.SetExpertMagicNumber(MagicNumber);
-   day_start_time = 0;
-   RefreshDailyGuard();
-   Print("TradingBotDemoEA initialized. EnableTrading defaults to false; live accounts are prohibited.");
-   return INIT_SUCCEEDED;
-}
-
-void OnTick()
-{
-   RefreshDailyGuard();
-   if (!IsNewBar()) return;
-
-   // Use only completed bars. A sweep of yesterday's high/low must close back
-   // inside the level before a confirmation signal is considered.
-   MqlRates bars[];
-   ArraySetAsSeries(bars, true);
-   if (CopyRates(_Symbol, SignalTimeframe, 0, 3, bars) != 3) return;
-
-   double prev_day_high = iHigh(_Symbol, PERIOD_D1, 1);
-   double prev_day_low  = iLow(_Symbol, PERIOD_D1, 1);
-   if (prev_day_high <= 0.0 || prev_day_low <= 0.0) return;
-
-   MqlRates signal = bars[1];
-   double buffer = StopBufferPoints * _Point;
-
-   // Bearish rejection after sweeping the previous completed daily high.
-   if (signal.high > prev_day_high && signal.close < prev_day_high && signal.close < signal.open)
-   {
-      double stop = signal.high + buffer;
-      MqlTick tick;
-      if (!SymbolInfoTick(_Symbol, tick)) return;
-      double entry = tick.bid;
-      double risk = stop - entry;
-      if (risk > 0.0)
-         SubmitDemoOrder(ORDER_TYPE_SELL, stop, entry - RewardRisk * risk);
-      return;
-   }
-
-   // Bullish rejection after sweeping the previous completed daily low.
-   if (signal.low < prev_day_low && signal.close > prev_day_low && signal.close > signal.open)
-   {
-      double stop = signal.low - buffer;
-      MqlTick tick;
-      if (!SymbolInfoTick(_Symbol, tick)) return;
-      double entry = tick.ask;
-      double risk = entry - stop;
-      if (risk > 0.0)
-         SubmitDemoOrder(ORDER_TYPE_BUY, stop, entry + RewardRisk * risk);
-   }
-}
-
-void OnDeinit(const int reason)
-{
-   PrintFormat("TradingBotDemoEA stopped. reason=%d", reason);
-}
+//+------------------------------------------------------------------+
