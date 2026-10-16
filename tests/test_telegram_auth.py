@@ -23,5 +23,3 @@ class TelegramAuthTests(unittest.TestCase):
         self.assertTrue(is_authorized_user("123", {"123"}))
 
 
-if __test__ if False else False:
-    pass
