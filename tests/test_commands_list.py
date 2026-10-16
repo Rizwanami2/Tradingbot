@@ -367,35 +367,18 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
     async def test_balance_command_view_and_set(self):
-        # 1. View balance with no arguments
+        # 1. View balance informs user paper trading wallet has been removed
         self.ctx.args = []
         await balance_command(self.update, self.ctx)
         self.message.reply_text.assert_called()
         view_text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Paper Trading Wallet & Balance", view_text)
-        self.assertIn("Current Balance:", view_text)
+        self.assertIn("Paper Trading Wallet Removed", view_text)
+        self.assertIn("MetaTrader 5 Live is the sole exclusive broker", view_text)
 
-        # 2. Set balance to custom amount (e.g. 25,000)
-        self.ctx.args = ["25000"]
-        await balance_command(self.update, self.ctx)
-        set_text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Paper Wallet Balance Updated", set_text)
-        self.assertIn("25,000.00", set_text)
-        self.assertEqual(risk_mgr.state.equity, 25000.0)
-
-        # 3. Set balance with shorthand (e.g. 50k)
-        self.ctx.args = ["50k"]
-        await balance_command(self.update, self.ctx)
-        k_text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Paper Wallet Balance Updated", k_text)
-        self.assertIn("50,000.00", k_text)
-        self.assertEqual(risk_mgr.state.equity, 50000.0)
-
-        # 4. Invalid balance amount
-        self.ctx.args = ["invalid_amount"]
-        await balance_command(self.update, self.ctx)
-        err_text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Failed to set balance", err_text)
+        # 2. set_paper_wallet_balance fails-closed
+        ok, msg, _ = set_paper_wallet_balance(25000)
+        self.assertFalse(ok)
+        self.assertIn("Paper trading wallet has been removed", msg)
 
     async def test_broker_command_and_native_removals(self):
         # 1. View broker info
@@ -406,11 +389,11 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Execution Broker Environment", broker_text)
         self.assertIn("MetaTrader 5 (Exclusive Live Execution Engine)", broker_text)
 
-        # 2. Switch to paper mode
+        # 2. Switch to paper mode informs paper mode removed
         self.ctx.args = ["paper"]
         await broker_command(self.update, self.ctx)
         paper_text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Broker Switched to PAPER Simulation", paper_text)
+        self.assertIn("Paper Trading Mode Removed", paper_text)
 
         # 3. Attempting native brokers via broker command warns user
         for b in ("oanda", "alpaca", "ccxt"):
@@ -434,8 +417,7 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
             run_cli_interactive()
         out = output_data.getvalue()
-        self.assertIn("Paper Trade Wallet:", out)
-        self.assertIn("Paper wallet balance successfully set to $75,000.00", out)
+        self.assertIn("Paper trading and paper wallet balance have been removed", out)
         self.assertIn("Native live broker 'OANDA' has been removed", out)
         self.assertIn("Native live broker 'ALPACA' has been removed", out)
         self.assertIn("Native live broker 'CCXT' has been removed", out)

@@ -1,6 +1,11 @@
-# Paper Trading Accounting (Phase 2)
+# Paper Trading Accounting (DEPRECATED & REMOVED)
 
-The `PaperBroker` is a local simulation only. It does not fetch market prices or submit exchange orders. Every paper order must be supplied an explicit positive fill price; callers must not interpret that fill as a live market fill.
+> [!WARNING]
+> **Paper trading and PaperBroker have been completely removed.**
+> MetaTrader 5 Live (`mt5_live`) is now the sole, exclusive execution broker across the entire platform. Attempting to instantiate `PaperBroker` or set `BROKER_MODE=paper` fails closed with a `BrokerConfigurationError`.
+> For live execution setup, refer to [MT5_INTEGRATION.md](MT5_INTEGRATION.md).
+
+The historical documentation below is kept for archival reference only.
 
 ## Accounting behavior
 

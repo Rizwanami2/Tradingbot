@@ -137,7 +137,10 @@ class OANDABroker(Broker):
         environment: str = "practice",
         timeout: int = 10,
     ):
-        self.account_id = str(account_id or "").strip()
+        from execution import BrokerConfigurationError
+        raise BrokerConfigurationError(
+            "OANDABroker has been removed. MetaTrader 5 Live ('mt5_live') is the sole supported broker."
+        )
         self.api_token = str(api_token or "").strip()
         self.environment = "live" if str(environment).strip().lower() == "live" else "practice"
         self.base_url = LIVE_BASE_URL if self.environment == "live" else PRACTICE_BASE_URL

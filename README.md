@@ -1,6 +1,6 @@
 # TradingBot — Multi-Agent Institutional Trading Assistant
 
-Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **Bitcoin (BTCUSDT)** powered by 7-agent consensus, best-entry zones, 2-year market structure, and **MetaTrader 5 (MT5) / Paper execution**.
+Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **Bitcoin (BTCUSDT)** powered by 7-agent consensus, best-entry zones, 2-year market structure, and **exclusive MetaTrader 5 (MT5) Live execution**.
 
 ## Features
 
@@ -10,7 +10,7 @@ Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **B
 | **Entry Planning** | Dynamic best-entry *zones* synthesized from PDH/PDL, EMAs, market swings, ATR volatility, and 2-year macro S/R levels |
 | **2Y History** | ~730 daily bars caching — 52-week ranges, EMA50/200, historical swing structures |
 | **Autotrade** | Automated multi-symbol execution up to **5 concurrent active trade slots** |
-| **Brokers** | **PaperBroker** (local ledger) & **MT5Broker** (**Paper/Demo simulation** and **Live MT5 account deal execution**) |
+| **Brokers** | **MetaTrader 5 Live (`mt5_live`)** — Exclusive execution engine for institutional real trading with broker-side SL/TP. (Paper trading and legacy brokers have been removed). |
 | **Safety & Risk** | Fail-closed security, 0.20% base risk per trade, 3.0% daily loss limit, 6.0% weekly loss limit, dynamic leverage ceilings, and emergency kill switch |
 | **Scalping** | Optional instant profit harvesting on USD profit target or percentage moves |
 
@@ -22,8 +22,8 @@ TELEGRAM_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 GEMINI_API_KEY=your_gemini_api_key
 
-# Execution & Broker Settings (paper | mt5 | mt5_paper | mt5_live | live)
-BOT_BROKER_MODE=paper
+# Execution & Broker Settings (Exclusive: mt5_live)
+BOT_BROKER_MODE=mt5_live
 BOT_EQUITY=1000
 BOT_LEVERAGE=20
 BOT_AUTOTRADE=true
@@ -31,15 +31,15 @@ BOT_AUTOTRADE_SYMBOLS=BTCUSDT,XAUUSD
 BOT_MAX_OPEN_TRADES=5
 BOT_DATA_SOURCE=ccxt
 
-# MetaTrader 5 (MT5) Settings
-MT5_ENABLED=false
-MT5_MODE=paper              # paper | live
-MT5_LOGIN=
-MT5_PASSWORD=
-MT5_SERVER=MetaQuotes-Demo
-MT5_PATH=
-MT5_MAGIC=112233
-MT5_GATEWAY_URL=
+# MetaTrader 5 (MT5) Live Settings
+MT5_ENABLED=true
+MT5_MODE=live               # Exclusive Live Execution
+MT5_LOGIN=12345678          # Account number (integer)
+MT5_PASSWORD=YourPassword   # Account trading password
+MT5_SERVER=YourBroker-Live  # Broker server name (e.g., Exness-MT5Live, IC-Markets, etc.)
+MT5_PATH=                   # Optional path to terminal64.exe (Windows/Wine)
+MT5_MAGIC=112233            # EA Magic identifier for order tagging
+MT5_GATEWAY_URL=            # Optional HTTP gateway for Linux/cloud execution
 
 # Strategy Profile & Micro-Scalping Settings
 BOT_PROFILE=scalp
@@ -70,12 +70,11 @@ BOT_NEWS=true
 - `/cancel [SYM]` — Cancel pending order setup
 - `/closed` — Recently closed trades history & realized PnL
 
-### 🏦 Multi-Broker & Live Execution Environments
-- `/broker [paper|oanda|ccxt|alpaca|mt5|mt5_live]` — View or switch active execution broker engine
-- `/mt5 [status|paper|live|positions]` — MetaTrader 5 account telemetry & execution ([Guide](docs/MT5_INTEGRATION.md))
-- `/oanda [status|live|positions]` — Native OANDA v20 REST broker for Gold & Forex ([Guide](docs/NATIVE_BROKERS.md))
-- `/ccxt [status|live|positions]` — CCXT exchange live trading (Binance, Bybit, OKX, Kraken)
-- `/alpaca [status|live|positions]` — Alpaca REST broker (paper & live trading)
+### 🏦 Exclusive MT5 Live Execution
+- `/mt5 [status|live|accounts|add]` — MetaTrader 5 live account dashboard & management ([Guide](docs/MT5_INTEGRATION.md))
+- `/live` — Connect and inspect MT5 Live account telemetry
+- `/switch <alias|login>` — Switch active MT5 Live account credentials
+- `/broker` — Display exclusive MT5 Live broker status and telemetry
 
 ### 🛡️ Risk & Safety Management
 - `/status` — Portfolio equity, drawdown, active slot capacity & strategy profile

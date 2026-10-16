@@ -149,11 +149,9 @@ class TestSwitchBrokerMode(unittest.TestCase):
 
     def test_switch_to_paper(self):
         ok, msg, broker = switch_broker_mode("paper", engine=engine, config_mod=config)
-        self.assertTrue(ok)
-        self.assertIn("MT5 Paper", msg)
-        self.assertEqual(config.BROKER_MODE, "mt5_paper")
-        self.assertIsInstance(engine.broker, MT5Broker)
-        self.assertEqual(engine.broker.mode, "paper")
+        self.assertFalse(ok)
+        self.assertIn("Paper Trading Removed", msg)
+        self.assertEqual(config.BROKER_MODE, "mt5_live")
 
     def test_switch_to_live_no_accounts_fail_closed(self):
         # Empty accounts manager
@@ -267,24 +265,23 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         await switch_command(self.update, self.ctx)
         self.message.reply_text.assert_called_once()
         text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Switch Broker Execution Mode", text)
+        self.assertIn("Switch MT5 Live Account", text)
         self.assertIn("/switch live", text)
-        self.assertIn("/switch paper", text)
 
     async def test_switch_command_paper(self):
         self.ctx.args = ["paper"]
         await switch_command(self.update, self.ctx)
         self.message.reply_text.assert_called_once()
         text = self.message.reply_text.call_args[0][0]
-        self.assertIn("MT5 Paper", text)
-        self.assertEqual(config.BROKER_MODE, "mt5_paper")
+        self.assertIn("Paper Trading Removed", text)
+        self.assertEqual(config.BROKER_MODE, "mt5_live")
 
     async def test_live_command_off(self):
         self.ctx.args = ["off"]
         await live_command(self.update, self.ctx)
         self.message.reply_text.assert_called_once()
         text = self.message.reply_text.call_args[0][0]
-        self.assertIn("MT5 Paper", text)
+        self.assertIn("Live Execution is Exclusive", text)
 
     async def test_broker_command_live(self):
         self.ctx.args = ["live"]
@@ -305,7 +302,7 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         query.data = "mt5:switch_paper"
         await autotrade_callback_handler(self.update, self.ctx)
         self.message.reply_text.assert_called()
-        self.assertIn("MT5 Paper", self.message.reply_text.call_args[0][0])
+        self.assertIn("Paper Trading Removed", self.message.reply_text.call_args[0][0])
 
         # 2. List accounts callback
         self.message.reply_text.reset_mock()
@@ -340,4 +337,4 @@ class TestCLIInteractiveMT5(unittest.TestCase):
         out = output_data.getvalue()
         self.assertIn("MetaTrader 5 Accounts", out)
         self.assertIn("Current Broker Mode", out)
-        self.assertIn("MT5 Paper", out)
+        self.assertIn("Paper Trading Removed", out)

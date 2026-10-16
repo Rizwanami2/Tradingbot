@@ -28,7 +28,7 @@ class TestConfigAndUtils(unittest.TestCase):
         self.assertEqual(config.POLL_INTERVAL, 10)
         self.assertEqual(config.FAST_POLL_INTERVAL, 3)
         self.assertEqual(config.DEFAULT_LEVERAGE, 20.0)
-        self.assertIn(config.BROKER_MODE, ("paper", "live"))
+        self.assertEqual(config.BROKER_MODE, "mt5_live")
         self.assertGreater(config.INITIAL_EQUITY, 0.0)
         self.assertIn(config.DEFAULT_SYMBOL, ("XAUTUSD", "XAUUSD"))
         self.assertIn(config.MAX_OPEN_TRADES, (2, 5, 10))

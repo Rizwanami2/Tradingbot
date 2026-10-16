@@ -149,7 +149,10 @@ class DeltaBroker(Broker):
         max_leverage: float = 200.0,
         timeout: int = 10,
     ):
-        self.api_key = str(api_key or "").strip().strip("'\"`").strip()
+        from execution import BrokerConfigurationError
+        raise BrokerConfigurationError(
+            "DeltaBroker has been removed. MetaTrader 5 Live ('mt5_live') is the sole supported broker."
+        )
         self.api_secret = str(api_secret or "").strip().strip("'\"`").strip()
         self.is_testnet = bool(is_testnet)
         if self.is_testnet:

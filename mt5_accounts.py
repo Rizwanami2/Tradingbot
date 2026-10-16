@@ -338,41 +338,13 @@ def switch_broker_mode(
     target = target_mode.strip().lower()
 
     if target in ("paper", "demo", "sim"):
-        from mt5_broker import MT5Broker
-        eq = 10000.0
-        try:
-            if engine and hasattr(engine, "risk_manager") and getattr(engine.risk_manager, "state", None):
-                eq = float(engine.risk_manager.state.equity or 10000.0)
-            elif hasattr(cfg, "INITIAL_EQUITY"):
-                eq = float(cfg.INITIAL_EQUITY or 10000.0)
-        except Exception:
-            pass
-
-        active_acc = mgr.get_active_account()
-        login_val = active_acc.login if active_acc else getattr(cfg, "MT5_LOGIN", 0)
-        server_val = active_acc.server if active_acc else getattr(cfg, "MT5_SERVER", "MetaQuotes-Demo")
-        gw_val = active_acc.gateway_url if active_acc else getattr(cfg, "MT5_GATEWAY_URL", "")
-
-        paper_broker = MT5Broker(
-            mode="paper",
-            initial_balance=eq,
-            login=login_val,
-            server=server_val,
-            gateway_url=gw_val,
-        )
-        if engine is not None:
-            engine.broker = paper_broker
-        cfg.BROKER_MODE = "mt5_paper"
-        cfg.MT5_MODE = "paper"
-        cfg.MT5_ENABLED = True
-
         return (
-            True,
-            f"⚪ **MT5 Paper / Simulation Mode Activated**\n"
-            f"• **Simulated Balance:** `${paper_broker.balance:,.2f}`\n"
-            f"• **Server:** `{paper_broker.server}`\n"
-            f"• **Risk:** Zero capital risk. Orders simulated with realistic ticks and spreads.",
-            paper_broker,
+            False,
+            "🚫 **Paper Trading Removed**\n"
+            "Paper broker simulation has been removed. MetaTrader 5 Live is the exclusive broker engine.\n\n"
+            "• To switch live account: `/switch <alias|login>` or `/mt5 switch live`\n"
+            "• To add an account: `/mt5 add <login> <password> <server> [alias]`",
+            None,
         )
 
     elif target in ("live", "real"):

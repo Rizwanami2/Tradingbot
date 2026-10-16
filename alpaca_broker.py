@@ -89,7 +89,10 @@ class AlpacaBroker(Broker):
         is_paper: bool = True,
         timeout: int = 10,
     ):
-        self.api_key = str(api_key or "").strip()
+        from execution import BrokerConfigurationError
+        raise BrokerConfigurationError(
+            "AlpacaBroker has been removed. MetaTrader 5 Live ('mt5_live') is the sole supported broker."
+        )
         self.api_secret = str(api_secret or "").strip()
         self.is_paper = bool(is_paper)
         self.base_url = PAPER_BASE_URL if self.is_paper else LIVE_BASE_URL

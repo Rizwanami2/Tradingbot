@@ -127,24 +127,9 @@ class PaperBroker(Broker):
         state_file: Optional[str] = None,
         journal_file: Optional[str] = "trades_journal.jsonl",
     ):
-        import math
-
-        if not math.isfinite(float(initial_balance)) or initial_balance <= 0:
-            raise ValueError("initial_balance must be finite and greater than zero")
-        if not math.isfinite(float(commission_pct)) or not 0 <= commission_pct <= 0.1:
-            raise ValueError("commission_pct must be finite and between 0 and 0.1")
-        self.commission_pct = float(commission_pct)
-        self.state_file = Path(state_file) if state_file else None
-        self.journal_file = Path(journal_file) if journal_file else None
-        self._initial_balance = float(initial_balance)
-        self.balance = float(initial_balance)
-        self.equity = float(initial_balance)
-        self.positions: Dict[str, Position] = {}
-        self.orders: List[Order] = []
-        self.mark_prices: Dict[str, float] = {}
-        if self.state_file and self.state_file.exists():
-            self._load_state(float(initial_balance))
-        self._refresh_equity()
+        raise BrokerConfigurationError(
+            "PaperBroker has been removed. MetaTrader 5 Live ('mt5_live') is the sole supported broker."
+        )
 
     def place_order(
         self,
@@ -381,12 +366,12 @@ class PaperBroker(Broker):
 # ======================================================================
 def create_broker_fail_closed(
     broker_mode: str,
-    api_key: Optional[str],
-    api_secret: Optional[str],
-    exchange_id: str,
+    api_key: Optional[str] = None,
+    api_secret: Optional[str] = None,
+    exchange_id: str = "mt5",
     *,
-    paper_factory,
-    live_factory,
+    paper_factory=None,
+    live_factory=None,
     mt5_paper_factory=None,
     mt5_live_factory=None,
     oanda_factory=None,
@@ -395,64 +380,29 @@ def create_broker_fail_closed(
 ):
     """
     Create the requested broker without silently falling back between modes.
-    Supports:
-    - 'paper': Deterministic local paper simulation
-    - 'delta' / 'delta_live' / 'delta_india' / 'delta_india_live': Native Delta Exchange India REST broker (up to 200x)
-    - 'live' / 'ccxt' / 'ccxt_live': Native CCXT exchange broker (100+ crypto exchanges)
-    - 'oanda' / 'oanda_practice' / 'oanda_live': Native OANDA v20 REST broker (Forex, Gold, Metals)
-    - 'alpaca' / 'alpaca_paper' / 'alpaca_live': Native Alpaca REST broker (US Stocks, ETFs, Crypto)
-    - 'mt5' / 'mt5_paper': MT5 high-fidelity simulation
-    - 'mt5_live': MT5 live account (via terminal or REST gateway)
+    Exclusively supports MetaTrader 5 Live ('mt5_live').
+    All paper trading and legacy brokers have been removed.
     """
     mode = (broker_mode or "").strip().lower()
 
-    if mode == "paper":
-        return paper_factory()
+    if mode in ("paper", "mt5_paper", "mt5_demo", "sim", "demo"):
+        raise BrokerConfigurationError(
+            f"Broker mode {broker_mode!r} is not supported. Paper trading has been removed; "
+            "MetaTrader 5 Live ('mt5_live') is the sole supported execution broker."
+        )
 
-    if mode in ("delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet"):
-        if delta_factory is not None:
-            try:
-                b = delta_factory()
-                if b is not None:
-                    return b
-            except Exception as exc:
-                if isinstance(exc, BrokerConfigurationError):
-                    raise
-                raise BrokerConfigurationError(f"Delta Exchange broker initialization failed: {exc}") from exc
-        try:
-            import config
-            key = getattr(config, "DELTA_EXCHANGE_API_KEY", "") or getattr(config, "EXCHANGE_API_KEY", "") or api_key or ""
-            secret = getattr(config, "DELTA_EXCHANGE_API_SECRET", "") or getattr(config, "EXCHANGE_API_SECRET", "") or api_secret or ""
-            base_url = getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
-            is_testnet = (mode == "delta_testnet") or getattr(config, "DELTA_EXCHANGE_TESTNET", False)
-            leverage = getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0)
-            auto_leverage = getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True)
-            max_leverage = getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0)
-            from delta_broker import DeltaBroker
-            return DeltaBroker(
-                api_key=key,
-                api_secret=secret,
-                base_url=base_url,
-                is_testnet=is_testnet,
-                leverage=leverage,
-                auto_leverage=auto_leverage,
-                max_leverage=max_leverage,
-            )
-        except Exception as exc:
-            if isinstance(exc, BrokerConfigurationError):
-                raise
-            raise BrokerConfigurationError(f"Delta Exchange broker initialization failed: {exc}") from exc
+    if mode in (
+        "delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet",
+        "oanda", "oanda_practice", "oanda_live",
+        "alpaca", "alpaca_paper", "alpaca_live",
+        "ccxt", "ccxt_live", "live",
+    ):
+        raise BrokerConfigurationError(
+            f"Broker mode {broker_mode!r} is not supported. Legacy broker has been removed; "
+            "MetaTrader 5 Live ('mt5_live') is the sole supported execution broker."
+        )
 
-    if mode in ("mt5", "mt5_paper", "mt5_demo"):
-        if mt5_paper_factory is not None:
-            return mt5_paper_factory()
-        try:
-            from mt5_broker import MT5Broker
-            return MT5Broker(mode="paper")
-        except Exception as exc:
-            raise BrokerConfigurationError(f"MT5 Paper broker initialization failed: {exc}") from exc
-
-    if mode == "mt5_live":
+    if mode in ("mt5", "mt5_live"):
         if mt5_live_factory is not None:
             return mt5_live_factory()
         try:
@@ -479,75 +429,9 @@ def create_broker_fail_closed(
                 raise
             raise BrokerConfigurationError(f"MT5 Live broker initialization failed: {exc}") from exc
 
-    if mode in ("oanda", "oanda_practice", "oanda_live"):
-        if oanda_factory is not None:
-            try:
-                b = oanda_factory()
-                if b is not None:
-                    return b
-            except Exception as exc:
-                if isinstance(exc, BrokerConfigurationError):
-                    raise
-                raise BrokerConfigurationError(f"OANDA broker initialization failed: {exc}") from exc
-        try:
-            import config
-            acc_id = getattr(config, "OANDA_ACCOUNT_ID", "") or (api_key if api_key and "-" in api_key else "")
-            token = getattr(config, "OANDA_API_TOKEN", "") or api_secret or ""
-            env = "live" if mode == "oanda_live" or getattr(config, "OANDA_ENVIRONMENT", "practice") == "live" else "practice"
-            from oanda_broker import OANDABroker
-            return OANDABroker(account_id=acc_id, api_token=token, environment=env)
-        except Exception as exc:
-            if isinstance(exc, BrokerConfigurationError):
-                raise
-            raise BrokerConfigurationError(f"OANDA broker initialization failed: {exc}") from exc
-
-    if mode in ("alpaca", "alpaca_paper", "alpaca_live"):
-        if alpaca_factory is not None:
-            try:
-                b = alpaca_factory()
-                if b is not None:
-                    return b
-            except Exception as exc:
-                if isinstance(exc, BrokerConfigurationError):
-                    raise
-                raise BrokerConfigurationError(f"Alpaca broker initialization failed: {exc}") from exc
-        try:
-            import config
-            key = getattr(config, "ALPACA_API_KEY", "") or api_key or ""
-            secret = getattr(config, "ALPACA_API_SECRET", "") or api_secret or ""
-            is_paper = False if mode == "alpaca_live" else getattr(config, "ALPACA_PAPER", True)
-            from alpaca_broker import AlpacaBroker
-            return AlpacaBroker(api_key=key, api_secret=secret, is_paper=is_paper)
-        except Exception as exc:
-            if isinstance(exc, BrokerConfigurationError):
-                raise
-            raise BrokerConfigurationError(f"Alpaca broker initialization failed: {exc}") from exc
-
-    if mode not in ("live", "ccxt", "ccxt_live"):
-        raise BrokerConfigurationError(
-            f"Unsupported broker mode {broker_mode!r}; expected 'paper', 'delta', 'delta_live', 'live', 'ccxt', 'oanda', 'alpaca', 'mt5', or 'mt5_live'."
-        )
-
-    if not api_key or not api_secret:
-        raise BrokerConfigurationError(
-            "Live mode requested, but API credentials are missing. "
-            "No broker was created."
-        )
-
-    try:
-        broker = live_factory(exchange_id, api_key, api_secret)
-    except Exception as exc:
-        raise BrokerConfigurationError(
-            f"Live broker initialization failed for {exchange_id!r}; "
-            "refusing to fall back to paper mode."
-        ) from exc
-
-    if broker is None:
-        raise BrokerConfigurationError(
-            "Live broker factory returned None; refusing to continue."
-        )
-
-    return broker
+    raise BrokerConfigurationError(
+        f"Unsupported broker mode {broker_mode!r}; MetaTrader 5 Live ('mt5_live') is the sole supported broker."
+    )
 
 
 def resolve_ccxt_symbol(exchange: Any, symbol: str) -> str:
@@ -710,14 +594,14 @@ def require_confirmed_fill(result: OrderResult) -> OrderResult:
 
 
 def create_broker(
-    broker_mode: str = "paper",
-    exchange_id: str = "binance",
+    broker_mode: str = "mt5_live",
+    exchange_id: str = "mt5",
     api_key: str = "",
     api_secret: str = "",
     api_password: str = "",
     is_testnet: bool = False,
     initial_balance: float = 10000.0,
-    mt5_mode: str = "paper",
+    mt5_mode: str = "live",
     mt5_login: int = 0,
     mt5_password: str = "",
     mt5_server: str = "MetaQuotes-Demo",
@@ -737,39 +621,20 @@ def create_broker(
     delta_leverage: float = 20.0,
     delta_auto_leverage: bool = True,
     delta_max_leverage: float = 200.0,
+    **kwargs,
 ) -> Broker:
-    """Factory creating PaperBroker, CCXTBroker, OANDABroker, AlpacaBroker, DeltaBroker, or MT5Broker with fail-closed safety."""
+    """Factory creating exclusive MT5 Live broker with fail-closed safety."""
     from mt5_broker import MT5Broker
-    from oanda_broker import OANDABroker
-    from alpaca_broker import AlpacaBroker
-    from delta_broker import DeltaBroker
 
     effective_mode = (broker_mode or "").strip().lower()
     if effective_mode == "mt5":
-        effective_mode = "mt5_live" if str(mt5_mode).lower() == "live" else "mt5_paper"
+        effective_mode = "mt5_live"
 
     return create_broker_fail_closed(
         broker_mode=effective_mode,
         api_key=api_key,
         api_secret=api_secret,
         exchange_id=exchange_id,
-        paper_factory=lambda: PaperBroker(initial_balance=initial_balance),
-        live_factory=lambda eid, k, s: CCXTBroker(
-            exchange_id=eid,
-            api_key=k,
-            api_secret=s,
-            password=api_password,
-            is_testnet=is_testnet,
-        ),
-        mt5_paper_factory=lambda: MT5Broker(
-            mode="paper",
-            login=mt5_login,
-            server=mt5_server,
-            initial_balance=initial_balance,
-            magic=mt5_magic,
-            path=mt5_path,
-            gateway_url=mt5_gateway_url,
-        ),
         mt5_live_factory=lambda: MT5Broker(
             mode="live",
             login=mt5_login,
@@ -778,25 +643,6 @@ def create_broker(
             magic=mt5_magic,
             path=mt5_path,
             gateway_url=mt5_gateway_url,
-        ),
-        oanda_factory=lambda: OANDABroker(
-            account_id=oanda_account_id,
-            api_token=oanda_api_token,
-            environment=oanda_env,
-        ),
-        alpaca_factory=lambda: AlpacaBroker(
-            api_key=alpaca_api_key,
-            api_secret=alpaca_api_secret,
-            is_paper=alpaca_paper,
-        ),
-        delta_factory=lambda: DeltaBroker(
-            api_key=delta_api_key,
-            api_secret=delta_api_secret,
-            base_url=delta_base_url or "https://api.india.delta.exchange",
-            is_testnet=delta_testnet or (effective_mode == "delta_testnet"),
-            leverage=delta_leverage,
-            auto_leverage=delta_auto_leverage,
-            max_leverage=delta_max_leverage,
         ),
     )
 
@@ -836,24 +682,9 @@ class CCXTBroker(Broker):
         password: str = "",
         is_testnet: bool = False,
     ):
-        import ccxt
-        exchange_class = getattr(ccxt, exchange_id, None)
-        if exchange_class is None:
-            raise BrokerConfigurationError(f"Unsupported exchange '{exchange_id}'.")
-        self.exchange_id = exchange_id
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.password = password
-        self.is_testnet = bool(is_testnet)
-
-        config_dict: Dict[str, Any] = {
-            "apiKey": api_key,
-            "secret": api_secret,
-            "enableRateLimit": True,
-            "options": {"defaultType": "future"},
-        }
-        if password:
-            config_dict["password"] = password
+        raise BrokerConfigurationError(
+            "CCXTBroker has been removed. MetaTrader 5 Live ('mt5_live') is the sole supported broker."
+        )
 
         self.exchange = exchange_class(config_dict)
         if self.is_testnet:

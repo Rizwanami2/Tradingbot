@@ -1,18 +1,18 @@
-# MetaTrader 5 (MT5) Integration Guide
+# MetaTrader 5 (MT5) Exclusive Live Integration Guide
 
-The MetaTrader 5 (MT5) integration enables institutional trading execution in two distinct modes:
-1. **Paper / Demo Simulation Mode**: High-fidelity local simulation featuring MT5 ticket generation, leverage-aware margin calculation, realistic spread & commission deductions, dynamic SL/TP modification, and floating unrealized mark-to-market PnL tracking.
-2. **Live MT5 Account Mode**: Direct order routing via MetaTrader 5 terminal (`TRADE_ACTION_DEAL`) or REST gateway bridge with broker-side stop loss and take profit protection.
+MetaTrader 5 (MT5) Live (`mt5_live`) is the sole, exclusive broker execution engine across the entire trading bot platform. All paper trading and alternative brokers have been completely removed.
+
+Orders are directly routed via MetaTrader 5 terminal (`TRADE_ACTION_DEAL`) or REST gateway bridge with broker-side stop loss and take profit protection.
 
 ---
 
 ## 1. Architectural Highlights
 
-- **Adapter**: `mt5_broker.py` implements the standardized `Broker` interface (`place_order`, `get_positions`, `close_position`, `modify_position`, `mark_price`, `get_account_info`, `get_account_summary`).
-- **Fail-Closed Protection**: If live MT5 execution is requested (`BOT_BROKER_MODE=mt5_live` or `/mt5 live`), missing credentials (`MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`) or an unreachable terminal immediately raise a `BrokerConfigurationError`. The system will **never silently fall back to paper mode** when live trading is explicitly commanded.
+- **Exclusive Adapter**: `mt5_broker.py` implements the standardized `Broker` interface (`place_order`, `get_positions`, `close_position`, `modify_position`, `mark_price`, `get_account_info`, `get_account_summary`).
+- **Fail-Closed Protection**: Live MT5 execution is required (`BOT_BROKER_MODE=mt5_live` or `/mt5 live`). Missing credentials (`MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`) or an unreachable terminal immediately raise a `BrokerConfigurationError`. The system fails closed.
 - **Cross-Platform Compatibility**:
-  - On **Windows** or **Wine/Proot** with native `MetaTrader5` installed, live orders execute directly into the local terminal.
-  - On **Headless Linux / Containers**, high-fidelity MT5 paper simulation runs natively with zero external dependencies. Optional live execution can be routed via `MT5_GATEWAY_URL`.
+  - On **Windows** with native `MetaTrader5` installed, live orders execute directly into the local terminal.
+  - On **Linux / Cloud VPS / Containers**, live execution is routed seamlessly via the REST gateway bridge (`MT5_GATEWAY_URL` or `mt5_gateway_server.py`).
 
 ---
 
@@ -32,18 +32,18 @@ Brokers often append custom suffixes or use alternative naming conventions. `res
 Configure these settings in `.env`:
 
 ```ini
-# Enable MT5 mode
-BOT_BROKER_MODE=mt5          # Options: paper | mt5 | mt5_paper | mt5_live | live
+# Exclusive MT5 Live Broker Mode
+BOT_BROKER_MODE=mt5_live
 
-# MT5 Account Credentials
+# MT5 Live Account Credentials
 MT5_ENABLED=true
-MT5_MODE=paper               # "paper" for simulation, "live" for real execution
+MT5_MODE=live                # Exclusive Live Execution
 MT5_LOGIN=12345678           # Account number (integer)
 MT5_PASSWORD=YourPassword    # Account trading password
 MT5_SERVER=YourBroker-Live   # Broker server name (e.g., Exness-MT5Live, IC-Markets, etc.)
-MT5_PATH=                    # Optional path to terminal64.exe (Windows/Wine)
+MT5_PATH=                    # Optional path to terminal64.exe (Windows)
 MT5_MAGIC=112233             # EA Magic identifier for order tagging
-MT5_GATEWAY_URL=             # Optional HTTP gateway for remote Linux execution
+MT5_GATEWAY_URL=             # Optional HTTP gateway for Linux/cloud execution
 ```
 
 ---
@@ -56,8 +56,7 @@ MT5_GATEWAY_URL=             # Optional HTTP gateway for remote Linux execution
 /mt5 status
 ```
 Renders the real-time MT5 account dashboard with live telemetry and interactive inline buttons:
-- `[ 🟢 Switch to Live ]` — Switches active broker execution to MT5 Live.
-- `[ ⚪ Switch to Paper ]` — Switches active broker execution to MT5 Paper simulation.
+- `[ 🟢 Connected (Exclusive Live) ]` — Shows active MT5 Live connection state.
 - `[ ➕ Add Account ]` — Shows instructions and examples for registering accounts.
 - `[ 📋 My Accounts ]` — Lists all saved MT5 accounts with masked passwords.
 - `[ 📊 Positions ]` — Shows open MT5 positions and unrealized PnL.
@@ -74,20 +73,17 @@ Examples:
 - Remote Linux via Gateway: `/mt5 add 10054330 Secret123 Exness-Real primary http://192.168.1.50:5000`
 - Prop Firm / FTMO: `/mt5 add 2098711 Pass123 FTMO-Server prop1`
 
-### Switching Execution Modes & Accounts
+### Switching MT5 Live Accounts
 ```text
-/switch live             # Switch to MT5 Live execution
-/switch paper            # Switch to MT5 Paper simulation
 /switch <alias|login>    # Switch active live account by alias or login number
-/mt5 switch live [login] # Switch to live mode using specific or active account
-/mt5 switch paper        # Switch to paper mode
-/broker live             # Switch to live broker execution
+/mt5 switch <login>      # Switch to specific live MT5 account
+/broker                  # Display current MT5 Live broker status
 ```
 
 ### Quick Live Mode Control
 ```text
-/live on                 # Activate MT5 Live trading immediately
-/live off                # Revert to MT5 Paper simulation safely
+/live on                 # Connect/verify MT5 Live trading immediately
+/live off                # Pause live order generation (suggests /autotrade off or /kill on)
 /live <login> <pass> <srv> # Save account and switch to live in one command
 ```
 

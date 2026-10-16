@@ -25,61 +25,39 @@ from execution import (
 
 class TestExecutionFixes(unittest.TestCase):
     def test_create_broker_fail_closed(self):
-        # 1. Paper mode succeeds
+        # 1. Paper mode raises BrokerConfigurationError (paper trading removed)
+        with self.assertRaises(BrokerConfigurationError):
+            create_broker_fail_closed("paper")
+
+        # 2. Legacy brokers raise BrokerConfigurationError
+        for mode in ("delta", "oanda", "alpaca", "ccxt", "live"):
+            with self.assertRaises(BrokerConfigurationError):
+                create_broker_fail_closed(mode)
+
+        # 3. Invalid mode raises BrokerConfigurationError
+        with self.assertRaises(BrokerConfigurationError):
+            create_broker_fail_closed("sandbox_invalid")
+
+        # 4. MT5 Live with mock factory succeeds
+        mock_b = MagicMock()
         broker = create_broker_fail_closed(
-            "paper",
-            api_key=None,
-            api_secret=None,
-            exchange_id="binance",
-            paper_factory=lambda: PaperBroker(),
-            live_factory=lambda eid, k, s: None,
+            "mt5_live",
+            mt5_live_factory=lambda: mock_b,
         )
-        self.assertIsInstance(broker, PaperBroker)
-
-        # 2. Live mode without credentials fails closed
-        with self.assertRaises(BrokerConfigurationError):
-            create_broker_fail_closed(
-                "live",
-                api_key=None,
-                api_secret=None,
-                exchange_id="binance",
-                paper_factory=lambda: PaperBroker(),
-                live_factory=lambda eid, k, s: None,
-            )
-
-        # 3. Live mode with initialization failure raises BrokerConfigurationError
-        def failing_live_factory(eid, k, s):
-            raise ConnectionError("Exchange offline")
-
-        with self.assertRaises(BrokerConfigurationError):
-            create_broker_fail_closed(
-                "live",
-                api_key="key123",
-                api_secret="sec123",
-                exchange_id="binance",
-                paper_factory=lambda: PaperBroker(),
-                live_factory=failing_live_factory,
-            )
-
-        # 4. Invalid mode raises BrokerConfigurationError
-        with self.assertRaises(BrokerConfigurationError):
-            create_broker_fail_closed(
-                "sandbox_invalid",
-                api_key=None,
-                api_secret=None,
-                exchange_id="binance",
-                paper_factory=lambda: PaperBroker(),
-                live_factory=lambda eid, k, s: None,
-            )
+        self.assertEqual(broker, mock_b)
 
     def test_create_broker_wrapper(self):
-        # Default paper mode
-        broker = create_broker(broker_mode="paper")
-        self.assertIsInstance(broker, PaperBroker)
+        # Paper mode raises BrokerConfigurationError
+        with self.assertRaises(BrokerConfigurationError):
+            create_broker(broker_mode="paper")
 
-        # Live mode missing credentials fails closed
+        # Legacy live mode raises BrokerConfigurationError
         with self.assertRaises(BrokerConfigurationError):
             create_broker(broker_mode="live", api_key="", api_secret="")
+
+        # MT5 Live mode without credentials fails closed
+        with self.assertRaises(BrokerConfigurationError):
+            create_broker(broker_mode="mt5_live")
 
     def test_resolve_ccxt_symbol(self):
         mock_exchange = MagicMock()
@@ -228,16 +206,8 @@ class TestExecutionFixes(unittest.TestCase):
             close_order_params(mock_ex_no_reduce)
 
     def test_paper_broker_position_management(self):
-        broker = PaperBroker(initial_balance=10000.0)
-        order = broker.place_order("XAUUSD", "buy", 1.0, price=2650.0)
-        self.assertEqual(order.status, "filled")
-        self.assertEqual(len(broker.get_positions()), 1)
-
-        # Close position at 2660 (+10 pnl)
-        closed = broker.close_position("XAUUSD", qty=1.0, price=2660.0)
-        self.assertTrue(closed)
-        self.assertEqual(len(broker.get_positions()), 0)
-        self.assertGreater(broker.balance, 10005.0)
+        with self.assertRaises(BrokerConfigurationError):
+            PaperBroker(initial_balance=10000.0)
 
 
 if __name__ == "__main__":

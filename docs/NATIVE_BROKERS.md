@@ -1,6 +1,12 @@
-# Native Broker Environments for Live Trading (Linux & Cloud)
+# Native Broker Environments (DEPRECATED & REMOVED)
 
-This guide documents the native execution broker environments available in TradingBot. Unlike desktop-bound software (such as MetaTrader 5 which requires Windows or Wine), these native broker environments run **100% natively on standard Linux, Docker containers, macOS, and cloud VPS instances with zero external desktop dependencies.**
+> [!WARNING]
+> **All alternative and legacy brokers (OANDA, CCXT live execution, Alpaca, Delta Exchange, and PaperBroker) have been completely removed.**
+> MetaTrader 5 Live (`mt5_live`) is now the sole, exclusive execution broker across the platform.
+> Attempting to initialize or route orders to legacy brokers raises a `BrokerConfigurationError`.
+> For exclusive MT5 Live setup, refer to [MT5_INTEGRATION.md](MT5_INTEGRATION.md).
+
+This guide is preserved for historical and architecture reference only.
 
 ---
 

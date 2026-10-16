@@ -36,81 +36,37 @@ class TestMT5Broker(unittest.TestCase):
         self.assertEqual(resolve_mt5_symbol("BTCUSDT", broker_symbols), "BTCUSD.raw")
         self.assertEqual(resolve_mt5_symbol("EURUSD", broker_symbols), "EURUSD.pro")
 
-    def test_mt5_paper_order_lifecycle(self):
-        broker = MT5Broker(mode="paper", initial_balance=5000.0)
-        self.assertEqual(broker.mode, "paper")
-        self.assertEqual(broker.balance, 5000.0)
-        self.assertEqual(broker.equity, 5000.0)
-
-        # Place BUY order
-        order = broker.place_order(
-            symbol="XAUUSD",
-            side="buy",
-            qty=0.10,
-            price=2000.0,
-            stop_loss=1990.0,
-            take_profit=2020.0,
-        )
-        self.assertEqual(order.status, "filled")
-        self.assertEqual(order.filled_qty, 0.10)
-        self.assertEqual(order.filled_price, 2000.0)
-
-        # Verify open position
-        positions = broker.get_positions()
-        self.assertEqual(len(positions), 1)
-        pos = positions[0]
-        self.assertEqual(pos.symbol, "XAUUSD")
-        self.assertEqual(pos.side, "buy")
-        self.assertEqual(pos.qty, 0.10)
-        self.assertEqual(pos.entry_price, 2000.0)
-        self.assertEqual(pos.stop_loss, 1990.0)
-        self.assertEqual(pos.take_profit, 2020.0)
-
-        # Mark price update (price increases to 2010.0 -> +$1.00 on 0.10 oz)
-        broker.update_mark_price("XAUUSD", 2010.0)
-        self.assertAlmostEqual(pos.unrealized_pnl, 1.0, places=2)
-        # Equity = initial (5000.0) - open fee (0.08) + unrealized PnL (1.00) = 5000.92
-        self.assertAlmostEqual(broker.equity, 5000.92, places=2)
-
-        # Modify position SL / TP
-        mod_ok = broker.modify_position("XAUUSD", stop_loss=1995.0, take_profit=2030.0)
-        self.assertTrue(mod_ok)
-        self.assertEqual(pos.stop_loss, 1995.0)
-        self.assertEqual(pos.take_profit, 2030.0)
-
-        # Close half position @ 2010.0
-        close_ok = broker.close_position("XAUUSD", qty=0.05, price=2010.0)
-        self.assertTrue(close_ok)
-        self.assertAlmostEqual(pos.qty, 0.05, places=4)
-
-        # Close remaining position @ 2020.0
-        close_all_ok = broker.close_position("XAUUSD", price=2020.0)
-        self.assertTrue(close_all_ok)
-        self.assertEqual(len(broker.get_positions()), 0)
+    def test_mt5_paper_mode_removed(self):
+        with self.assertRaises(BrokerConfigurationError):
+            MT5Broker(mode="paper", initial_balance=5000.0)
+        with self.assertRaises(BrokerConfigurationError):
+            MT5Broker(mode="demo")
+        with self.assertRaises(BrokerConfigurationError):
+            MT5Broker(mode="sim")
 
     def test_mt5_account_telemetry(self):
-        broker = MT5Broker(
-            mode="paper",
-            initial_balance=10000.0,
+        info = MT5AccountInfo(
             login=123456,
-            server="Test-Demo",
+            server="Test-Live",
+            trade_mode="live",
+            connected=True,
+            balance=10000.0,
+            equity=10000.0,
+            margin=50.0,
+            free_margin=9950.0,
+            margin_level_pct=20000.0,
+            leverage=100.0,
+            currency="USD",
         )
-        info = broker.get_account_info()
-        self.assertIsInstance(info, MT5AccountInfo)
         self.assertEqual(info.login, 123456)
-        self.assertEqual(info.server, "Test-Demo")
-        self.assertEqual(info.trade_mode, "paper")
+        self.assertEqual(info.server, "Test-Live")
+        self.assertEqual(info.trade_mode, "live")
         self.assertEqual(info.balance, 10000.0)
         self.assertEqual(info.equity, 10000.0)
 
         summary_text = info.summary()
-        self.assertIn("Test-Demo", summary_text)
+        self.assertIn("Test-Live", summary_text)
         self.assertIn("10,000.00", summary_text)
-
-        summary_dict = broker.get_account_summary()
-        self.assertEqual(summary_dict["broker"], "MT5")
-        self.assertEqual(summary_dict["mode"], "paper")
-        self.assertEqual(summary_dict["balance"], 10000.0)
 
     def test_mt5_live_fail_closed_missing_credentials(self):
         # Missing credentials in live mode raises BrokerConfigurationError
@@ -121,16 +77,13 @@ class TestMT5Broker(unittest.TestCase):
             MT5Broker(mode="live", login=12345, password="", server="MetaQuotes-Demo")
 
     def test_create_broker_mt5_routing(self):
-        # 1. 'mt5' mode creates MT5Broker (defaults to paper simulation)
-        b1 = create_broker(broker_mode="mt5", initial_balance=2500.0)
-        self.assertIsInstance(b1, MT5Broker)
-        self.assertEqual(b1.mode, "paper")
-        self.assertEqual(b1.balance, 2500.0)
+        # 1. 'mt5' mode requires credentials, fails closed without them
+        with self.assertRaises(BrokerConfigurationError):
+            create_broker(broker_mode="mt5")
 
-        # 2. 'mt5_paper' mode creates MT5Broker paper
-        b2 = create_broker(broker_mode="mt5_paper", initial_balance=1500.0)
-        self.assertIsInstance(b2, MT5Broker)
-        self.assertEqual(b2.mode, "paper")
+        # 2. 'mt5_paper' mode raises BrokerConfigurationError (paper removed)
+        with self.assertRaises(BrokerConfigurationError):
+            create_broker(broker_mode="mt5_paper")
 
         # 3. 'mt5_live' mode without credentials fails closed
         with self.assertRaises(BrokerConfigurationError):
@@ -138,7 +91,21 @@ class TestMT5Broker(unittest.TestCase):
 
     def test_execution_engine_with_mt5_broker(self):
         rm = RiskManager(equity=10000.0, symbol="BTCUSDT")
-        b = MT5Broker(mode="paper", initial_balance=10000.0)
+        b = MagicMock(spec=MT5Broker)
+        b.mode = "live"
+        b.is_connected = True
+        b.balance = 10000.0
+        b.equity = 10000.0
+        mock_order = MagicMock()
+        mock_order.status = "filled"
+        mock_order.filled_qty = 0.05
+        mock_order.filled_price = 60000.0
+        b.place_order.return_value = mock_order
+        mock_pos = MagicMock()
+        mock_pos.symbol = "BTCUSD"
+        b.get_positions.return_value = [mock_pos]
+        b.close_position.return_value = True
+
         eng = ExecutionEngine(risk_manager=rm, broker=b)
 
         setup_sig = {
@@ -168,6 +135,7 @@ class TestMT5Broker(unittest.TestCase):
         self.assertEqual(pos[0].symbol, "BTCUSD")
 
         # Close position
+        b.get_positions.return_value = []
         closed = eng.close_position("BTCUSDT", reason="Manual test")
         self.assertIsNotNone(closed)
         self.assertEqual(len(b.get_positions()), 0)
