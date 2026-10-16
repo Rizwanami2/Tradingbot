@@ -41,7 +41,16 @@ MT5_PASSWORD=               # Demo account password only
 MT5_SERVER=MetaQuotes-Demo  # Demo server only
 MT5_PATH=                   # Optional path to terminal64.exe (Windows/Wine)
 MT5_MAGIC=112233            # EA Magic identifier for order tagging
-MT5_GATEWAY_URL=            # Optional HTTP gateway for Linux/cloud execution
+MT5_GATEWAY_URL=            # Keep unset during testnet validation
+
+# Delta Exchange testnet (no live keys)
+DELTA_EXCHANGE_API_KEY=
+DELTA_EXCHANGE_API_SECRET=
+DELTA_EXCHANGE_BASE_URL=https://cdn-ind.testnet.deltaex.org
+DELTA_EXCHANGE_TESTNET=true
+DELTA_EXCHANGE_DEFAULT_LEVERAGE=1.0
+DELTA_EXCHANGE_AUTO_LEVERAGE=false
+DELTA_EXCHANGE_MAX_LEVERAGE=1.0
 
 # Strategy Profile & Micro-Scalping Settings
 BOT_PROFILE=scalp
