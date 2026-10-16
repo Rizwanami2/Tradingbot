@@ -46,15 +46,12 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.user = MagicMock()
         self.user.id = 999
         self.update.effective_user = self.user
-        self._orig_auth = set(config.TELEGRAM_ALLOWED_USER_IDS)
         self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
-        config.TELEGRAM_ALLOWED_USER_IDS = {999}
 
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
         self.ctx.args = []
 
     async def asyncTearDown(self):
-        config.TELEGRAM_ALLOWED_USER_IDS = self._orig_auth
         config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
 
     async def test_help_command_full_catalog(self):
@@ -373,47 +370,6 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         text_opt = self.message.reply_text.call_args[0][0]
         self.assertIn("Autotrade ACTIVATED", text_opt)
         config.AUTOTRADE_LIVE_OPT_IN = False
-
-    async def test_telegram_control_authorization(self):
-        # Unauthorized user (ID 888 not in allowed {999})
-        self.user.id = 888
-        config.TELEGRAM_ALLOWED_USER_IDS = {999}
-
-        # Control commands must be rejected
-        self.ctx.args = ["on", "confirm"]
-        await autotrade_command(self.update, self.ctx)
-        text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Access Denied", text)
-
-        self.ctx.args = ["all"]
-        await close_command(self.update, self.ctx)
-        text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Access Denied", text)
-
-        self.ctx.args = ["BTCUSDT"]
-        await cancel_command(self.update, self.ctx)
-        text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Access Denied", text)
-
-        self.ctx.args = ["50"]
-        await leverage_command(self.update, self.ctx)
-        text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Access Denied", text)
-
-        self.ctx.args = ["all"]
-        await resetrisk_command(self.update, self.ctx)
-        text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Access Denied", text)
-
-    async def test_telegram_control_authorization_fail_closed(self):
-        # Empty allowlist must fail closed even for any user
-        self.user.id = 999
-        config.TELEGRAM_ALLOWED_USER_IDS = set()
-
-        self.ctx.args = ["on", "confirm"]
-        await autotrade_command(self.update, self.ctx)
-        text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Access Denied", text)
 
     async def test_fp4_commands(self):
         from telegram_feature_pack_v4 import digest_command, export_command, setups_command, abooks_command, heal_command

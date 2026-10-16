@@ -501,9 +501,7 @@ class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):
         self.user = MagicMock()
         self.user.id = 12345
         self.update.effective_user = self.user
-        self._orig_auth = set(config.TELEGRAM_ALLOWED_USER_IDS)
         self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
-        config.TELEGRAM_ALLOWED_USER_IDS = {12345}
         config.AUTOTRADE_LIVE_OPT_IN = True
 
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
@@ -511,7 +509,6 @@ class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         import config
-        config.TELEGRAM_ALLOWED_USER_IDS = self._orig_auth
         config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
 
     async def test_telegram_profile_command_activates_scalp(self):

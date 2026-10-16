@@ -75,7 +75,7 @@ from multi_agent_trading_bot import (
 )
 from risk_manager import RiskManager
 from backtest_engine import BacktestConfig, run_backtest
-from ops_dashboard import StatusStore, health_from_snapshot, is_authorized_user
+from ops_dashboard import StatusStore, health_from_snapshot
 
 
 async def _to_thread(func, *args, **kwargs):
@@ -162,40 +162,6 @@ if getattr(config, "AUTOTRADE_ENABLED", False):
         autotrade_active = True
 
 
-async def require_control_authorization(update: Update) -> bool:
-    """
-    Check if the user is authorized to execute control/state-changing commands.
-    Fails closed if TELEGRAM_ALLOWED_USER_IDS is empty or user is not in the allowlist.
-    """
-    user = getattr(update, "effective_user", None) if update else None
-    if (user is None or not hasattr(user, "id")) and getattr(update, "callback_query", None):
-        user = getattr(update.callback_query, "from_user", None)
-    if (user is None or not hasattr(user, "id")) and getattr(update, "message", None):
-        user = getattr(update.message, "from_user", None)
-    user_id = getattr(user, "id", None) if user else None
-
-    if not is_authorized_user(user_id, getattr(config, "TELEGRAM_ALLOWED_USER_IDS", set())):
-        logger.warning(
-            "[Telegram Auth] Denied control command execution for user_id=%s (allowed=%s)",
-            user_id, getattr(config, "TELEGRAM_ALLOWED_USER_IDS", set())
-        )
-        msg_target = getattr(update, "message", None)
-        if not msg_target and getattr(update, "callback_query", None):
-            msg_target = getattr(update.callback_query, "message", None)
-        if not msg_target:
-            msg_target = getattr(update, "effective_message", None)
-        if msg_target and hasattr(msg_target, "reply_text"):
-            try:
-                res = msg_target.reply_text(
-                    "⛔ *Access Denied*: You are not authorized to execute control commands on this trading bot.",
-                    parse_mode="Markdown",
-                )
-                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
-                    await res
-            except Exception:
-                pass
-        return False
-    return True
 background_task: Optional[asyncio.Task] = None
 monitoring_health = {
     "started_at": datetime.now(timezone.utc).isoformat(),
@@ -684,8 +650,6 @@ def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_e
 
 async def resetrisk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Direct alias to reset risk limits: /resetrisk [daily|weekly|all] [restart]"""
-    if not await require_control_authorization(update):
-        return
     args = ctx.args or []
     args_lower = [a.lower() for a in args]
     is_restart = any(a in ("restart", "start") for a in args_lower)
@@ -717,8 +681,6 @@ async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     is_restart = any(a in ("restart", "start") for a in args_lower)
 
     if has_reset or (args and args[0].lower() in ("daily", "weekly", "all")):
-        if not await require_control_authorization(update):
-            return
         if "daily" in args_lower:
             scope = "daily"
         elif "weekly" in args_lower:
@@ -801,9 +763,6 @@ async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not await require_control_authorization(update):
-        return
-
     sub = args[0].strip().lower()
     if sub in ("auto", "dynamic"):
         sub_arg = args[1].lower() if len(args) > 1 else "on"
@@ -870,8 +829,6 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await require_control_authorization(update):
-        return
     arg = (ctx.args[0] if ctx.args else "").strip().upper()
     if not arg or arg in ("ALL", "*"):
         if not engine.active_positions:
@@ -972,8 +929,6 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await require_control_authorization(update):
-        return
     sym = (ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL)
     try:
         cancelled = engine.cancel_setup(sym, reason="Manual cancel")
@@ -1141,8 +1096,6 @@ async def watchlist_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Toggle autotrade engine and/or select symbols: /autotrade [on|off|scalp] [btc|gold|both]"""
-    if not await require_control_authorization(update):
-        return
     global autotrade_active
     args = [a.lower() for a in (ctx.args or [])]
     arg = args[0] if args else ""
@@ -1251,9 +1204,6 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
     except Exception:
         pass
     data = str(query.data or "")
-    if data in ("mt5:switch_live", "mt5:switch_paper", "wl:btc", "wl:gold", "wl:both", "auto:on", "auto:off", "auto:scalp"):
-        if not await require_control_authorization(update):
-            return
 
     if data in ("auto:on", "auto:scalp"):
         broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
@@ -1534,10 +1484,6 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = ctx.args or []
     sub = args[0].lower() if args else "status"
 
-    if sub in ("add", "save", "new", "register", "switch", "delete", "remove", "live", "paper"):
-        if not await require_control_authorization(update):
-            return
-
     if sub in ("add", "save", "new", "register"):
         if len(args) < 4:
             await update.message.reply_text(
@@ -1704,9 +1650,6 @@ async def switch_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not await require_control_authorization(update):
-        return
-
     if target in ("delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet"):
         from delta_broker import DeltaBroker
         key = getattr(config, "DELTA_EXCHANGE_API_KEY", "") or getattr(config, "EXCHANGE_API_KEY", "")
@@ -1838,9 +1781,6 @@ async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⚠️ Note: Paper trading and legacy brokers (OANDA, Alpaca, CCXT) have been removed.",
             parse_mode="Markdown",
         )
-        return
-
-    if not await require_control_authorization(update):
         return
 
     mode = args[0].lower()

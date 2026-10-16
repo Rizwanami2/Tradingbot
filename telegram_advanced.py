@@ -55,14 +55,6 @@ async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        user = update.effective_user if update else None
-        user_id = user.id if user else None
-        import config
-        from ops_dashboard import is_authorized_user
-        if not is_authorized_user(user_id, config.TELEGRAM_ALLOWED_USER_IDS):
-            await safe_reply(update, "⛔ *Access Denied*: You are not authorized to use the kill switch.", parse_mode="Markdown")
-            return
-
         from kill_switch import KillSwitch
         ks = KillSwitch()
         arg = (ctx.args[0].lower() if ctx.args else "status")

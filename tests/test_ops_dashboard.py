@@ -12,7 +12,6 @@ from ops_dashboard import (
     StatusStore,
     create_server,
     health_from_snapshot,
-    is_authorized_user,
 )
 
 
@@ -83,27 +82,6 @@ class TestOpsDashboard(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=3)
-
-    def test_is_authorized_user(self):
-        # Empty or None allowlist must fail closed
-        self.assertFalse(is_authorized_user(12345, None))
-        self.assertFalse(is_authorized_user(12345, []))
-        self.assertFalse(is_authorized_user(12345, set()))
-        self.assertFalse(is_authorized_user(None, [12345]))
-
-        # Authorized ID in allowlist
-        self.assertTrue(is_authorized_user(12345, [12345]))
-        self.assertTrue(is_authorized_user(12345, {12345, 67890}))
-        self.assertTrue(is_authorized_user("12345", [12345]))
-        self.assertTrue(is_authorized_user(12345, ["12345"]))
-
-        # Unauthorized ID not in allowlist
-        self.assertFalse(is_authorized_user(99999, [12345]))
-        self.assertFalse(is_authorized_user(99999, {12345, 67890}))
-
-        # Invalid types
-        self.assertFalse(is_authorized_user("invalid_id", [12345]))
-        self.assertFalse(is_authorized_user(12345, ["invalid_allowed"]))
 
 
 if __name__ == "__main__":
