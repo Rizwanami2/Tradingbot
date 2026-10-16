@@ -93,8 +93,8 @@ def find_default_mt5_path() -> str:
 
 
 # MetaTrader 5 (MT5) Exclusive Live Execution Configuration
-MT5_ENABLED = os.getenv("MT5_ENABLED", "true").lower() in ("true", "1", "yes", "on")
-MT5_MODE = os.getenv("MT5_MODE", "live").lower()
+MT5_ENABLED = os.getenv("MT5_ENABLED", "false").lower() in ("true", "1", "yes", "on")
+MT5_MODE = os.getenv("MT5_MODE", "demo").lower()
 MT5_LOGIN = _safe_int(os.getenv("MT5_LOGIN"), 0)
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
 MT5_SERVER = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
@@ -103,7 +103,7 @@ MT5_MAGIC = _safe_int(os.getenv("MT5_MAGIC"), 112233)
 MT5_GATEWAY_URL = os.getenv("MT5_GATEWAY_URL", "")
 
 # Exclusive Broker Mode: MT5 Live only. Paper trading and all other brokers removed.
-BROKER_MODE = os.getenv("BROKER_MODE") or os.getenv("BOT_BROKER_MODE") or "mt5_live"
+BROKER_MODE = os.getenv("BROKER_MODE") or os.getenv("BOT_BROKER_MODE") or "delta_testnet"
 
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.20)
@@ -142,11 +142,11 @@ ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes",
 # Native Delta Exchange India REST Broker Integration (Autotrade Enabled)
 DELTA_EXCHANGE_API_KEY = os.getenv("DELTA_EXCHANGE_API_KEY") or EXCHANGE_API_KEY or ""
 DELTA_EXCHANGE_API_SECRET = os.getenv("DELTA_EXCHANGE_API_SECRET") or EXCHANGE_API_SECRET or ""
-DELTA_EXCHANGE_BASE_URL = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
-DELTA_EXCHANGE_TESTNET = os.getenv("DELTA_EXCHANGE_TESTNET", "false").lower() in ("true", "1", "yes", "on")
-DELTA_EXCHANGE_DEFAULT_LEVERAGE = _safe_float(os.getenv("DELTA_EXCHANGE_DEFAULT_LEVERAGE") or os.getenv("DELTA_DEFAULT_LEVERAGE"), 20.0)
-DELTA_EXCHANGE_AUTO_LEVERAGE = (os.getenv("DELTA_EXCHANGE_AUTO_LEVERAGE") or os.getenv("DELTA_AUTO_LEVERAGE", "true")).lower() in ("true", "1", "yes", "on")
-DELTA_EXCHANGE_MAX_LEVERAGE = _safe_float(os.getenv("DELTA_EXCHANGE_MAX_LEVERAGE") or os.getenv("DELTA_MAX_LEVERAGE"), 200.0)
+DELTA_EXCHANGE_BASE_URL = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://cdn-ind.testnet.deltaex.org")
+DELTA_EXCHANGE_TESTNET = os.getenv("DELTA_EXCHANGE_TESTNET", "true").lower() in ("true", "1", "yes", "on")
+DELTA_EXCHANGE_DEFAULT_LEVERAGE = _safe_float(os.getenv("DELTA_EXCHANGE_DEFAULT_LEVERAGE") or os.getenv("DELTA_DEFAULT_LEVERAGE"), 1.0)
+DELTA_EXCHANGE_AUTO_LEVERAGE = (os.getenv("DELTA_EXCHANGE_AUTO_LEVERAGE") or os.getenv("DELTA_AUTO_LEVERAGE", "false")).lower() in ("true", "1", "yes", "on")
+DELTA_EXCHANGE_MAX_LEVERAGE = _safe_float(os.getenv("DELTA_EXCHANGE_MAX_LEVERAGE") or os.getenv("DELTA_MAX_LEVERAGE"), 1.0)
 
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 2)
 ALLOWED_TRADING_SYMBOLS = {"BTCUSDT", "XAUUSD", "BTCUSD", "XAUTUSD", "PAXGUSDT", "GOLD", "XAU", "BTC", "ETHUSD", "ETHUSDT"}
