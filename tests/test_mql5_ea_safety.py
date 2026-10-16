@@ -3,6 +3,8 @@ import re
 
 EA = Path(__file__).resolve().parents[1] / "mt5" / "TradingBotDemoEA.mq5"
 SOURCE = EA.read_text(encoding="utf-8")
+CONFIG = Path(__file__).resolve().parents[1] / "config.py"
+CONFIG_SOURCE = CONFIG.read_text(encoding="utf-8")
 
 
 def test_order_submission_disabled_by_default():
@@ -32,3 +34,13 @@ def test_signal_uses_completed_daily_bar_and_completed_signal_bar():
 def test_stop_and_target_are_attached_to_orders():
     assert "trade.Buy(volume, _Symbol, 0.0, stop, target" in SOURCE
     assert "trade.Sell(volume, _Symbol, 0.0, stop, target" in SOURCE
+
+
+def test_repository_defaults_are_demo_or_testnet_and_autotrade_off():
+    assert 'MT5_ENABLED = os.getenv("MT5_ENABLED", "false")' in CONFIG_SOURCE
+    assert 'MT5_MODE = os.getenv("MT5_MODE", "demo")' in CONFIG_SOURCE
+    assert 'or "delta_testnet"' in CONFIG_SOURCE
+    assert 'DELTA_EXCHANGE_TESTNET = os.getenv("DELTA_EXCHANGE_TESTNET", "true")' in CONFIG_SOURCE
+    assert 'DELTA_EXCHANGE_AUTO_LEVERAGE", "false"' in CONFIG_SOURCE
+    assert 'AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false")' in CONFIG_SOURCE
+    assert 'AUTOTRADE_LIVE_OPT_IN = os.getenv("BOT_AUTOTRADE_LIVE_OPT_IN", "false")' in CONFIG_SOURCE
