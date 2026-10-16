@@ -41,6 +41,6 @@ def test_repository_defaults_are_demo_or_testnet_and_autotrade_off():
     assert 'MT5_MODE = os.getenv("MT5_MODE", "demo")' in CONFIG_SOURCE
     assert 'or "delta_testnet"' in CONFIG_SOURCE
     assert 'DELTA_EXCHANGE_TESTNET = os.getenv("DELTA_EXCHANGE_TESTNET", "true")' in CONFIG_SOURCE
-    assert 'DELTA_EXCHANGE_AUTO_LEVERAGE", "false"' in CONFIG_SOURCE
+    assert 'os.getenv("DELTA_AUTO_LEVERAGE", "false")' in CONFIG_SOURCE
     assert 'AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false")' in CONFIG_SOURCE
     assert 'AUTOTRADE_LIVE_OPT_IN = os.getenv("BOT_AUTOTRADE_LIVE_OPT_IN", "false")' in CONFIG_SOURCE
