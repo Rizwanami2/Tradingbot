@@ -164,7 +164,7 @@ void OnTick()
 
    // Use only completed bars. A sweep of yesterday's high/low must close back
    // inside the level before a confirmation signal is considered.
-   MqlRates bars[3];
+   MqlRates bars[];
    ArraySetAsSeries(bars, true);
    if (CopyRates(_Symbol, SignalTimeframe, 0, 3, bars) != 3) return;
 
