@@ -36,30 +36,33 @@ async def live_monitoring_worker(
                 return "BTCUSDT"
             return s
 
-    raw_syms = list(getattr(config, "AUTOTRADE_SYMBOLS", None) or ["BTCUSDT", "XAUUSD"])
     _ALLOWED = {
         "BTCUSDT", "BTCUSD", "BTC", "XAUUSD", "XAUTUSD", "XAU", "GOLD", "XAUT", "PAXGUSDT", "PAXG",
     }
-    watchlist: List[str] = []
-    for s in raw_syms:
-        try:
-            n = _norm_trade_symbol(s)
-        except Exception:
-            n = str(s).upper()
-        if not n:
-            continue
-        if n not in _ALLOWED and not any(x in n for x in ("BTC", "XAU", "GOLD", "PAXG", "XAUT")):
-            continue
-        if "BTC" in n:
-            n = "BTCUSDT"
-        elif any(x in n for x in ("XAU", "GOLD", "PAXG", "XAUT")):
-            n = "XAUUSD"
-        else:
-            continue
-        if n not in watchlist:
-            watchlist.append(n)
-    if not watchlist:
-        watchlist = ["BTCUSDT", "XAUUSD"]
+
+    def resolve_watchlist() -> List[str]:
+        raw_syms = list(getattr(config, "AUTOTRADE_SYMBOLS", None) or ["BTCUSDT", "XAUUSD"])
+        res: List[str] = []
+        for s in raw_syms:
+            try:
+                n = _norm_trade_symbol(s)
+            except Exception:
+                n = str(s).upper()
+            if not n:
+                continue
+            if n not in _ALLOWED and not any(x in n for x in ("BTC", "XAU", "GOLD", "PAXG", "XAUT")):
+                continue
+            if "BTC" in n:
+                n = "BTCUSDT"
+            elif any(x in n for x in ("XAU", "GOLD", "PAXG", "XAUT")):
+                n = "XAUUSD"
+            else:
+                continue
+            if n not in res:
+                res.append(n)
+        return res or ["BTCUSDT", "XAUUSD"]
+
+    watchlist: List[str] = resolve_watchlist()
 
     max_open = int(getattr(config, "MAX_OPEN_TRADES", 2) or 2)
     if getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False):
@@ -77,6 +80,18 @@ async def live_monitoring_worker(
         monitoring_health["last_poll_at"] = now_iso()
         any_data = False
         autotrade_active = bool(autotrade_active_getter())
+
+        # Dynamically refresh watchlist selection from config / runtime state
+        current_watchlist = resolve_watchlist()
+        if set(current_watchlist) != set(watchlist):
+            logger.info("Autotrade active selection changed: %s (previously %s)", current_watchlist, watchlist)
+            removed = set(watchlist) - set(current_watchlist)
+            for r in removed:
+                if r in engine.pending_setups:
+                    engine.cancel_setup(r, reason=f"Symbol {r} removed from active autotrade selection")
+            watchlist = list(current_watchlist)
+        monitoring_health["watchlist"] = list(watchlist)
+
         try:
             for symbol in watchlist:
                 try:

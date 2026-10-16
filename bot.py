@@ -87,7 +87,16 @@ def main_launcher():
     parser.add_argument("--bars", type=int, default=2000)
     parser.add_argument("--news", action="store_true", default=config.NEWS_ENABLED)
     parser.add_argument("--news-window", type=int, default=config.NEWS_WINDOW_MIN)
+    parser.add_argument(
+        "--watchlist",
+        "--symbols",
+        default=None,
+        help="Comma-separated autotrade selection (e.g. btc, gold, both, or BTCUSDT,XAUUSD)",
+    )
     args = parser.parse_args()
+
+    if args.watchlist:
+        config.set_autotrade_symbols(args.watchlist)
 
     if args.mode == "telegram":
         run_telegram()

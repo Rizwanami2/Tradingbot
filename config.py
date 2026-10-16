@@ -152,14 +152,124 @@ def is_trading_allowed(symbol: str) -> bool:
     return False
 
 
+def normalize_trade_symbol(symbol: str) -> str:
+    """Normalize symbol to standard pair name (BTCUSDT for Bitcoin, XAUUSD for Gold)."""
+    s = (symbol or "").strip().upper().replace("/", "").replace("-", "").replace(":", "").replace("_", "")
+    if any(x in s for x in ("BTC", "BITCOIN", "XBT")):
+        return "BTCUSDT"
+    if any(x in s for x in ("XAU", "GOLD", "PAXG", "XAUT")):
+        return "XAUUSD"
+    if s.endswith("USDT"):
+        return s
+    if s.endswith("USD"):
+        return s + "T"
+    return s or "BTCUSDT"
+
+
+_WATCHLIST_PERSIST_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".runtime",
+    "autotrade_watchlist.json",
+)
+
+
+def _load_persisted_watchlist() -> Optional[list]:
+    try:
+        p = Path(_WATCHLIST_PERSIST_FILE)
+        if p.is_file():
+            import json
+            data = json.loads(p.read_text(encoding="utf-8"))
+            syms = data.get("symbols")
+            if isinstance(syms, list) and syms:
+                normed = []
+                for s in syms:
+                    if is_trading_allowed(s):
+                        n = normalize_trade_symbol(s)
+                        if n not in normed:
+                            normed.append(n)
+                if normed:
+                    return normed
+    except Exception:
+        pass
+    return None
+
+
+def _save_persisted_watchlist(symbols: list) -> None:
+    try:
+        p = Path(_WATCHLIST_PERSIST_FILE)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        from datetime import datetime, timezone
+        payload = {
+            "symbols": symbols,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
+def get_autotrade_symbols() -> list:
+    """Return currently active autotrade symbols."""
+    global AUTOTRADE_SYMBOLS
+    return list(AUTOTRADE_SYMBOLS)
+
+
+def set_autotrade_symbols(symbols, persist: bool = True) -> list:
+    """
+    Set active autotrade symbols (e.g. ['BTCUSDT'], ['XAUUSD'], or ['BTCUSDT', 'XAUUSD']).
+    Supports string input: 'btc', 'gold', 'both', 'btc,gold'.
+    Returns the normalized active symbols list.
+    """
+    global AUTOTRADE_SYMBOLS
+    if isinstance(symbols, str):
+        s_lower = symbols.strip().lower()
+        if s_lower in ("btc", "bitcoin", "btcusdt", "btcusd", "xbt"):
+            raw_list = ["BTCUSDT"]
+        elif s_lower in ("gold", "xau", "xauusd", "xaut", "xautusd", "paxg"):
+            raw_list = ["XAUUSD"]
+        elif s_lower in ("both", "all", "btc,gold", "gold,btc", "btcusdt,xauusd"):
+            raw_list = ["BTCUSDT", "XAUUSD"]
+        else:
+            raw_list = [x.strip() for x in symbols.split(",") if x.strip()]
+    elif isinstance(symbols, (list, tuple, set)):
+        raw_list = list(symbols)
+    else:
+        raw_list = ["BTCUSDT", "XAUUSD"]
+
+    normed: list = []
+    for s in raw_list:
+        if is_trading_allowed(str(s)):
+            n = normalize_trade_symbol(str(s))
+            if n not in normed:
+                normed.append(n)
+
+    if not normed:
+        normed = ["BTCUSDT", "XAUUSD"]
+
+    AUTOTRADE_SYMBOLS = normed
+    if persist:
+        _save_persisted_watchlist(normed)
+    return list(normed)
+
+
 _AUTOTRADE_SYMBOLS_RAW = os.getenv(
     "BOT_AUTOTRADE_SYMBOLS",
     "BTCUSDT,XAUUSD",
 )
 AUTOTRADE_SYMBOLS = [
-    s for s in (s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip())
+    normalize_trade_symbol(s)
+    for s in (s.strip().upper() for s in _AUTOTRADE_SYMBOLS_RAW.split(",") if s.strip())
     if is_trading_allowed(s)
 ] or ["BTCUSDT", "XAUUSD"]
+
+if "pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"):
+    _persisted = _load_persisted_watchlist()
+    if _persisted:
+        AUTOTRADE_SYMBOLS = _persisted
+
 
 SCALP_TAKE_PROFIT_USD = _safe_float(os.getenv("BOT_SCALP_TP_USD"), 2.5)
 SCALP_TAKE_PROFIT_PCT = _safe_float(os.getenv("BOT_SCALP_TP_PCT"), 0.10)

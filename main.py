@@ -53,12 +53,13 @@ if sys.platform == "win32":
 
 import pandas as pd
 import requests
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -363,7 +364,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n\n"
             "⚡ **Execution & Positions (Active Limit: 5):**\n"
             "• `/positions` — Open active trades, pending setups & real-time PnL\n"
-            "• `/autotrade on|off` — Multi-symbol autotrading (up to 5 concurrent active trades)\n"
+            "• `/autotrade [on|off|scalp|btc|gold|both]` — Multi-symbol autotrading (Gold/BTC)\n"
+            "• `/watchlist [btc|gold|both]` — View & switch active Gold/BTC autotrade watchlist\n"
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL\n\n"
@@ -468,7 +470,7 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     summary = engine.get_portfolio_summary()
     max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
     slots = engine.slots_available()
-    symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
+    symbols_str = ", ".join(getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)())
     bname = type(engine.broker).__name__ if engine.broker else "None"
     bmode = getattr(config, "BROKER_MODE", "paper").upper()
     b_extra = ""
@@ -920,13 +922,178 @@ async def news_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"News error: {e}")
 
 
+def get_gold_market_status() -> tuple:
+    """Check if gold (metals/forex) market is currently open or weekend closed."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    weekday = now.weekday()  # Monday=0, Sunday=6
+    hour = now.hour
+    if weekday == 4 and hour >= 21:
+        return False, "🔴 Closed for weekend (reopens Sun 22:00 UTC)"
+    if weekday == 5:
+        return False, "🔴 Closed for weekend (reopens Sun 22:00 UTC)"
+    if weekday == 6 and hour < 22:
+        return False, "🔴 Closed for weekend (reopens Sun 22:00 UTC)"
+    return True, "🟢 Open (24/5 Global Metals Session)"
+
+
+def build_watchlist_dashboard() -> tuple:
+    """Generate Markdown text and inline keyboard for the Watchlist Dashboard."""
+    active_symbols = getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)()
+    auto_status = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+    broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
+    profile = getattr(config, "CURRENT_PROFILE", "scalp").upper()
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
+    open_count = len(getattr(engine, "active_positions", {}))
+    slots = getattr(engine, "slots_available", lambda: max(0, max_trades - open_count))()
+
+    btc_active = "BTCUSDT" in active_symbols
+    btc_icon = "🟢 ACTIVE" if (autotrade_active and btc_active) else ("🟡 SELECTED (Paused)" if btc_active else "⚪ STANDBY")
+    btc_price = get_price_info("BTCUSDT")
+    btc_mark = float(btc_price.get("mark") or btc_price.get("close") or 0.0)
+    btc_chg = float(btc_price.get("change_pct") or 0.0)
+    btc_rec = btc_price.get("recommendation") or "NEUTRAL"
+
+    gold_active = "XAUUSD" in active_symbols
+    gold_icon = "🟢 ACTIVE" if (autotrade_active and gold_active) else ("🟡 SELECTED (Paused)" if gold_active else "⚪ STANDBY")
+    gold_price = get_price_info("XAUUSD")
+    gold_mark = float(gold_price.get("mark") or gold_price.get("close") or 0.0)
+    gold_chg = float(gold_price.get("change_pct") or 0.0)
+    gold_rec = gold_price.get("recommendation") or "NEUTRAL"
+    gold_open, gold_sess_desc = get_gold_market_status()
+
+    if btc_active and gold_active:
+        sel_label = "⚡ Both (BTC + Gold)"
+    elif btc_active:
+        sel_label = "🪙 Bitcoin Only"
+    elif gold_active:
+        sel_label = "🟡 Gold Only"
+    else:
+        sel_label = "None (Paused)"
+
+    text = (
+        f"📋 **Gold & Bitcoin Trading Watchlist**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🪙 **Bitcoin (`BTCUSDT`)**\n"
+        f"• **Autotrade:** {btc_icon}\n"
+        f"• **Mark Price:** `${btc_mark:,.2f}` | **24h:** `{btc_chg:+.2f}%`\n"
+        f"• **Bias/Confluence:** `{btc_rec}`\n"
+        f"• **Market Session:** 🟢 24/7 Continuous Crypto\n\n"
+        f"🟡 **Gold (`XAUUSD`)**\n"
+        f"• **Autotrade:** {gold_icon}\n"
+        f"• **Mark Price:** `${gold_mark:,.2f}` | **24h:** `{gold_chg:+.2f}%`\n"
+        f"• **Bias/Confluence:** `{gold_rec}`\n"
+        f"• **Market Session:** {gold_sess_desc}\n\n"
+        f"⚙️ **Autotrade Engine:**\n"
+        f"• **Monitoring Status:** {auto_status}\n"
+        f"• **Active Selection:** `{sel_label}`\n"
+        f"• **Execution Mode:** `{broker_mode}` | **Profile:** `{profile}`\n"
+        f"• **Slots:** `{open_count}/{max_trades}` active (`{slots}` free)\n\n"
+        f"💡 **Switch Selection:**\n"
+        f"• `/watchlist btc` — Trade BTC only\n"
+        f"• `/watchlist gold` — Trade Gold only\n"
+        f"• `/watchlist both` — Trade both BTC + Gold\n"
+        f"• `/autotrade on [btc|gold|both]`\n"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🪙 BTC Only", callback_data="wl:btc"),
+            InlineKeyboardButton("🟡 Gold Only", callback_data="wl:gold"),
+            InlineKeyboardButton("⚡ Both", callback_data="wl:both"),
+        ],
+        [
+            InlineKeyboardButton("🟢 Start Autotrade", callback_data="auto:on"),
+            InlineKeyboardButton("⚪ Pause", callback_data="auto:off"),
+            InlineKeyboardButton("⚡ Scalp Mode", callback_data="auto:scalp"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Watchlist", callback_data="wl:refresh"),
+            InlineKeyboardButton("📊 Positions", callback_data="wl:positions"),
+        ],
+    ])
+    return text, markup
+
+
+async def watchlist_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View live Watchlist Dashboard or switch active symbol selection (/watchlist [btc|gold|both])."""
+    args = [a.lower() for a in (ctx.args or [])]
+    arg = args[0] if args else ""
+    if arg in ("btc", "bitcoin", "btcusdt", "btcusd", "xbt"):
+        config.set_autotrade_symbols(["BTCUSDT"])
+        st = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+        await update.message.reply_text(
+            f"🪙 **Watchlist Selection Updated: Bitcoin Only**\n"
+            f"• **Active Symbol:** `BTCUSDT`\n"
+            f"• **Gold (`XAUUSD`):** Standby (monitoring paused for Gold)\n"
+            f"• **Autotrade State:** {st}\n\n"
+            f"The engine will only search and execute setups on Bitcoin.\n"
+            f"Use `/autotrade on` to activate or `/watchlist both` to re-enable Gold.",
+            parse_mode="Markdown",
+        )
+    elif arg in ("gold", "xau", "xauusd", "xaut", "xautusd", "paxg"):
+        config.set_autotrade_symbols(["XAUUSD"])
+        st = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+        gold_open, gold_desc = get_gold_market_status()
+        await update.message.reply_text(
+            f"🟡 **Watchlist Selection Updated: Gold Only**\n"
+            f"• **Active Symbol:** `XAUUSD`\n"
+            f"• **Bitcoin (`BTCUSDT`):** Standby (monitoring paused for BTC)\n"
+            f"• **Market Session:** {gold_desc}\n"
+            f"• **Autotrade State:** {st}\n\n"
+            f"The engine will only search and execute setups on Gold.\n"
+            f"Use `/autotrade on` to activate or `/watchlist both` to re-enable Bitcoin.",
+            parse_mode="Markdown",
+        )
+    elif arg in ("both", "all", "btc,gold", "gold,btc", "btcusdt,xauusd"):
+        config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"])
+        st = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+        await update.message.reply_text(
+            f"⚡ **Watchlist Selection Updated: Both (BTC + Gold)**\n"
+            f"• **Active Symbols:** `BTCUSDT`, `XAUUSD`\n"
+            f"• **Autotrade State:** {st}\n\n"
+            f"The engine is monitoring both assets concurrently up to your trade limit.",
+            parse_mode="Markdown",
+        )
+    else:
+        text, markup = build_watchlist_dashboard()
+        try:
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            await update.message.reply_text(text.replace("*", "").replace("`", ""), reply_markup=markup)
+
+
 async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Toggle autotrade engine and/or select symbols: /autotrade [on|off|scalp] [btc|gold|both]"""
     global autotrade_active
-    arg = (ctx.args[0].lower() if ctx.args else "")
+    args = [a.lower() for a in (ctx.args or [])]
+    arg = args[0] if args else ""
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
     max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
-    symbols_str = ", ".join(getattr(config, "AUTOTRADE_SYMBOLS", ["BTCUSDT", "XAUUSD"]))
-    if arg in ("scalp", "spam") or (len(ctx.args) > 1 and ctx.args[1].lower() in ("scalp", "spam")):
+
+    sym_choice = None
+    for a in args:
+        if a in ("btc", "bitcoin", "btcusdt", "btcusd", "xbt"):
+            sym_choice = "BTCUSDT"
+            break
+        elif a in ("gold", "xau", "xauusd", "xaut", "xautusd", "paxg"):
+            sym_choice = "XAUUSD"
+            break
+        elif a in ("both", "all", "btc,gold", "gold,btc"):
+            sym_choice = "BOTH"
+            break
+
+    if sym_choice:
+        if sym_choice == "BTCUSDT":
+            config.set_autotrade_symbols(["BTCUSDT"])
+        elif sym_choice == "XAUUSD":
+            config.set_autotrade_symbols(["XAUUSD"])
+        elif sym_choice == "BOTH":
+            config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"])
+
+    symbols_str = ", ".join(getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)())
+
+    if any(a in ("scalp", "spam") for a in args):
         try:
             from strategy_profiles import apply_profile
             apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
@@ -940,10 +1107,11 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **Strategy Profile:** `SCALP` (High-frequency micro-scalping)\n"
             f"• **Micro Targets:** TP `{getattr(config, 'SCALP_TAKE_PROFIT_PCT', 0.10):.2f}%` / `${getattr(config, 'SCALP_TAKE_PROFIT_USD', 2.50):.2f}` | SL `{getattr(config, 'SCALP_STOP_LOSS_PCT', 0.12):.2f}%` / `${getattr(config, 'SCALP_STOP_LOSS_USD', 3.00):.2f}`\n"
             f"• **Execution:** Instant Market Fill & 1-2s Polling\n"
-            f"• **Active Limit:** `{max_trades}` concurrent trades | Watchlist: `{symbols_str}`",
+            f"• **Active Limit:** `{max_trades}` concurrent trades\n"
+            f"• **Active Watchlist:** `{symbols_str}`",
             parse_mode="Markdown",
         )
-    elif arg in ("on", "1", "true", "enable"):
+    elif arg in ("on", "1", "true", "enable") or (sym_choice and arg in (sym_choice.lower(), "btc", "gold", "both", "all")):
         autotrade_active = True
         engine.reset_halt()
         await update.message.reply_text(
@@ -954,19 +1122,62 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **Active Watchlist:** `{symbols_str}`",
             parse_mode="Markdown",
         )
-    elif arg in ("off", "0", "false", "disable"):
+    elif arg in ("off", "0", "false", "disable", "stop"):
         autotrade_active = False
         await update.message.reply_text("⚪ **Autotrade PAUSED** (monitoring stopped)", parse_mode="Markdown")
     else:
-        st = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
-        await update.message.reply_text(
-            f"⚡ **Autotrade Status:** {st}\n"
-            f"• **Mode:** `{broker_mode}`\n"
-            f"• **Active Limit:** `{max_trades}` concurrent trades\n"
-            f"• **Watchlist:** `{symbols_str}`\n"
-            f"Toggle with: `/autotrade on` or `/autotrade off`",
-            parse_mode="Markdown",
-        )
+        text, markup = build_watchlist_dashboard()
+        try:
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            await update.message.reply_text(text.replace("*", "").replace("`", ""), reply_markup=markup)
+
+
+async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle interactive inline buttons for Watchlist & Autotrade."""
+    global autotrade_active
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    data = str(query.data or "")
+    if data == "wl:btc":
+        config.set_autotrade_symbols(["BTCUSDT"])
+    elif data == "wl:gold":
+        config.set_autotrade_symbols(["XAUUSD"])
+    elif data == "wl:both":
+        config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"])
+    elif data == "auto:on":
+        autotrade_active = True
+        engine.reset_halt()
+    elif data == "auto:off":
+        autotrade_active = False
+    elif data == "auto:scalp":
+        try:
+            from strategy_profiles import apply_profile
+            apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+        except Exception:
+            pass
+        autotrade_active = True
+        engine.reset_halt()
+    elif data == "wl:positions":
+        msg = engine.format_positions_detail() if hasattr(engine, "format_positions_detail") else str(engine.get_portfolio_summary())
+        try:
+            await query.message.reply_text(msg, parse_mode="Markdown")
+        except Exception:
+            await query.message.reply_text(msg)
+        return
+    elif data == "wl:refresh":
+        pass
+
+    text, markup = build_watchlist_dashboard()
+    try:
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+    except Exception:
+        pass
 
 
 async def backtest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1917,10 +2128,44 @@ def run_cli_interactive():
                 print(engine.format_positions_detail())
             else:
                 print(engine.get_portfolio_summary())
-        elif name == "autotrade":
+        elif name in ("watchlist", "wl", "symbols", "assets"):
             arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg in ("btc", "bitcoin", "btcusdt"):
+                config.set_autotrade_symbols(["BTCUSDT"])
+                print("Watchlist set to: BTCUSDT (Bitcoin Only)")
+            elif arg in ("gold", "xau", "xauusd"):
+                config.set_autotrade_symbols(["XAUUSD"])
+                print("Watchlist set to: XAUUSD (Gold Only)")
+            elif arg in ("both", "all", "btc,gold"):
+                config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"])
+                print("Watchlist set to: BTCUSDT, XAUUSD (Both)")
+            else:
+                active = config.get_autotrade_symbols()
+                print("=== Watchlist Telemetry ===")
+                for s in ("BTCUSDT", "XAUUSD"):
+                    p = get_price_info(s)
+                    st = "ACTIVE" if s in active else "STANDBY"
+                    print(f"• {s}: ${float(p.get('mark') or p.get('close') or 0):,.2f} ({p.get('change_pct', 0.0):+.2f}%) [{st}]")
+                print(f"Active Selection: {', '.join(active)} | Autotrade: {'ON' if autotrade_active else 'OFF'}")
+        elif name == "autotrade":
+            args = [p.lower() for p in parts[1:]]
+            arg = args[0] if args else ""
             broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
-            if arg in ("scalp", "spam") or (len(parts) > 2 and parts[2].lower() in ("scalp", "spam")):
+            sym_choice = None
+            for a in args:
+                if a in ("btc", "bitcoin", "btcusdt"):
+                    sym_choice = ["BTCUSDT"]
+                    break
+                elif a in ("gold", "xau", "xauusd"):
+                    sym_choice = ["XAUUSD"]
+                    break
+                elif a in ("both", "all"):
+                    sym_choice = ["BTCUSDT", "XAUUSD"]
+                    break
+            if sym_choice:
+                config.set_autotrade_symbols(sym_choice)
+                print(f"Autotrade symbols set to: {', '.join(sym_choice)}")
+            if any(a in ("scalp", "spam") for a in args):
                 try:
                     from strategy_profiles import apply_profile
                     apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
@@ -1928,18 +2173,18 @@ def run_cli_interactive():
                     pass
                 autotrade_active = True
                 engine.reset_halt()
-                print(f"Autotrade ON in RAPID SCALP SPAM MODE ({broker_mode} mode)")
-            elif arg in ("on", "1", "true", "enable"):
+                print(f"Autotrade ON in RAPID SCALP SPAM MODE ({broker_mode} mode) for {', '.join(config.get_autotrade_symbols())}")
+            elif arg in ("on", "1", "true", "enable") or (sym_choice and arg in ("btc", "gold", "both", "all")):
                 autotrade_active = True
                 engine.reset_halt()
-                print(f"Autotrade ON ({broker_mode} mode)")
-            elif arg in ("off", "0", "false", "disable"):
+                print(f"Autotrade ON ({broker_mode} mode) for {', '.join(config.get_autotrade_symbols())}")
+            elif arg in ("off", "0", "false", "disable", "stop"):
                 autotrade_active = False
                 print("Autotrade OFF")
             else:
                 st = "ON" if autotrade_active else "OFF"
                 prof = getattr(config, "CURRENT_PROFILE", "scalp").upper()
-                print(f"Autotrade is {st} ({broker_mode}, profile={prof}). Use: autotrade on|off|scalp")
+                print(f"Autotrade is {st} ({broker_mode}, profile={prof}, symbols={', '.join(config.get_autotrade_symbols())}). Use: autotrade [on|off|scalp] [btc|gold|both]")
         elif name == "close":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             try:
@@ -2369,6 +2614,7 @@ def main():
                 BotCommand("quality", "Signal quality score & breakdown"),
                 BotCommand("positions", "Active trades & real-time PnL"),
                 BotCommand("autotrade", "Toggle multi-symbol autotrade (max 5 slots)"),
+                BotCommand("watchlist", "View & switch active Gold/BTC autotrade watchlist"),
                 BotCommand("close", "Close position(s) by symbol or all"),
                 BotCommand("cancel", "Cancel pending setup order"),
                 BotCommand("closed", "Recently closed trades history & PnL"),
@@ -2435,9 +2681,11 @@ def main():
     # Execution & Trades
     app.add_handler(CommandHandler("positions", positions_command))
     app.add_handler(CommandHandler("autotrade", autotrade_command))
+    app.add_handler(CommandHandler(["watchlist", "wl", "symbols", "assets"], watchlist_command))
     app.add_handler(CommandHandler(["close", "closeall"], close_command))
     app.add_handler(CommandHandler("closed", closed_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CallbackQueryHandler(autotrade_callback_handler))
 
     # MT5, Delta Exchange India & Paper Broker Execution
     app.add_handler(CommandHandler(["balance", "wallet", "equity"], balance_command))
