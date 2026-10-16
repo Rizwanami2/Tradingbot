@@ -103,7 +103,7 @@ MT5_MAGIC = _safe_int(os.getenv("MT5_MAGIC"), 112233)
 MT5_GATEWAY_URL = os.getenv("MT5_GATEWAY_URL", "")
 
 # Exclusive Broker Mode: MT5 Live only. Paper trading and all other brokers removed.
-BROKER_MODE = os.getenv("BROKER_MODE") or os.getenv("BOT_BROKER_MODE") or "delta_testnet"
+BROKER_MODE = os.getenv("BROKER_MODE") or os.getenv("BOT_BROKER_MODE") or "mt5_live"
 
 INITIAL_EQUITY = _safe_float(os.getenv("BOT_EQUITY"), 10000.0)
 DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.20)
