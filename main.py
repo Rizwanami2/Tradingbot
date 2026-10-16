@@ -53,6 +53,7 @@ import pandas as pd
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
+    ApplicationHandlerStop,
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
@@ -62,6 +63,7 @@ from telegram.ext import (
 )
 
 import config
+from telegram_auth import is_authorized_user
 from execution_engine import ExecutionEngine
 from gemini_client import GeminiClient
 from multi_agent_trading_bot import (
@@ -71,6 +73,44 @@ from multi_agent_trading_bot import (
 )
 from risk_manager import RiskManager
 from ops_dashboard import StatusStore
+
+
+async def command_authorization_guard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Fail closed for Telegram commands unless the sender is allowlisted.
+
+    /start and /help remain public. Every other command requires an explicitly
+    configured numeric TELEGRAM_ALLOWED_USER_IDS allowlist.
+    """
+    message = update.effective_message
+    if message is None or not getattr(message, "text", None):
+        return
+    command = message.text.split(maxsplit=1)[0].split("@", 1)[0].lower()
+    if command in {"/start", "/help"}:
+        return
+    user = update.effective_user
+    user_id = getattr(user, "id", None)
+    if is_authorized_user(user_id, getattr(config, "TELEGRAM_ALLOWED_USER_IDS", set())):
+        return
+    logger.warning("Blocked Telegram command %s from unauthorized user_id=%s", command, user_id)
+    await message.reply_text(
+        "⛔ This command is restricted. Ask the bot owner to add your numeric Telegram "
+        "user ID to TELEGRAM_ALLOWED_USER_IDS."
+    )
+    raise ApplicationHandlerStop
+
+
+async def callback_authorization_guard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Block inline-button callbacks from users outside the same allowlist."""
+    query = update.callback_query
+    if query is None:
+        return
+    user = update.effective_user
+    user_id = getattr(user, "id", None)
+    if is_authorized_user(user_id, getattr(config, "TELEGRAM_ALLOWED_USER_IDS", set())):
+        return
+    logger.warning("Blocked Telegram callback from unauthorized user_id=%s", user_id)
+    await query.answer("This control is restricted to the bot owner.", show_alert=True)
+    raise ApplicationHandlerStop
 
 
 async def _to_thread(func, *args, **kwargs):
@@ -2627,6 +2667,10 @@ def main():
             print(f"Advanced commands not loaded: {adv_err}")
 
     app = ApplicationBuilder().token(token).post_init(on_post_init).build()
+
+    # Security guards run before command and callback handlers, including optional modules.
+    app.add_handler(MessageHandler(filters.COMMAND, command_authorization_guard), group=-1)
+    app.add_handler(CallbackQueryHandler(callback_authorization_guard), group=-1)
 
     # Core Navigation & Help
     app.add_handler(CommandHandler("start", start_command))
