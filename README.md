@@ -10,7 +10,7 @@ Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **B
 | **Entry Planning** | Dynamic best-entry *zones* synthesized from PDH/PDL, EMAs, market swings, ATR volatility, and 2-year macro S/R levels |
 | **2Y History** | ~730 daily bars caching — 52-week ranges, EMA50/200, historical swing structures |
 | **Autotrade** | Automated multi-symbol execution up to **5 concurrent active trade slots** |
-| **Brokers** | **MetaTrader 5 Live (`mt5_live`)** — Exclusive execution engine for institutional real trading with broker-side SL/TP. (Paper trading and legacy brokers have been removed). |
+| **Brokers** | **MetaTrader 5 Live (`mt5_live`) & Delta Exchange India (`delta_live`)** — High-performance real execution engines with broker-side SL/TP. |
 | **Safety & Risk** | Fail-closed security, 0.20% base risk per trade, 3.0% daily loss limit, 6.0% weekly loss limit, dynamic leverage ceilings, and emergency kill switch |
 | **Scalping** | Optional instant profit harvesting on USD profit target or percentage moves |
 
@@ -70,11 +70,13 @@ BOT_NEWS=true
 - `/cancel [SYM]` — Cancel pending order setup
 - `/closed` — Recently closed trades history & realized PnL
 
-### 🏦 Exclusive MT5 Live Execution
-- `/mt5 [status|live|accounts|add]` — MetaTrader 5 live account dashboard & management ([Guide](docs/MT5_INTEGRATION.md))
-- `/live` — Connect and inspect MT5 Live account telemetry
-- `/switch <alias|login>` — Switch active MT5 Live account credentials
-- `/broker` — Display exclusive MT5 Live broker status and telemetry
+### 🏦 Execution Brokers (MT5 Live & Delta Exchange)
+- `/mt5 [status|live|accounts|add|remove|balance]` — MetaTrader 5 live account dashboard & management ([Guide](docs/MT5_INTEGRATION.md))
+- `/delta [status|balance|positions|leverage|help]` — Delta Exchange India live broker controls
+- `/live [on|off]` — Connect, inspect, or toggle automated live execution
+- `/balance [amount]` — View or update live account equity
+- `/switch <alias|login|delta>` — Switch active broker execution mode
+- `/broker [mode]` — Display live broker telemetry or change mode
 
 ### 🛡️ Risk & Safety Management
 - `/status` — Portfolio equity, drawdown, active slot capacity & strategy profile
