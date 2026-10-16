@@ -369,6 +369,7 @@ def create_broker_fail_closed(
     api_key: Optional[str] = None,
     api_secret: Optional[str] = None,
     exchange_id: str = "mt5",
+    initial_balance: Optional[float] = None,
     *,
     paper_factory=None,
     live_factory=None,
@@ -447,6 +448,7 @@ def create_broker_fail_closed(
                 path=getattr(config, "MT5_PATH", ""),
                 magic=getattr(config, "MT5_MAGIC", 112233),
                 gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+                initial_balance=initial_balance,
             )
         except Exception as exc:
             if isinstance(exc, BrokerConfigurationError):
@@ -682,6 +684,7 @@ def create_broker(
         api_key=api_key,
         api_secret=api_secret,
         exchange_id=exchange_id,
+        initial_balance=initial_balance,
         mt5_live_factory=lambda: MT5Broker(
             mode="live",
             login=mt5_login,
@@ -690,6 +693,7 @@ def create_broker(
             magic=mt5_magic,
             path=mt5_path,
             gateway_url=mt5_gateway_url,
+            initial_balance=initial_balance,
         ),
         delta_factory=_make_delta,
     )

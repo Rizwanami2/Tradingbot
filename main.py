@@ -1551,9 +1551,17 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif sub in ("accounts", "list", "myaccounts"):
         await update.message.reply_text(mgr.format_account_list(), parse_mode="Markdown")
 
-    elif sub in ("remove", "delete", "rm"):
+    elif sub in ("remove", "delete", "rm", "clear"):
+        if sub == "clear" or (len(args) > 1 and args[1].lower() in ("all", "*", "clear")):
+            count = mgr.clear_accounts()
+            await update.message.reply_text(
+                f"🗑️ **All MT5 Accounts Removed** ({count} account(s) cleared).\n"
+                f"Use `/mt5 add <login> <password> <server> [alias]` to register a new account.",
+                parse_mode="Markdown",
+            )
+            return
         if len(args) < 2:
-            await update.message.reply_text("Usage: `/mt5 remove <login|alias>`", parse_mode="Markdown")
+            await update.message.reply_text("Usage: `/mt5 remove <login|alias|all>`", parse_mode="Markdown")
             return
         target = args[1]
         removed = mgr.remove_account(target)
@@ -1564,6 +1572,56 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text(f"❌ Account `{target}` not found in saved list.", parse_mode="Markdown")
+
+    elif sub in ("balance", "bal", "setbalance"):
+        b = engine.broker
+        if len(args) > 1:
+            try:
+                new_bal = float(args[1])
+                if new_bal <= 0:
+                    raise ValueError("Balance must be positive.")
+                if b and hasattr(b, "balance"):
+                    b.balance = new_bal
+                    if hasattr(b, "_initial_balance"):
+                        b._initial_balance = new_bal
+                if hasattr(risk_mgr, "equity"):
+                    risk_mgr.equity = new_bal
+                if hasattr(risk_mgr, "initial_equity"):
+                    risk_mgr.initial_equity = new_bal
+                config.INITIAL_EQUITY = new_bal
+                config.MT5_BALANCE = new_bal
+                act = mgr.get_active_account()
+                if act:
+                    act.balance = new_bal
+                    act.equity = new_bal
+                    mgr._save()
+                await update.message.reply_text(
+                    f"🟢 **MT5 Live Balance Updated**\n"
+                    f"• **New Balance:** `${new_bal:,.2f}`\n"
+                    f"• **Risk Manager Equity:** `${new_bal:,.2f}`\n"
+                    f"• Position sizing and limits updated.",
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                await update.message.reply_text(f"❌ Invalid balance amount: `{e}`", parse_mode="Markdown")
+        else:
+            bal = float(getattr(b, "balance", 0.0) or 0.0) if b else 0.0
+            eq = float(getattr(b, "equity", bal) or bal) if b else bal
+            mg = float(getattr(b, "margin", 0.0) or 0.0) if b else 0.0
+            free_m = float(getattr(b, "free_margin", eq) or eq) if b else eq
+            lev = float(getattr(b, "leverage", 20.0) or 20.0) if b else 20.0
+            act = mgr.get_active_account()
+            act_str = f"`{act.login}` ({act.alias})" if act else "None"
+            await update.message.reply_text(
+                f"💰 **MT5 Live Account Balance**\n"
+                f"• **Active Account:** {act_str}\n"
+                f"• **Balance:** `${bal:,.2f}`\n"
+                f"• **Equity:** `${eq:,.2f}`\n"
+                f"• **Margin:** `${mg:,.2f}` | **Free Margin:** `${free_m:,.2f}`\n"
+                f"• **Leverage:** `{lev:.0f}x`\n\n"
+                f"💡 Update live initial balance: `/mt5 balance <amount>`",
+                parse_mode="Markdown",
+            )
 
     elif sub in ("live", "connect"):
         if len(args) >= 4:
@@ -1694,15 +1752,19 @@ async def switch_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def live_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Quick switch & control for MT5 Live trading: /live [on|off|status|<login> <password> <server>]"""
+    global autotrade_active
     from mt5_accounts import get_account_manager, switch_broker_mode
     args = ctx.args or []
     cmd = args[0].lower() if args else ""
 
-    if cmd in ("off", "stop"):
+    if cmd in ("off", "stop", "pause"):
+        autotrade_active = False
         await update.message.reply_text(
-            "⚠️ **Live Execution is Exclusive**\n"
-            "Paper trading has been removed from this system. MT5 Live is the sole execution engine.\n\n"
-            "• To pause automated order placement: `/autotrade off`\n"
+            "⚠️ **Live Execution is Exclusive** (Live Autotrade Paused)\n"
+            "Paper trading has been removed from this system. MT5 Live is the sole execution engine.\n"
+            "Automated live trade execution is now **PAUSED**.\n\n"
+            "• Existing open positions remain protected with broker-side SL/TP brackets.\n"
+            "• To resume live automated trading: `/live on` or `/autotrade on`\n"
             "• To trigger the emergency circuit breaker: `/kill on`\n"
             "• To close open positions: `/close all`",
             parse_mode="Markdown",
@@ -1712,7 +1774,12 @@ async def live_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="Markdown")
     elif cmd in ("on", "start", "enable", "connect") or (len(args) == 0 and getattr(config, "BROKER_MODE", "paper") != "mt5_live"):
         target_id = args[1] if len(args) > 1 else None
+        config.AUTOTRADE_LIVE_OPT_IN = True
         ok, msg, _ = switch_broker_mode("live", identifier=target_id, engine=engine, config_mod=config)
+        if ok:
+            autotrade_active = True
+            if hasattr(engine, "reset_halt"):
+                engine.reset_halt()
         await update.message.reply_text(msg, parse_mode="Markdown")
     elif len(args) >= 3 and args[0].isdigit():
         login_str = args[0]
@@ -1723,7 +1790,12 @@ async def live_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         mgr = get_account_manager()
         try:
             acc = mgr.add_account(login_str, password, server, alias=alias, gateway_url=gw, set_active=True)
+            config.AUTOTRADE_LIVE_OPT_IN = True
             ok, msg, _ = switch_broker_mode("live", identifier=acc.login, engine=engine, config_mod=config)
+            if ok:
+                autotrade_active = True
+                if hasattr(engine, "reset_halt"):
+                    engine.reset_halt()
             await update.message.reply_text(msg, parse_mode="Markdown")
         except Exception as e:
             await update.message.reply_text(f"❌ Error adding live account: `{e}`", parse_mode="Markdown")
@@ -1740,12 +1812,57 @@ def set_paper_wallet_balance(amount: Any) -> Tuple[bool, str, Dict[str, Any]]:
 
 
 async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Notice that paper trading wallet balance has been removed."""
+    """View or update live MT5 account balance and equity."""
+    from mt5_accounts import get_account_manager
+    args = ctx.args or []
+    b = engine.broker
+    mgr = get_account_manager()
+
+    if args:
+        try:
+            new_bal = float(args[0])
+            if new_bal <= 0:
+                raise ValueError("Balance must be a positive number.")
+            if b and hasattr(b, "balance"):
+                b.balance = new_bal
+                if hasattr(b, "_initial_balance"):
+                    b._initial_balance = new_bal
+            if hasattr(risk_mgr, "equity"):
+                risk_mgr.equity = new_bal
+            if hasattr(risk_mgr, "initial_equity"):
+                risk_mgr.initial_equity = new_bal
+            config.INITIAL_EQUITY = new_bal
+            config.MT5_BALANCE = new_bal
+            act = mgr.get_active_account()
+            if act:
+                act.balance = new_bal
+                act.equity = new_bal
+                mgr._save()
+            await update.message.reply_text(
+                f"🟢 **Live Account Balance Updated**\n"
+                f"• **New Balance:** `${new_bal:,.2f}`\n"
+                f"• **Risk Manager Equity:** `${new_bal:,.2f}`\n"
+                f"• Position sizing and limits updated.",
+                parse_mode="Markdown",
+            )
+            return
+        except ValueError:
+            pass
+
+    bal = float(getattr(b, "balance", 0.0) or 0.0) if b else 0.0
+    eq = float(getattr(b, "equity", bal) or bal) if b else bal
+    mg = float(getattr(b, "margin", 0.0) or 0.0) if b else 0.0
+    free_m = float(getattr(b, "free_margin", eq) or eq) if b else eq
+    lev = float(getattr(b, "leverage", 20.0) or 20.0) if b else 20.0
+
     await update.message.reply_text(
         "⚠️ **Paper Trading Wallet Removed**\n"
         "Paper trading and manual wallet balance simulation have been removed.\n"
         "MetaTrader 5 Live is the sole exclusive broker.\n\n"
-        "• Use `/mt5 status` or `/live` to view your live MT5 account balance, equity, and margin.\n"
+        f"• **Live Balance:** `${bal:,.2f}` | **Equity:** `${eq:,.2f}`\n"
+        f"• **Margin:** `${mg:,.2f}` | **Free Margin:** `${free_m:,.2f}` | **Leverage:** `{lev:.0f}x`\n\n"
+        "• To update live balance/equity: `/balance <amount>` or `/mt5 balance <amount>`\n"
+        "• Use `/mt5 status` or `/live` to view your live MT5 account telemetry.\n"
         "• Use `/mt5 accounts` to manage your live accounts.",
         parse_mode="Markdown",
     )
@@ -2665,15 +2782,47 @@ def run_cli_interactive():
                 print(msg.replace("*", "").replace("`", ""))
             elif sub in ("accounts", "list", "myaccounts"):
                 print(mgr.format_account_list().replace("*", "").replace("`", ""))
-            elif sub in ("remove", "delete", "rm"):
-                if len(parts) < 3:
-                    print("Usage: mt5 remove <login|alias>")
+            elif sub in ("remove", "delete", "rm", "clear"):
+                if sub == "clear" or (len(parts) > 2 and parts[2].lower() in ("all", "*", "clear")):
+                    count = mgr.clear_accounts()
+                    print(f"All MT5 accounts removed ({count} cleared).")
+                elif len(parts) < 3:
+                    print("Usage: mt5 remove <login|alias|all>")
                 else:
                     removed = mgr.remove_account(parts[2])
                     if removed:
                         print(f"MT5 Account Removed: {removed.alias} (#{removed.login} on {removed.server})")
                     else:
                         print(f"Account '{parts[2]}' not found.")
+            elif sub in ("balance", "bal", "setbalance"):
+                b = engine.broker
+                if len(parts) > 2:
+                    try:
+                        new_bal = float(parts[2])
+                        if b and hasattr(b, "balance"):
+                            b.balance = new_bal
+                            if hasattr(b, "_initial_balance"):
+                                b._initial_balance = new_bal
+                        if hasattr(risk_mgr, "equity"):
+                            risk_mgr.equity = new_bal
+                        if hasattr(risk_mgr, "initial_equity"):
+                            risk_mgr.initial_equity = new_bal
+                        config.INITIAL_EQUITY = new_bal
+                        config.MT5_BALANCE = new_bal
+                        act = mgr.get_active_account()
+                        if act:
+                            act.balance = new_bal
+                            act.equity = new_bal
+                            mgr._save()
+                        print(f"MT5 Live Balance Updated: ${new_bal:,.2f} | Risk Equity: ${new_bal:,.2f}")
+                    except Exception as e:
+                        print(f"Error setting balance: {e}")
+                else:
+                    bal = float(getattr(b, "balance", 0.0) or 0.0) if b else 0.0
+                    eq = float(getattr(b, "equity", bal) or bal) if b else bal
+                    act = mgr.get_active_account()
+                    act_str = f"#{act.login} ({act.alias})" if act else "None"
+                    print(f"MT5 Live Balance ({act_str}): ${bal:,.2f} | Equity: ${eq:,.2f}")
             elif sub in ("paper", "demo"):
                 ok, msg, _ = switch_broker_mode("paper", engine=engine, config_mod=config)
                 print(msg.replace("*", "").replace("`", ""))
@@ -2686,13 +2835,23 @@ def run_cli_interactive():
                     alias = parts[5] if len(parts) > 5 and not parts[5].startswith("http") else "live"
                     try:
                         acc = mgr.add_account(login_str, password, server, alias=alias, gateway_url=gw, set_active=True)
+                        config.AUTOTRADE_LIVE_OPT_IN = True
                         ok, msg, _ = switch_broker_mode("live", identifier=acc.login, engine=engine, config_mod=config)
+                        if ok:
+                            autotrade_active = True
+                            if hasattr(engine, "reset_halt"):
+                                engine.reset_halt()
                         print(msg.replace("*", "").replace("`", ""))
                     except Exception as e:
                         print(f"Error: {e}")
                 else:
                     target_id = parts[2] if len(parts) > 2 else None
+                    config.AUTOTRADE_LIVE_OPT_IN = True
                     ok, msg, _ = switch_broker_mode("live", identifier=target_id, engine=engine, config_mod=config)
+                    if ok:
+                        autotrade_active = True
+                        if hasattr(engine, "reset_halt"):
+                            engine.reset_halt()
                     print(msg.replace("*", "").replace("`", ""))
             elif sub in ("positions", "pos"):
                 if engine.broker:
@@ -2700,7 +2859,7 @@ def run_cli_interactive():
                 else:
                     print("No broker attached.")
             else:
-                print("Usage: mt5 [status|add|accounts|switch|remove|live|paper|positions]")
+                print("Usage: mt5 [status|add|accounts|balance|switch|remove|live|paper|positions]")
         elif name in ("switch", "switchbroker"):
             from mt5_accounts import get_account_manager, switch_broker_mode
             if len(parts) > 1:
@@ -2742,28 +2901,68 @@ def run_cli_interactive():
         elif name in ("live", "livetrade"):
             from mt5_accounts import get_account_manager, switch_broker_mode
             sub_cmd = parts[1].lower() if len(parts) > 1 else ""
-            if sub_cmd in ("off", "stop"):
-                print("Live execution is exclusive. Paper trading has been removed. Use 'autotrade off' or 'kill on' to stop trading.")
+            if sub_cmd in ("off", "stop", "pause"):
+                autotrade_active = False
+                print("Live automated trading PAUSED. Open positions remain protected with broker-side SL/TP brackets.")
             elif sub_cmd in ("paper", "demo"):
                 ok, msg, _ = switch_broker_mode("paper", engine=engine, config_mod=config)
                 print(msg.replace("*", "").replace("`", ""))
             elif sub_cmd in ("on", "start", "enable", "connect") or (len(parts) == 1 and getattr(config, "BROKER_MODE", "mt5_live") != "mt5_live"):
+                config.AUTOTRADE_LIVE_OPT_IN = True
                 target_id = parts[2] if len(parts) > 2 else None
                 ok, msg, _ = switch_broker_mode("live", identifier=target_id, engine=engine, config_mod=config)
+                if ok:
+                    autotrade_active = True
+                    if hasattr(engine, "reset_halt"):
+                        engine.reset_halt()
                 print(msg.replace("*", "").replace("`", ""))
             elif len(parts) >= 4 and parts[1].isdigit():
                 mgr = get_account_manager()
                 try:
                     acc = mgr.add_account(parts[1], parts[2], parts[3], alias=parts[4] if len(parts) > 4 else "live", set_active=True)
+                    config.AUTOTRADE_LIVE_OPT_IN = True
                     ok, msg, _ = switch_broker_mode("live", identifier=acc.login, engine=engine, config_mod=config)
+                    if ok:
+                        autotrade_active = True
+                        if hasattr(engine, "reset_halt"):
+                            engine.reset_halt()
                     print(msg.replace("*", "").replace("`", ""))
                 except Exception as e:
                     print(f"Error: {e}")
             else:
                 bmode = getattr(config, "BROKER_MODE", "mt5_live").upper()
-                print(f"Current Mode: {bmode} (Usage: live on | live <login> <password> <server>)")
+                print(f"Current Mode: {bmode} (Usage: live on | live off | live <login> <password> <server>)")
         elif name in ("balance", "wallet", "equity"):
-            print("⚠️ Paper trading and paper wallet balance have been removed. MetaTrader 5 Live is the sole exclusive broker.")
+            from mt5_accounts import get_account_manager
+            b = engine.broker
+            mgr = get_account_manager()
+            if len(parts) > 1:
+                try:
+                    new_bal = float(parts[1])
+                    if b and hasattr(b, "balance"):
+                        b.balance = new_bal
+                        if hasattr(b, "_initial_balance"):
+                            b._initial_balance = new_bal
+                    if hasattr(risk_mgr, "equity"):
+                        risk_mgr.equity = new_bal
+                    if hasattr(risk_mgr, "initial_equity"):
+                        risk_mgr.initial_equity = new_bal
+                    config.INITIAL_EQUITY = new_bal
+                    config.MT5_BALANCE = new_bal
+                    act = mgr.get_active_account()
+                    if act:
+                        act.balance = new_bal
+                        act.equity = new_bal
+                        mgr._save()
+                    print(f"Live Balance Updated: ${new_bal:,.2f} | Risk Equity: ${new_bal:,.2f}")
+                except Exception as e:
+                    print(f"Error setting balance: {e}")
+            else:
+                bal = float(getattr(b, "balance", 0.0) or 0.0) if b else 0.0
+                eq = float(getattr(b, "equity", bal) or bal) if b else bal
+                print("⚠️ Paper trading and paper wallet balance have been removed. MetaTrader 5 Live is the sole exclusive broker.")
+                print(f"MT5 Live Balance: ${bal:,.2f} | Equity: ${eq:,.2f}")
+                print("Usage: balance <amount> to update real live balance.")
         elif name == "delta":
             delta_parts = parts[1:]
             if not delta_parts:

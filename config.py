@@ -90,6 +90,7 @@ MT5_SERVER = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
 MT5_PATH = os.getenv("MT5_PATH") or find_default_mt5_path()
 MT5_MAGIC = _safe_int(os.getenv("MT5_MAGIC"), 112233)
 MT5_GATEWAY_URL = os.getenv("MT5_GATEWAY_URL", "")
+MT5_BALANCE = _safe_float(os.getenv("MT5_BALANCE") or os.getenv("BOT_EQUITY"), 10000.0)
 
 # Exclusive Broker Mode: MT5 Live only. Paper trading and all other brokers removed.
 BROKER_MODE = os.getenv("BROKER_MODE") or os.getenv("BOT_BROKER_MODE") or "mt5_live"

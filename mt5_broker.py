@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 import logging
 import math
+import os
 import time
 
 import config
@@ -156,7 +157,7 @@ class MT5Broker(Broker):
         server: str = "MetaQuotes-Demo",
         path: str = "",
         magic: int = 112233,
-        initial_balance: float = 1000.0,
+        initial_balance: Optional[float] = None,
         commission_pct: float = 0.0004,
         gateway_url: str = "",
     ):
@@ -175,7 +176,20 @@ class MT5Broker(Broker):
         self.gateway_url = str(gateway_url or "").strip()
 
         # Balance & Account state
-        self._initial_balance = max(1.0, float(initial_balance or 1000.0))
+        if initial_balance is not None and float(initial_balance) > 0:
+            resolved_balance = float(initial_balance)
+        else:
+            try:
+                import config
+                resolved_balance = float(
+                    getattr(config, "MT5_BALANCE", None)
+                    or getattr(config, "INITIAL_EQUITY", None)
+                    or os.getenv("BOT_EQUITY", 10000.0)
+                    or 10000.0
+                )
+            except Exception:
+                resolved_balance = 10000.0
+        self._initial_balance = max(1.0, float(resolved_balance))
         self.balance = self._initial_balance
         self._cached_equity: Optional[float] = None
         self._cached_margin: Optional[float] = None

@@ -27,6 +27,7 @@ from main import (
     switch_command,
     live_command,
     broker_command,
+    balance_command,
     autotrade_callback_handler,
     run_cli_interactive,
     engine,
@@ -132,6 +133,24 @@ class TestMT5AccountManager(unittest.TestCase):
         active = self.mgr.get_active_account()
         self.assertIsNotNone(active)
         self.assertEqual(active.login, 1002)
+
+    def test_clear_accounts_and_remove_all(self):
+        self.mgr.add_account("2001", "P1", "S1", alias="acc1", set_active=True)
+        self.mgr.add_account("2002", "P2", "S2", alias="acc2", set_active=False)
+        self.assertEqual(len(self.mgr.list_accounts()), 2)
+
+        # remove_account with "all"
+        removed = self.mgr.remove_account("all")
+        self.assertIsNotNone(removed)
+        self.assertEqual(len(self.mgr.list_accounts()), 0)
+        self.assertIsNone(self.mgr.get_active_account())
+
+        # clear_accounts
+        self.mgr.add_account("3001", "P3", "S3", alias="acc3", set_active=True)
+        self.assertEqual(len(self.mgr.list_accounts()), 1)
+        count = self.mgr.clear_accounts()
+        self.assertEqual(count, 1)
+        self.assertEqual(len(self.mgr.list_accounts()), 0)
 
 
 class TestSwitchBrokerMode(unittest.TestCase):
@@ -281,6 +300,53 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         self.message.reply_text.assert_called_once()
         text = self.message.reply_text.call_args[0][0]
         self.assertIn("Live Execution is Exclusive", text)
+        self.assertIn("PAUSED", text)
+
+    @patch("mt5_accounts.connect_and_verify")
+    async def test_live_command_on(self, mock_connect):
+        mock_broker = MagicMock()
+        mock_broker.balance = 12500.0
+        mock_broker.equity = 12500.0
+        mock_broker.leverage = 50.0
+        mock_broker.is_connected = True
+        mock_connect.return_value = (True, "Connected", mock_broker)
+
+        mgr = get_account_manager()
+        mgr.add_account("888777", "secret", "Exness-Real", alias="primary", set_active=True)
+
+        self.ctx.args = ["on"]
+        await live_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("LIVE MT5 EXECUTION ACTIVATED", text)
+        self.assertTrue(config.AUTOTRADE_LIVE_OPT_IN)
+
+    async def test_mt5_command_remove_all(self):
+        mgr = get_account_manager()
+        mgr.add_account("111222", "pass1", "Server1", alias="acc1")
+        mgr.add_account("333444", "pass2", "Server2", alias="acc2")
+        self.ctx.args = ["remove", "all"]
+        await mt5_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("All MT5 Accounts Removed", text)
+        self.assertEqual(len(mgr.list_accounts()), 0)
+
+    async def test_mt5_command_balance(self):
+        self.ctx.args = ["balance", "18500"]
+        await mt5_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("MT5 Live Balance Updated", text)
+        self.assertIn("18,500.00", text)
+
+    async def test_balance_command_view_and_update(self):
+        self.ctx.args = ["22000"]
+        await balance_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Live Account Balance Updated", text)
+        self.assertIn("22,000.00", text)
 
     async def test_broker_command_live(self):
         self.ctx.args = ["live"]
@@ -330,6 +396,9 @@ class TestCLIInteractiveMT5(unittest.TestCase):
             "mt5 paper\n"
             "switch paper\n"
             "live off\n"
+            "balance 16000\n"
+            "mt5 balance\n"
+            "mt5 remove all\n"
             "exit\n"
         )
         output_data = io.StringIO()
@@ -339,3 +408,11 @@ class TestCLIInteractiveMT5(unittest.TestCase):
         self.assertIn("MetaTrader 5 Accounts", out)
         self.assertIn("Current Broker Mode", out)
         self.assertIn("Paper Trading Removed", out)
+        self.assertIn("Live Balance Updated", out)
+        self.assertIn("All MT5 accounts removed", out)
+
+    def test_mt5_broker_balance_resolution(self):
+        # When initial_balance is not passed, it uses config.MT5_BALANCE or config.INITIAL_EQUITY (never 1000.0)
+        broker = MT5Broker(login=999111, password="secret", server="MetaQuotes-Demo")
+        self.assertEqual(broker.balance, getattr(config, "INITIAL_EQUITY", 10000.0))
+        self.assertNotEqual(broker.balance, 1000.0)

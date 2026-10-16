@@ -34,6 +34,8 @@ class MT5Account:
     is_live: bool = True
     added_at: str = ""
     last_used_at: str = ""
+    balance: float = 0.0
+    equity: float = 0.0
 
     @property
     def masked_password(self) -> str:
@@ -57,6 +59,8 @@ class MT5Account:
             is_live=bool(data.get("is_live", True)),
             added_at=str(data.get("added_at") or ""),
             last_used_at=str(data.get("last_used_at") or ""),
+            balance=float(data.get("balance", 0.0) or 0.0),
+            equity=float(data.get("equity", 0.0) or 0.0),
         )
 
 
@@ -102,6 +106,7 @@ class MT5AccountManager:
                 cfg_server = str(getattr(config, "MT5_SERVER", "") or "")
                 cfg_gw = str(getattr(config, "MT5_GATEWAY_URL", "") or "")
                 if cfg_login > 0 and cfg_pass and cfg_server:
+                    cfg_bal = float(getattr(config, "MT5_BALANCE", 0.0) or getattr(config, "INITIAL_EQUITY", 0.0) or 10000.0)
                     acc = MT5Account(
                         login=cfg_login,
                         password=cfg_pass,
@@ -110,6 +115,8 @@ class MT5AccountManager:
                         gateway_url=cfg_gw,
                         is_live=getattr(config, "MT5_MODE", "paper") == "live",
                         added_at=datetime.now(timezone.utc).isoformat(),
+                        balance=cfg_bal,
+                        equity=cfg_bal,
                     )
                     self._accounts[acc.login] = acc
                     self._active_login = acc.login
@@ -139,6 +146,8 @@ class MT5AccountManager:
         gateway_url: str = "",
         is_live: bool = True,
         set_active: bool = True,
+        balance: Optional[float] = None,
+        equity: Optional[float] = None,
     ) -> MT5Account:
         """Add or update an MT5 trading account."""
         try:
@@ -162,6 +171,22 @@ class MT5AccountManager:
             if existing.login != log_num and existing.alias.lower() == clean_alias:
                 existing.alias = f"acct_{existing.login}"
 
+        # Determine balance and equity
+        if balance is not None and float(balance) > 0:
+            resolved_bal = float(balance)
+        else:
+            try:
+                import config
+                resolved_bal = float(
+                    getattr(config, "MT5_BALANCE", None)
+                    or getattr(config, "INITIAL_EQUITY", None)
+                    or os.getenv("BOT_EQUITY", 10000.0)
+                    or 10000.0
+                )
+            except Exception:
+                resolved_bal = 10000.0
+        resolved_eq = float(equity) if (equity is not None and float(equity) > 0) else resolved_bal
+
         acc = MT5Account(
             login=log_num,
             password=str(password).strip(),
@@ -171,6 +196,8 @@ class MT5AccountManager:
             is_live=bool(is_live),
             added_at=datetime.now(timezone.utc).isoformat(),
             last_used_at=datetime.now(timezone.utc).isoformat() if set_active else "",
+            balance=resolved_bal,
+            equity=resolved_eq,
         )
         self._accounts[log_num] = acc
 
@@ -181,8 +208,24 @@ class MT5AccountManager:
         self._save()
         return acc
 
+    def clear_accounts(self) -> int:
+        """Remove all saved MT5 accounts."""
+        count = len(self._accounts)
+        self._accounts.clear()
+        self._active_login = None
+        self._save()
+        return count
+
     def remove_account(self, identifier: Union[int, str]) -> Optional[MT5Account]:
-        """Remove account by login number or alias."""
+        """Remove account by login number, alias, or 'all'/'*'/clear to remove all."""
+        s_id = str(identifier).strip().lower()
+        if s_id in ("all", "*", "clear"):
+            if not self._accounts:
+                return None
+            first = self.get_active_account() or next(iter(self._accounts.values()))
+            self.clear_accounts()
+            return first
+
         acc = self.get_account(identifier)
         if not acc:
             return None
@@ -256,15 +299,16 @@ class MT5AccountManager:
             mode_tag = "LIVE" if acc.is_live else "DEMO"
             active_tag = " **(Active)**" if is_active else ""
             via_tag = f" | Gateway: `{acc.gateway_url}`" if acc.gateway_url else ""
+            bal_tag = f" | Balance: `${acc.balance:,.2f}`" if acc.balance > 0 else ""
             lines.append(
-                f"• {status_dot} **{acc.alias}** (`{acc.login}`) — `{acc.server}` [{mode_tag}]{active_tag}\n"
+                f"• {status_dot} **{acc.alias}** (`{acc.login}`) — `{acc.server}` [{mode_tag}]{active_tag}{bal_tag}\n"
                 f"  Password: `{acc.masked_password}`{via_tag}"
             )
 
         lines.append(
             "\n💡 **Switch account:** `/mt5 switch <alias|login>`\n"
             "💡 **Connect live:** `/mt5 switch live`\n"
-            "💡 **Remove account:** `/mt5 remove <alias|login>`"
+            "💡 **Remove account:** `/mt5 remove <alias|login>` (or `/mt5 remove all`)"
         )
         return "\n".join(lines)
 
@@ -295,6 +339,7 @@ def connect_and_verify(
     account: MT5Account,
     mode: str = "live",
     path: str = "",
+    initial_balance: Optional[float] = None,
 ) -> Tuple[bool, str, Optional[Any]]:
     """
     Attempt connection with MT5Broker.
@@ -302,6 +347,11 @@ def connect_and_verify(
     """
     from mt5_broker import MT5Broker
     try:
+        resolved_bal = (
+            float(initial_balance)
+            if (initial_balance is not None and float(initial_balance) > 0)
+            else (float(account.balance) if account.balance > 0 else None)
+        )
         broker = MT5Broker(
             mode=mode,
             login=account.login,
@@ -309,9 +359,13 @@ def connect_and_verify(
             server=account.server,
             path=path,
             gateway_url=account.gateway_url,
+            initial_balance=resolved_bal,
         )
         if not broker.is_connected and mode == "live":
             return False, "Failed to connect to MT5 terminal or server.", None
+        if getattr(broker, "balance", 0.0) > 0:
+            account.balance = float(broker.balance)
+            account.equity = float(getattr(broker, "equity", broker.balance))
         return True, "Connected successfully", broker
     except Exception as e:
         return False, str(e), None
@@ -397,6 +451,7 @@ def switch_broker_mode(
         cfg.BROKER_MODE = "mt5_live"
         cfg.MT5_MODE = "live"
         cfg.MT5_ENABLED = True
+        cfg.AUTOTRADE_LIVE_OPT_IN = True
         mgr.set_active(acc.login)
 
         via_str = f"Gateway (`{acc.gateway_url}`)" if acc.gateway_url else "Native MetaTrader 5 Terminal"
@@ -405,6 +460,10 @@ def switch_broker_mode(
         eq = float(getattr(live_broker, "equity", bal) or bal)
         lev = float(getattr(live_broker, "leverage", 100.0) or 100.0)
         free_m = float(getattr(live_broker, "free_margin", eq) or eq)
+
+        acc.balance = bal
+        acc.equity = eq
+        mgr._save()
 
         return (
             True,
