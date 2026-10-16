@@ -12,6 +12,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
+def _ensure_execution_engine() -> None:
+    target = ROOT / "execution_engine.py"
+    restore = ROOT / "scripts" / "restore_execution_engine.py"
+    try:
+        ok = target.is_file() and target.stat().st_size > 1000
+        if ok:
+            sample = target.read_text(encoding="utf-8", errors="replace")[:2000]
+            ok = "def register_setup" in sample or "ExecutionEngine" in sample
+        if ok:
+            return
+        if restore.is_file():
+            import runpy as _runpy
+            _runpy.run_path(str(restore), run_name="__main__")
+    except Exception as _heal_err:
+        print(f"[run_bot] execution_engine self-heal failed: {_heal_err}")
+
+_ensure_execution_engine()
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*cryptography.*")
 
@@ -128,7 +146,7 @@ def main() -> None:
                 "try:\n"
                 "    from execution import create_broker\n"
                 "    _broker = create_broker(\n"
-                '        broker_mode=getattr(config, "BROKER_MODE", "paper"),\n'
+                '        broker_mode=getattr(config, "BROKER_MODE", "mt5_live"),\n'
                 '        exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),\n'
                 '        api_key=getattr(config, "EXCHANGE_API_KEY", ""),\n'
                 '        api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),\n'
