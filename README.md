@@ -108,6 +108,10 @@ BOT_NEWS=true
 - `/digest` — Daily market performance digest
 - `/reset` — Clear conversation context
 
+## Hybrid Python + MT5 Demo Bridge
+
+See [docs/MT5_HYBRID_DEMO.md](docs/MT5_HYBRID_DEMO.md) for the opt-in Python-to-MQL5 signal-file adapter. The EA is disabled by default and blocks non-demo accounts. Python historical backtesting remains separate; the external wall-clock signal bridge is not replayed in MT5 Strategy Tester.
+
 ## Quick Start & Deploy
 
 ```bash
