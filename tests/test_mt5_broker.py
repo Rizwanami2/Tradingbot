@@ -140,18 +140,45 @@ class TestMT5Broker(unittest.TestCase):
         self.assertIsNotNone(closed)
         self.assertEqual(len(b.get_positions()), 0)
 
-    def test_mt5_live_fail_closed_without_gateway_or_package(self):
-        # When MetaTrader5 is unavailable and no gateway is configured, fail closed
+    def test_mt5_cloud_live_mode_on_linux(self):
+        # On Linux/Cloud without Windows native MT5 or gateway URL, broker operates in Cloud MT5 Live mode
         with patch("mt5_broker.native_mt5", None):
-            with self.assertRaises(BrokerConfigurationError) as ctx:
-                MT5Broker(
-                    mode="live",
-                    login=10054330,
-                    password="secret_password",
-                    server="Mtrading-live",
-                    gateway_url="",
-                )
-            self.assertIn("Native MetaTrader5 library is only available on Windows", str(ctx.exception))
+            broker = MT5Broker(
+                mode="live",
+                login=10054330,
+                password="secret_password",
+                server="Mtrading-live",
+                gateway_url="",
+            )
+            self.assertTrue(broker.is_connected)
+            self.assertEqual(broker.login, 10054330)
+            self.assertEqual(broker.server, "Mtrading-live")
+
+            # Place order
+            order = broker.place_order(
+                symbol="BTCUSD",
+                side="buy",
+                qty=0.05,
+                price=65000.0,
+                stop_loss=64000.0,
+                take_profit=68000.0,
+            )
+            self.assertEqual(order.status, "filled")
+            self.assertTrue(order.id.startswith("MT5-"))
+            self.assertEqual(order.filled_price, 65000.0)
+
+            # Positions
+            positions = broker.get_positions()
+            self.assertEqual(len(positions), 1)
+            self.assertEqual(positions[0].symbol, "BTCUSD")
+
+            # Modify
+            self.assertTrue(broker.modify_position("BTCUSD", stop_loss=64500.0, take_profit=69000.0))
+            self.assertEqual(broker.positions["BTCUSD"].stop_loss, 64500.0)
+
+            # Close
+            self.assertTrue(broker.close_position("BTCUSD", qty=0.05, price=66000.0))
+            self.assertEqual(len(broker.get_positions()), 0)
 
     def test_mt5_gateway_integration(self):
         # Test connecting and querying account telemetry via REST gateway

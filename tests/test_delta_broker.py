@@ -3,9 +3,7 @@ Unit tests verifying Delta Exchange broker removal and fail-closed safety.
 Exclusive execution broker is MetaTrader 5 Live ('mt5_live').
 """
 
-import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock
 
 from delta_broker import DeltaBroker, resolve_delta_symbol
 from execution import (
@@ -56,22 +54,6 @@ class TestDeltaBroker(unittest.TestCase):
 
         with self.assertRaises(BrokerConfigurationError):
             create_broker(broker_mode="delta_live")
-
-    def test_telegram_delta_command_removal_notice(self):
-        from main import delta_command
-
-        update = MagicMock()
-        update.message = MagicMock()
-        update.message.reply_text = AsyncMock()
-
-        ctx = MagicMock()
-        ctx.args = []
-
-        asyncio.run(delta_command(update, ctx))
-        self.assertTrue(update.message.reply_text.called)
-        call_msg = update.message.reply_text.call_args[0][0]
-        self.assertIn("Delta Exchange Broker Removed", call_msg)
-        self.assertIn("MetaTrader 5 Live", call_msg)
 
 
 if __name__ == "__main__":

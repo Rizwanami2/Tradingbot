@@ -374,6 +374,14 @@ class ExecutionEngine:
             fast_market_fill=bool(sig.get("fast_market_fill") or getattr(self, "fast_market_fill", False)),
         )
 
+        if sig.get("current_price"):
+            try:
+                cp_val = float(sig["current_price"])
+                if cp_val > 0 and getattr(self, "broker", None) is not None and hasattr(self.broker, "mark_price"):
+                    self.broker.mark_price(symbol, cp_val)
+            except Exception:
+                pass
+
         self.pending_setups[order.id] = order
         self._dispatch_event("SETUP_REGISTERED", order, f"Setup registered @ {entry:.2f}. Waiting for trigger.")
         return order

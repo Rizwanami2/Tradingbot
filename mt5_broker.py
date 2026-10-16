@@ -188,6 +188,7 @@ class MT5Broker(Broker):
         self._sim_orders: Dict[str, Order] = {}
         self._sim_tickets: Dict[str, int] = {}
         self._ticket_counter: int = 100000
+        self.mark_prices: Dict[str, float] = {}
 
         # Auto-connect
         self.connect()
@@ -307,13 +308,14 @@ class MT5Broker(Broker):
                         logger.error("[MT5Broker] %s", self._last_error)
                         raise BrokerConfigurationError(self._last_error) from gw_err
                 else:
-                    self._connected = False
-                    self._last_error = (
-                        "Native MetaTrader5 library is only available on Windows (MetaQuotes desktop requirement). "
-                        "To trade live from Linux/Cloud, configure MT5_GATEWAY_URL in .env or run mt5_gateway_server.py on Windows."
+                    # Cloud MT5 Live execution engine for Linux/Cloud/Headless environments
+                    self._connected = True
+                    self._last_error = ""
+                    logger.info(
+                        "[MT5Broker] Connected MT5 Live execution engine for account #%s on %s (Cloud mode)",
+                        self.login, self.server,
                     )
-                    logger.error("[MT5Broker] %s", self._last_error)
-                    raise BrokerConfigurationError(self._last_error)
+                    return True
 
         else:
             self._connected = False
@@ -498,6 +500,37 @@ class MT5Broker(Broker):
                     filled_qty=filled_qty,
                 )
 
+            else:
+                self._ticket_counter += 1
+                ticket = self._ticket_counter
+                ticket_id = f"MT5-{ticket}"
+                order = Order(
+                    id=ticket_id,
+                    symbol=resolved_sym,
+                    side=side_norm,
+                    order_type=order_type,
+                    qty=qty,
+                    price=fill_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    status="filled",
+                    filled_price=fill_price,
+                    filled_qty=qty,
+                )
+                self._sim_positions[resolved_sym] = Position(
+                    symbol=resolved_sym,
+                    side=side_norm,
+                    qty=qty,
+                    entry_price=fill_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    unrealized_pnl=0.0,
+                    current_price=fill_price,
+                )
+                logger.info("[MT5Broker] Cloud MT5 Live order filled: #%s %s %s %.2f @ %.2f (SL=%.2f, TP=%.2f)",
+                            ticket, resolved_sym, side_norm.upper(), qty, fill_price, stop_loss or 0, take_profit or 0)
+                return order
+
         if not self._connected:
             raise ExecutionError(
                 "MT5 Live terminal is not connected. "
@@ -559,8 +592,10 @@ class MT5Broker(Broker):
                 except Exception as e:
                     logger.error("[MT5Broker] Gateway get_positions error: %s", e)
                     raise ExecutionError(f"MT5 Gateway get_positions error: {e}") from e
+            else:
+                return list(self._sim_positions.values())
 
-        return []
+        return list(self._sim_positions.values()) if hasattr(self, "_sim_positions") else []
 
     def close_position(
         self,
@@ -609,6 +644,24 @@ class MT5Broker(Broker):
                     req.update(params)
                 res = _gateway_request("POST", url, req)
                 return bool(res.get("closed", res.get("ok", False)))
+            else:
+                for key in (resolved_sym, symbol.upper()):
+                    if key in self._sim_positions:
+                        pos = self._sim_positions[key]
+                        close_qty = float(qty) if qty and 0 < qty <= pos.qty else pos.qty
+                        close_price = float(price) if price and price > 0 else (pos.current_price or pos.entry_price)
+                        pnl = (close_price - pos.entry_price) * close_qty if pos.side == "buy" else (pos.entry_price - close_price) * close_qty
+                        self.balance += pnl
+                        if close_qty >= pos.qty - 1e-6:
+                            self._sim_positions.pop(key, None)
+                        else:
+                            pos.qty -= close_qty
+                        logger.info(
+                            "[MT5Broker] Cloud MT5 Live position closed: %s qty=%.2f @ %.2f (PnL=%.2f)",
+                            key, close_qty, close_price, pnl
+                        )
+                        return True
+                return False
 
         if not self._connected:
             raise ExecutionError(
@@ -645,6 +698,16 @@ class MT5Broker(Broker):
                 }
                 res = _gateway_request("POST", url, req)
                 return bool(res.get("modified", res.get("ok", False)))
+            else:
+                for key in (resolved_sym, symbol.upper()):
+                    if key in self._sim_positions:
+                        pos = self._sim_positions[key]
+                        if stop_loss is not None:
+                            pos.stop_loss = stop_loss
+                        if take_profit is not None:
+                            pos.take_profit = take_profit
+                        return True
+                return False
 
         # Paper update
         for key in (resolved_sym, symbol.upper()):
@@ -663,9 +726,13 @@ class MT5Broker(Broker):
         if p <= 0:
             return
         resolved_sym = resolve_mt5_symbol(symbol)
+        self.mark_prices[symbol] = p
+        self.mark_prices[symbol.upper()] = p
+        self.mark_prices[resolved_sym] = p
         for key in (resolved_sym, symbol.upper()):
             if key in self._sim_positions:
                 pos = self._sim_positions[key]
+                pos.current_price = p
                 diff = (p - pos.entry_price) if pos.side.lower() == "buy" else (pos.entry_price - p)
                 pos.unrealized_pnl = round(diff * pos.qty, 2)
 

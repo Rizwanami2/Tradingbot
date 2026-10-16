@@ -106,31 +106,34 @@ risk_mgr = RiskManager(equity=config.INITIAL_EQUITY, symbol=config.DEFAULT_SYMBO
 risk_mgr.set_leverage(config.DEFAULT_LEVERAGE)
 arbiter = Arbiter(allow_asian=True)
 try:
+    from mt5_accounts import get_account_manager
+    _active_acc = get_account_manager().get_active_account()
+    if _active_acc and _active_acc.login:
+        config.MT5_LOGIN = _active_acc.login
+        config.MT5_PASSWORD = _active_acc.password
+        config.MT5_SERVER = _active_acc.server
+        config.MT5_GATEWAY_URL = _active_acc.gateway_url
+except Exception as _sync_err:
+    pass
+
+try:
     from execution import create_broker
     _broker = create_broker(
-        broker_mode=getattr(config, "BROKER_MODE", "paper"),
-        exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),
-        api_key=getattr(config, "EXCHANGE_API_KEY", ""),
-        api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),
-        initial_balance=getattr(config, "INITIAL_EQUITY", 10000.0),
-        mt5_mode=getattr(config, "MT5_MODE", "paper"),
+        broker_mode=getattr(config, "BROKER_MODE", "mt5_live"),
+        mt5_mode=getattr(config, "MT5_MODE", "live"),
         mt5_login=getattr(config, "MT5_LOGIN", 0),
         mt5_password=getattr(config, "MT5_PASSWORD", ""),
         mt5_server=getattr(config, "MT5_SERVER", "MetaQuotes-Demo"),
         mt5_path=getattr(config, "MT5_PATH", ""),
         mt5_magic=getattr(config, "MT5_MAGIC", 112233),
         mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
-        delta_api_key=getattr(config, "DELTA_EXCHANGE_API_KEY", "") or getattr(config, "EXCHANGE_API_KEY", ""),
-        delta_api_secret=getattr(config, "DELTA_EXCHANGE_API_SECRET", "") or getattr(config, "EXCHANGE_API_SECRET", ""),
-        delta_base_url=getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange"),
-        delta_testnet=getattr(config, "DELTA_EXCHANGE_TESTNET", False),
-        delta_leverage=getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0),
-        delta_auto_leverage=getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True),
-        delta_max_leverage=getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0),
     )
 except Exception as _broker_err:
-    print("[boot] broker:", _broker_err)
-    _broker = None
+    try:
+        from mt5_broker import MockMT5Broker
+        _broker = MockMT5Broker()
+    except Exception:
+        _broker = None
 engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)
 try:
     from strategy_profiles import apply_profile
@@ -309,20 +312,19 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL"
         )
-    elif cat in ("delta", "mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca", "switch", "live"):
+    elif cat in ("mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca", "switch", "live"):
         text = (
-            "🏦 **MetaTrader 5 & Broker Accounts (Paper, Delta India & MT5):**\n"
-            "• `/switch [live|paper|<login>|<alias>]` — Fast switcher between execution modes & accounts\n"
+            "🏦 **MetaTrader 5 & Broker Accounts:**\n"
+            "• `/switch [live|<login>|<alias>]` — Fast switcher between MT5 accounts\n"
             "• `/live [on|off|<login> <pass> <server>]` — Quick MT5 Live trading toggle & connect\n"
             "• `/mt5` — Interactive MT5 dashboard & controls\n"
             "• `/mt5 add <login> <pass> <server> [alias]` — Add & save MT5 Live account\n"
-            "• `/mt5 switch [live|paper|<account>]` — Switch active MT5 broker mode\n"
+            "• `/mt5 switch [<login>|<alias>]` — Switch active MT5 account\n"
             "• `/mt5 accounts` — List registered MT5 accounts\n"
             "• `/mt5 remove <login|alias>` — Remove a saved MT5 account\n"
-            "• `/delta [status|live|testnet|leverage|auto_leverage|positions]` — Delta Exchange India Live REST broker (Max 200x)\n"
-            "• `/balance [amount]` — View or custom-set paper wallet balance (e.g. `/balance 50000`)\n"
+            "• `/balance` — View MT5 balance, equity, and margin\n"
             "• `/broker` — View active broker environment & telemetry\n"
-            "• `/broker [paper|live|delta|mt5]` — Switch active execution broker engine"
+            "• `/broker [mt5]` — MetaTrader 5 Live execution engine"
         )
     elif cat in ("risk", "safety", "limits"):
         text = (
@@ -1652,17 +1654,6 @@ async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def delta_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Notify that Delta Exchange India broker has been removed."""
-    await update.message.reply_text(
-        "⚠️ **Delta Exchange Broker Removed**\n"
-        "Delta Exchange India broker has been removed from the platform.\n"
-        "MetaTrader 5 Live (`/mt5` or `/live`) is now the exclusive execution broker.\n\n"
-        "• Use `/mt5 status` or `/live` to manage your live trading.\n"
-        "• Use `/mt5 add <login> <password> <server>` to add MT5 live accounts.",
-        parse_mode="Markdown",
-    )
-
 
 async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = ctx.args or []
@@ -2277,8 +2268,6 @@ def run_cli_interactive():
             else:
                 bname = type(engine.broker).__name__ if engine.broker else "None"
                 print(f"Active broker: {bname} ({getattr(config, 'BROKER_MODE', 'mt5_live')})")
-        elif name == "delta":
-            print("⚠️ Delta Exchange India broker has been removed. MetaTrader 5 Live is the sole exclusive broker.")
         elif name in ("oanda", "alpaca", "ccxt"):
             print(f"⚠️ Native live broker '{name.upper()}' has been removed. MetaTrader 5 Live is the sole exclusive broker.")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
@@ -2541,9 +2530,8 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CallbackQueryHandler(autotrade_callback_handler))
 
-    # MT5, Delta Exchange India & Paper Broker Execution
+    # MT5 Live Broker Execution
     app.add_handler(CommandHandler(["balance", "wallet", "equity"], balance_command))
-    app.add_handler(CommandHandler("delta", delta_command))
     app.add_handler(CommandHandler("mt5", mt5_command))
     app.add_handler(CommandHandler(["switch", "switchbroker"], switch_command))
     app.add_handler(CommandHandler(["live", "livetrade"], live_command))
