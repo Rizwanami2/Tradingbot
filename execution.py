@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Protocol, runtime_checkable
 import json
+import os
 import uuid
 
 
@@ -392,14 +393,28 @@ def create_broker_fail_closed(
         )
 
     if mode in (
-        "delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet",
         "oanda", "oanda_practice", "oanda_live",
         "alpaca", "alpaca_paper", "alpaca_live",
         "ccxt", "ccxt_live", "live",
     ):
         raise BrokerConfigurationError(
             f"Broker mode {broker_mode!r} is not supported. Legacy broker has been removed; "
-            "MetaTrader 5 Live ('mt5_live') is the sole supported execution broker."
+            "MetaTrader 5 Live ('mt5_live') and Delta Exchange ('delta_live') are supported."
+        )
+
+    if mode in ("delta", "delta_live", "delta_india", "delta_india_live", "delta_testnet"):
+        if delta_factory is not None:
+            return delta_factory()
+        from delta_broker import DeltaBroker
+        key = api_key or os.getenv("DELTA_EXCHANGE_API_KEY") or os.getenv("EXCHANGE_API_KEY") or ""
+        sec = api_secret or os.getenv("DELTA_EXCHANGE_API_SECRET") or os.getenv("EXCHANGE_API_SECRET") or ""
+        testnet = mode == "delta_testnet" or (os.getenv("DELTA_EXCHANGE_TESTNET", "false").lower() in ("true", "1", "yes", "on"))
+        base_url = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+        return DeltaBroker(
+            api_key=key,
+            api_secret=sec,
+            base_url=base_url,
+            is_testnet=testnet,
         )
 
     if mode in ("mt5", "mt5_live"):
@@ -630,6 +645,29 @@ def create_broker(
     if effective_mode == "mt5":
         effective_mode = "mt5_live"
 
+    def _make_delta():
+        from delta_broker import DeltaBroker
+        try:
+            import config as _cfg
+        except Exception:
+            _cfg = None
+        k = delta_api_key or api_key or getattr(_cfg, "DELTA_EXCHANGE_API_KEY", "") or getattr(_cfg, "EXCHANGE_API_KEY", "")
+        s = delta_api_secret or api_secret or getattr(_cfg, "DELTA_EXCHANGE_API_SECRET", "") or getattr(_cfg, "EXCHANGE_API_SECRET", "")
+        t = delta_testnet or (effective_mode == "delta_testnet") or getattr(_cfg, "DELTA_EXCHANGE_TESTNET", False)
+        u = delta_base_url or getattr(_cfg, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")
+        lev = float(delta_leverage or getattr(_cfg, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0))
+        auto_lev = bool(delta_auto_leverage if delta_auto_leverage is not None else getattr(_cfg, "DELTA_EXCHANGE_AUTO_LEVERAGE", True))
+        max_lev = float(delta_max_leverage or getattr(_cfg, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0))
+        return DeltaBroker(
+            api_key=k,
+            api_secret=s,
+            base_url=u,
+            is_testnet=t,
+            leverage=lev,
+            auto_leverage=auto_lev,
+            max_leverage=max_lev,
+        )
+
     return create_broker_fail_closed(
         broker_mode=effective_mode,
         api_key=api_key,
@@ -644,6 +682,7 @@ def create_broker(
             path=mt5_path,
             gateway_url=mt5_gateway_url,
         ),
+        delta_factory=_make_delta,
     )
 
 

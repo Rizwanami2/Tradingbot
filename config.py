@@ -124,7 +124,7 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
 ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes", "on")
 
-# Native Delta Exchange India REST Settings (Deprecated - MT5 Live is exclusive broker)
+# Native Delta Exchange India REST Broker Integration (Autotrade Enabled)
 DELTA_EXCHANGE_API_KEY = os.getenv("DELTA_EXCHANGE_API_KEY") or EXCHANGE_API_KEY or ""
 DELTA_EXCHANGE_API_SECRET = os.getenv("DELTA_EXCHANGE_API_SECRET") or EXCHANGE_API_SECRET or ""
 DELTA_EXCHANGE_BASE_URL = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")

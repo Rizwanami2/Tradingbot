@@ -149,10 +149,7 @@ class DeltaBroker(Broker):
         max_leverage: float = 200.0,
         timeout: int = 10,
     ):
-        from execution import BrokerConfigurationError
-        raise BrokerConfigurationError(
-            "DeltaBroker has been removed. MetaTrader 5 Live ('mt5_live') is the sole supported broker."
-        )
+        self.api_key = str(api_key or "").strip().strip("'\"`").strip()
         self.api_secret = str(api_secret or "").strip().strip("'\"`").strip()
         self.is_testnet = bool(is_testnet)
         if self.is_testnet:
@@ -181,6 +178,7 @@ class DeltaBroker(Broker):
         self._products_by_id: Dict[int, Dict[str, Any]] = {}
         # Cached configured leverage per symbol: symbol -> leverage
         self.symbols_leverage: Dict[str, float] = {}
+        self.mark_prices: Dict[str, float] = {}
 
         self.connect()
 
@@ -748,6 +746,25 @@ class DeltaBroker(Broker):
             logger.error("[DeltaBroker] Failed to query positions: %s", exc)
             return []
 
+    @property
+    def positions(self) -> Dict[str, Position]:
+        """Dictionary of symbol -> Position for open positions."""
+        return {p.symbol: p for p in self.get_positions()}
+
+    def update_mark_price(self, symbol: str, price: float) -> None:
+        """Track mark price on open positions."""
+        p = float(price or 0.0)
+        if p > 0:
+            sym = resolve_delta_symbol(symbol)
+            self.mark_prices[symbol] = p
+            self.mark_prices[symbol.upper()] = p
+            self.mark_prices[sym] = p
+
+    def mark_price(self, symbol: str, price: float) -> float:
+        """Alias for update_mark_price returning equity."""
+        self.update_mark_price(symbol, price)
+        return self.equity
+
     def close_position(
         self,
         symbol: str,
@@ -773,7 +790,11 @@ class DeltaBroker(Broker):
 
         current_pos = open_positions[0]
         close_side = "sell" if current_pos.side == "buy" else "buy"
-        close_size = int(round(qty)) if qty and qty > 0 else int(round(current_pos.qty))
+        if qty is not None and qty > 0:
+            converted_size = self.to_contracts(delta_sym, qty)
+            close_size = min(converted_size, int(round(current_pos.qty)))
+        else:
+            close_size = int(round(current_pos.qty))
 
         payload: Dict[str, Any] = {
             "product_id": pid,
@@ -868,3 +889,236 @@ class DeltaBroker(Broker):
             "max_leverage": info.max_leverage,
             "open_positions": info.open_position_count,
         }
+
+
+class MockDeltaBroker(Broker):
+    """
+    In-memory Mock Delta Exchange India broker for offline unit testing and development.
+    Simulates order fills, positions, bracket stops, leverage scaling, and telemetry.
+    """
+
+    def __init__(
+        self,
+        api_key: str = "mock_key",
+        api_secret: str = "mock_secret",
+        base_url: str = DELTA_INDIA_LIVE_URL,
+        is_testnet: bool = True,
+        initial_balance: float = 10000.0,
+        leverage: float = 20.0,
+        auto_leverage: bool = True,
+        max_leverage: float = 200.0,
+        balance: Optional[float] = None,
+        **kwargs: Any,
+    ):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.base_url = base_url
+        self.is_testnet = is_testnet
+        self._connected = True
+        self.balance = float(balance if balance is not None else initial_balance)
+        self.currency = "USD"
+        self.default_leverage = leverage
+        self.auto_leverage = auto_leverage
+        self.max_leverage = max_leverage
+        self._positions: Dict[str, Position] = {}
+        self.symbols_leverage: Dict[str, float] = {}
+        self.mark_prices: Dict[str, float] = {}
+        self._ticket_counter = 200000
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    @property
+    def mode(self) -> str:
+        return "testnet" if self.is_testnet else "live"
+
+    @property
+    def equity(self) -> float:
+        unrealized = sum(p.unrealized_pnl for p in set(self._positions.values()))
+        return round(self.balance + unrealized, 2)
+
+    @property
+    def margin(self) -> float:
+        total_margin = sum((p.entry_price * p.qty) / self.default_leverage for p in set(self._positions.values()))
+        return round(total_margin, 2)
+
+    @property
+    def free_margin(self) -> float:
+        return max(0.0, round(self.equity - self.margin, 2))
+
+    @property
+    def positions(self) -> Dict[str, Position]:
+        return dict(self._positions)
+
+    def get_positions(self) -> List[Position]:
+        return list(self._positions.values())
+
+    def update_mark_price(self, symbol: str, price: float) -> None:
+        p = float(price or 0.0)
+        if p > 0:
+            sym = resolve_delta_symbol(symbol)
+            self.mark_prices[symbol] = p
+            self.mark_prices[sym] = p
+            for key in (sym, symbol.upper()):
+                if key in self._positions:
+                    pos = self._positions[key]
+                    pos.current_price = p
+                    diff = (p - pos.entry_price) if pos.side == "buy" else (pos.entry_price - p)
+                    pos.unrealized_pnl = round(diff * pos.qty, 2)
+
+    def mark_price(self, symbol: str, price: float) -> float:
+        self.update_mark_price(symbol, price)
+        return self.equity
+
+    def set_leverage(self, symbol: str, leverage: float) -> Tuple[bool, str]:
+        target = min(float(leverage), self.max_leverage)
+        sym = resolve_delta_symbol(symbol)
+        self.symbols_leverage[sym] = target
+        return True, f"Leverage for {sym} set to {target:.0f}x"
+
+    def get_leverage(self, symbol: Optional[str] = None) -> float:
+        if symbol:
+            sym = resolve_delta_symbol(symbol)
+            if sym in self.symbols_leverage:
+                return self.symbols_leverage[sym]
+        return self.default_leverage
+
+    def auto_set_leverage(
+        self,
+        symbol: str,
+        stop_loss: Optional[float] = None,
+        entry: Optional[float] = None,
+        confidence: Optional[float] = None,
+        max_cap: float = 200.0,
+    ) -> Tuple[float, str]:
+        sym = resolve_delta_symbol(symbol)
+        if entry and stop_loss and entry > 0 and stop_loss > 0:
+            dist = abs(entry - stop_loss) / entry
+            lev = max(1.0, 1.0 / (dist * 1.25)) if dist > 0 else self.default_leverage
+        else:
+            lev = self.default_leverage
+        target = int(round(min(lev, self.max_leverage, max_cap)))
+        self.symbols_leverage[sym] = float(target)
+        return float(target), f"Auto-set leverage to {target}x"
+
+    def to_contracts(self, symbol: str, qty: float) -> int:
+        return max(1, int(round(qty / 0.001))) if "BTC" in symbol or "XAU" in symbol else max(1, int(round(qty)))
+
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        order_type: str = "market",
+        price: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Order:
+        self._ticket_counter += 1
+        ticket = self._ticket_counter
+        ticket_id = f"DELTA-{ticket}"
+        delta_sym = resolve_delta_symbol(symbol)
+        fill_price = float(price if price and price > 0 else 100.0)
+        side_norm = side.lower()
+
+        if self.auto_leverage and (stop_loss or fill_price):
+            self.auto_set_leverage(delta_sym, stop_loss=stop_loss, entry=fill_price)
+
+        order = Order(
+            id=ticket_id,
+            symbol=delta_sym,
+            side=side_norm,
+            order_type=order_type,
+            qty=qty,
+            price=fill_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            status="filled",
+            filled_price=fill_price,
+            filled_qty=qty,
+            created_at=datetime.now(timezone.utc),
+        )
+        self._positions[delta_sym] = Position(
+            symbol=delta_sym,
+            side=side_norm,
+            qty=qty,
+            entry_price=fill_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            current_price=fill_price,
+            unrealized_pnl=0.0,
+        )
+        return order
+
+    def close_position(
+        self,
+        symbol: str,
+        qty: Optional[float] = None,
+        price: Optional[float] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        delta_sym = resolve_delta_symbol(symbol)
+        for key in (delta_sym, symbol.upper()):
+            if key in self._positions:
+                pos = self._positions[key]
+                close_qty = float(qty) if qty and 0 < qty <= pos.qty else pos.qty
+                close_price = float(price) if price and price > 0 else (pos.current_price or pos.entry_price)
+                pnl = (close_price - pos.entry_price) * close_qty if pos.side == "buy" else (pos.entry_price - close_price) * close_qty
+                self.balance += pnl
+                if close_qty >= pos.qty - 1e-6:
+                    self._positions.pop(delta_sym, None)
+                    self._positions.pop(symbol.upper(), None)
+                else:
+                    pos.qty -= close_qty
+                return True
+        return False
+
+    def modify_position(self, symbol: str, stop_loss: Optional[float] = None, take_profit: Optional[float] = None) -> bool:
+        delta_sym = resolve_delta_symbol(symbol)
+        for key in (delta_sym, symbol.upper()):
+            if key in self._positions:
+                pos = self._positions[key]
+                if stop_loss is not None:
+                    pos.stop_loss = stop_loss
+                if take_profit is not None:
+                    pos.take_profit = take_profit
+                return True
+        return False
+
+    def get_account_info(self) -> DeltaAccountInfo:
+        positions = self.get_positions()
+        return DeltaAccountInfo(
+            account_id="MockDeltaAccount",
+            environment=self.mode,
+            connected=True,
+            balance=self.balance,
+            equity=self.equity,
+            margin=self.margin,
+            free_margin=self.free_margin,
+            active_leverage=self.default_leverage,
+            auto_leverage=self.auto_leverage,
+            max_leverage=self.max_leverage,
+            currency=self.currency,
+            open_position_count=len(positions),
+            symbols_leverage=dict(self.symbols_leverage),
+        )
+
+    def get_account_summary(self) -> Dict[str, Any]:
+        info = self.get_account_info()
+        return {
+            "broker": "Delta Exchange India",
+            "mode": info.environment,
+            "account_id": info.account_id,
+            "connected": True,
+            "balance": info.balance,
+            "equity": info.equity,
+            "margin": info.margin,
+            "free_margin": info.free_margin,
+            "leverage": info.active_leverage,
+            "auto_leverage": info.auto_leverage,
+            "max_leverage": info.max_leverage,
+            "open_positions": info.open_position_count,
+        }
+

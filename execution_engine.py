@@ -173,21 +173,34 @@ class ExecutionEngine:
             try:
                 from execution import create_broker
                 import config
+                broker_mode = getattr(config, "BROKER_MODE", "mt5_live")
                 self.broker = create_broker(
-                    broker_mode="mt5_live",
-                    mt5_mode="live",
+                    broker_mode=broker_mode,
+                    mt5_mode=getattr(config, "MT5_MODE", "live"),
                     mt5_login=getattr(config, "MT5_LOGIN", 0),
                     mt5_password=getattr(config, "MT5_PASSWORD", ""),
                     mt5_server=getattr(config, "MT5_SERVER", "MetaQuotes-Demo"),
                     mt5_path=getattr(config, "MT5_PATH", ""),
                     mt5_magic=getattr(config, "MT5_MAGIC", 112233),
                     mt5_gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+                    delta_api_key=getattr(config, "DELTA_EXCHANGE_API_KEY", "") or getattr(config, "EXCHANGE_API_KEY", ""),
+                    delta_api_secret=getattr(config, "DELTA_EXCHANGE_API_SECRET", "") or getattr(config, "EXCHANGE_API_SECRET", ""),
+                    delta_base_url=getattr(config, "DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange"),
+                    delta_testnet=getattr(config, "DELTA_EXCHANGE_TESTNET", False),
+                    delta_leverage=getattr(config, "DELTA_EXCHANGE_DEFAULT_LEVERAGE", 20.0),
+                    delta_auto_leverage=getattr(config, "DELTA_EXCHANGE_AUTO_LEVERAGE", True),
+                    delta_max_leverage=getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0),
                 )
             except Exception:
                 import os
                 if "PYTEST_CURRENT_TEST" in os.environ or getattr(config, "TESTING", False):
-                    from mt5_broker import MockMT5Broker
-                    self.broker = MockMT5Broker()
+                    b_m = str(getattr(config, "BROKER_MODE", "")).lower()
+                    if "delta" in b_m:
+                        from delta_broker import MockDeltaBroker
+                        self.broker = MockDeltaBroker()
+                    else:
+                        from mt5_broker import MockMT5Broker
+                        self.broker = MockMT5Broker()
                 else:
                     self.broker = None
         self.pending_setups: PositionDict = PositionDict()
@@ -517,13 +530,16 @@ class ExecutionEngine:
                     setup._just_executed = True
                     self.active_positions[setup.id] = setup
                     self.pending_setups.pop(setup.id, None)
+                    is_delta = "delta" in type(self.broker).__name__.lower()
+                    status_title = "DELTA LIVE TRADE CONFIRMED" if is_delta else "MT5 LIVE TRADE CONFIRMED"
+                    footer_text = "🟢 _Delta Exchange India Live Execution_" if is_delta else "🟢 _MT5 Live Execution_"
                     ev = {
                         "event": "TRADE_EXECUTED", "order": setup, "price": exec_price,
                         "message": ((
-                            f"✅ **MT5 LIVE TRADE CONFIRMED**\n"
+                            f"✅ **{status_title}**\n"
                             f"`{setup.symbol}` **{setup.direction}** @ `${exec_price:,.4f}`\n"
                             f"SL `${setup.stop_loss:,.2f}` | TP1 `${setup.tp1:,.2f}` | Lots `{setup.lots}`\n"
-                            f"🟢 _MT5 Live Execution_"
+                            f"{footer_text}"
                         )),
                     }
                     events.append(ev)
