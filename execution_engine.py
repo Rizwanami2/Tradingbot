@@ -779,7 +779,12 @@ class ExecutionEngine:
                     setup.lowest_price = exec_price
                     setup.remaining_size = setup.size
                     setup.remaining_lots = setup.lots
-                    setup.ticket = getattr(broker_order, "order_id", None) or getattr(broker_order, "ticket", None) or setup.id
+                    setup.ticket = (
+                        getattr(broker_order, "ticket", None)
+                        or getattr(broker_order, "order_id", None)
+                        or getattr(broker_order, "id", None)
+                        or setup.id
+                    )
                     setup._just_executed = True
                     self.active_positions[setup.id] = setup
                     self.pending_setups.pop(setup.id, None)
