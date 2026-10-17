@@ -89,6 +89,72 @@ class TestAgentsAndArbiter(unittest.TestCase):
         self.assertGreaterEqual(vote.strength, 0.0)
         self.assertLessEqual(vote.strength, 1.0)
 
+    def test_fake_breakout_agent(self):
+        from fake_breakout_strategy import FakeBreakoutAgent, FBDir
+        import pandas as pd
+        agent = FakeBreakoutAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "FAKE-BREAKOUT")
+        self.assertIn(vote.direction, (FBDir.LONG, FBDir.SHORT, FBDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, FBDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, FBDir.FLAT)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
+    def test_mtf_confluence_agent(self):
+        from mtf_fvg_ob import MTFConfluenceAgent, MTFDir
+        import pandas as pd
+        agent = MTFConfluenceAgent()
+        vote = agent.vote(self.df1, df15=self.data.get("15m"), df1h=self.data.get("1h"))
+        self.assertEqual(vote.agent, "MTF-CONFLUENCE")
+        self.assertIn(vote.direction, (MTFDir.BULLISH, MTFDir.BEARISH, MTFDir.NEUTRAL))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, MTFDir.NEUTRAL)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, MTFDir.NEUTRAL)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
+    def test_asian_breakout_agent(self):
+        from asian_range_breakout import AsianBreakoutAgent, AsianDir
+        import pandas as pd
+        agent = AsianBreakoutAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "ASIAN-BREAKOUT")
+        self.assertIn(vote.direction, (AsianDir.LONG, AsianDir.SHORT, AsianDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, AsianDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, AsianDir.FLAT)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
+        # Robustness: DataFrame with 'time' column instead of DatetimeIndex
+        df_copy = self.df1.copy().reset_index()
+        if "index" in df_copy.columns:
+            df_copy.rename(columns={"index": "time"}, inplace=True)
+        self.assertFalse(isinstance(df_copy.index, pd.DatetimeIndex))
+        v_col_idx = agent.vote(df_copy)
+        self.assertEqual(v_col_idx.agent, "ASIAN-BREAKOUT")
+        self.assertIn(v_col_idx.direction, (AsianDir.LONG, AsianDir.SHORT, AsianDir.FLAT))
+
     def test_evaluate_symbol(self):
         res = evaluate_symbol("XAUUSD", source="demo")
         self.assertEqual(res["symbol"], "XAUUSD")

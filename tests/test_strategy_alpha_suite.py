@@ -309,16 +309,24 @@ class TestKellyCriterionAndVaR(unittest.TestCase):
 class TestConsensusVisualizer(unittest.TestCase):
 
     def test_visualizer_matrix_rendering(self):
+        from consensus_visualizer import DEFAULT_WEIGHTS
+        self.assertEqual(DEFAULT_WEIGHTS.get("MTF-CONFLUENCE"), 1.40)
+        self.assertEqual(DEFAULT_WEIGHTS.get("ASIAN-BREAKOUT"), 1.25)
+
         votes = [
             {"agent": "TREND", "direction": "LONG", "strength": 1.0},
             {"agent": "LIQUIDITY", "direction": "LONG", "strength": 0.85},
             {"agent": "FAKE-BREAKOUT", "direction": "LONG", "strength": 0.90},
+            {"agent": "MTF-CONFLUENCE", "direction": "LONG", "strength": 0.80},
+            {"agent": "ASIAN-BREAKOUT", "direction": "LONG", "strength": 0.80},
             {"agent": "INDICATORS", "direction": "FLAT", "strength": 0.0},
         ]
         matrix = format_agent_consensus_matrix(votes)
         self.assertIn("MULTI-AGENT CONSENSUS MATRIX", matrix)
         self.assertIn("TREND", matrix)
         self.assertIn("FAKE-BREAKOUT", matrix)
+        self.assertIn("MTF-CONFLUENCE", matrix)
+        self.assertIn("ASIAN-BREAKOUT", matrix)
         self.assertIn("CONSENSUS BUY", matrix)
 
 

@@ -50,7 +50,15 @@ def compute_asian_range(df: pd.DataFrame, target_date: Optional[datetime.date] =
         return AsianRange(0.0, 0.0, 0.0, 0.0, 0.0, valid=False)
 
     if not isinstance(df.index, pd.DatetimeIndex):
-        return AsianRange(0.0, 0.0, 0.0, 0.0, 0.0, valid=False)
+        for col in ("time", "timestamp", "datetime", "date"):
+            if col in df.columns:
+                try:
+                    df = df.set_index(pd.to_datetime(df[col]))
+                    break
+                except Exception:
+                    pass
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return AsianRange(0.0, 0.0, 0.0, 0.0, 0.0, valid=False)
 
     tz_index = df.index.tz_convert(timezone.utc) if df.index.tz is not None else df.index.tz_localize(timezone.utc)
     if target_date is None:
@@ -81,8 +89,19 @@ def compute_asian_range(df: pd.DataFrame, target_date: Optional[datetime.date] =
 
 def detect_asian_london_setup(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     """Evaluates London Open (07:00 - 10:00 UTC) setups against the Asian Range."""
-    if df is None or len(df) < 20 or not isinstance(df.index, pd.DatetimeIndex):
+    if df is None or len(df) < 20:
         return None
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        for col in ("time", "timestamp", "datetime", "date"):
+            if col in df.columns:
+                try:
+                    df = df.set_index(pd.to_datetime(df[col]))
+                    break
+                except Exception:
+                    pass
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return None
 
     tz_index = df.index.tz_convert(timezone.utc) if df.index.tz is not None else df.index.tz_localize(timezone.utc)
     now_dt = tz_index[-1]

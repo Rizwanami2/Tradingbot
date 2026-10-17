@@ -115,8 +115,10 @@ def resolve_bridge_dir(custom_dir: Optional[str] = None, simulate: bool = False)
         return Path(custom_dir).resolve()
     if os.environ.get("EA_BRIDGE_DIR"):
         return Path(os.environ["EA_BRIDGE_DIR"]).resolve()
-    if sys.platform == "win32" or "APPDATA" in os.environ:
+    if sys.platform == "win32":
         return Path(os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")).resolve()
+    if "APPDATA" in os.environ:
+        return (Path(os.environ["APPDATA"]) / "MetaQuotes" / "Terminal" / "Common" / "Files").resolve()
     # Check Wine
     wine_common = Path.home() / ".wine" / "drive_c" / "users"
     if wine_common.exists():

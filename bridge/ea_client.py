@@ -7,13 +7,31 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+def _default_bridge_dir() -> Path:
+    if os.environ.get("EA_BRIDGE_DIR"):
+        return Path(os.environ["EA_BRIDGE_DIR"]).resolve()
+    try:
+        import config
+        cfg_dir = getattr(config, "EA_BRIDGE_DIR", "")
+        if cfg_dir:
+            return Path(cfg_dir).resolve()
+    except Exception:
+        pass
+    if os.name == "nt":
+        return Path(os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")).resolve()
+    if "APPDATA" in os.environ:
+        return (Path(os.environ["APPDATA"]) / "MetaQuotes" / "Terminal" / "Common" / "Files").resolve()
+    wine_common = Path.home() / ".wine" / "drive_c" / "users"
+    if wine_common.exists():
+        for u in wine_common.iterdir():
+            cand = u / "AppData" / "Roaming" / "MetaQuotes" / "Terminal" / "Common" / "Files"
+            if cand.exists():
+                return cand.resolve()
+    return (Path.home() / ".mt5_common_files").resolve()
+
+
 # MT5 reads/writes here with FILE_COMMON
-BRIDGE_DIR = Path(
-    os.environ.get(
-        "EA_BRIDGE_DIR",
-        os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files"),
-    )
-)
+BRIDGE_DIR = _default_bridge_dir()
 CMD_FILE = BRIDGE_DIR / "ea_commands.txt"
 RSP_FILE = BRIDGE_DIR / "ea_responses.txt"
 TIMEOUT = 20.0

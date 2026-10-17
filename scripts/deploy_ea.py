@@ -89,8 +89,12 @@ def discover_terminals(custom_target: Optional[str] = None) -> List[TerminalInst
     terminal_roots: List[Path] = []
 
     # 1. Standard Windows %APPDATA%\MetaQuotes\Terminal
-    if sys.platform == "win32" or "APPDATA" in os.environ:
+    if sys.platform == "win32":
         appdata_mq = Path(os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal"))
+        if appdata_mq.is_dir():
+            terminal_roots.append(appdata_mq)
+    elif "APPDATA" in os.environ:
+        appdata_mq = Path(os.environ["APPDATA"]) / "MetaQuotes" / "Terminal"
         if appdata_mq.is_dir():
             terminal_roots.append(appdata_mq)
 

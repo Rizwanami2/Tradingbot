@@ -44,6 +44,11 @@ class TestEABridgeDiagnosticTool(unittest.TestCase):
         p = resolve_bridge_dir(str(self.tmp_dir))
         self.assertEqual(p, self.tmp_dir.resolve())
 
+    def test_default_bridge_dir_posix_no_raw_percent_appdata(self):
+        from bridge.ea_client import _default_bridge_dir
+        path = _default_bridge_dir()
+        self.assertNotIn("%APPDATA%", str(path))
+
     def test_run_diagnostics_simulation(self):
         res = run_diagnostics(
             custom_dir=str(self.tmp_dir),
