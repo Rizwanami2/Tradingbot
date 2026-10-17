@@ -4252,8 +4252,70 @@ def run_cli_interactive():
                 print(f"Bootstrap complete: {summary}")
             except Exception as e:
                 print(f"Relearn error: {e}")
+        elif name in ("vstops", "vstop"):
+            try:
+                from virtual_stops import get_virtual_stop_manager
+                mgr = get_virtual_stop_manager()
+                if len(parts) > 1 and parts[1].lower() in ("clear", "reset", "flush"):
+                    cleared = len(mgr.records)
+                    mgr.records.clear()
+                    mgr._save()
+                    print(f"Cleared {cleared} virtual hidden stops.")
+                else:
+                    active = mgr.active_stops()
+                    if active:
+                        print(f"Active Virtual Stops ({len(active)}):")
+                        for s in active:
+                            tp_str = f" | TP1: ${s.virtual_tp1:,.2f}" if s.virtual_tp1 else ""
+                            print(f"• #{s.ticket} {s.symbol} {s.direction} @ ${s.entry_price:,.2f} | SL: ${s.virtual_stop:,.2f}{tp_str}")
+                    else:
+                        print("No active virtual stops registered.")
+            except Exception as e:
+                print(f"Virtual stops error: {e}")
+        elif name in ("slippage", "analytics"):
+            try:
+                from execution_analytics import get_execution_tracker
+                tracker = get_execution_tracker()
+                rep = tracker.generate_report()
+                print(f"Execution Analytics Grade: {rep.execution_rating} | Fills: {rep.total_executions} | Avg Latency: {rep.avg_latency_ms:.1f}ms | Slippage: {rep.avg_slippage_pts:+.2f} pts")
+            except Exception as e:
+                print(f"Slippage analytics error: {e}")
+        elif name in ("kelly", "var"):
+            try:
+                from kelly_criterion import calculate_kelly_lot_size
+                sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+                eq = float(getattr(risk_mgr.state, "equity", None) or getattr(config, "INITIAL_EQUITY", 10000.0))
+                pinfo = get_price_info(sym)
+                price = float(pinfo.get("mark") or pinfo.get("close") or (2650.0 if "XAU" in sym else 65000.0))
+                sl = price * 0.99
+                k_res = calculate_kelly_lot_size(equity=eq, entry_price=price, stop_loss_price=sl, win_rate=0.55, payoff_ratio=1.8)
+                print(f"Fractional Kelly Sizing ({sym}): Rec Lots: {k_res.recommended_lots} | Dollar Risk: ${k_res.dollar_risk:,.2f} ({k_res.risk_pct_of_equity:.2f}%)")
+            except Exception as e:
+                print(f"Kelly sizing error: {e}")
+        elif name in ("regime", "switchregime"):
+            try:
+                from regime_auto_switcher import RegimeAutoSwitcher
+                sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
+                feed = MarketDataFeed(symbol=sym, source=getattr(config, "DEFAULT_DATA_SOURCE", "demo"))
+                data = feed.multi_tf(limit_1m=100)
+                df = data.get("1m") if data else None
+                if df is not None and not df.empty:
+                    switcher = RegimeAutoSwitcher(cooldown_seconds=0.0)
+                    res = switcher.evaluate_and_switch(df, symbol=sym, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+                    print(f"Regime Detection ({sym}): {res.regime_detected} (Profile: {res.current_profile}) | Reason: {res.reason}")
+                else:
+                    print(f"No market data for {sym}")
+            except Exception as e:
+                print(f"Regime error: {e}")
+        elif name in ("session", "sessions"):
+            try:
+                from session_reporter import compile_session_summary
+                summary = compile_session_summary(open_positions=list(engine.active_positions.values()))
+                print(f"Current Session: {summary.session_name} | Net PnL: ${summary.net_pnl_usd:+,.2f} | Open: {summary.open_positions_count}")
+            except Exception as e:
+                print(f"Session error: {e}")
         else:
-            print("Commands: signal, price, levels, news, quality, positions, autotrade, close, cancel, mt5, broker, status, health, risk, leverage, kill, backtest, performance, profile, ask, reset, exit")
+            print("Commands: signal, price, levels, news, quality, positions, autotrade, close, cancel, mt5, broker, status, health, risk, leverage, kill, backtest, performance, profile, vstops, slippage, kelly, regime, session, ask, reset, exit")
 
 
 def main():

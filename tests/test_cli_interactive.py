@@ -215,6 +215,19 @@ class TestCliInteractive(unittest.TestCase):
             self.assertIn("Configured backend:", out)
             self.assertIn("MT5 backend set to: ea_bridge", out)
 
+    def test_cli_alpha_suite_commands(self):
+        input_data = io.StringIO("vstops\nslippage\nkelly XAUUSD\nregime XAUUSD\nsession\nexit\n")
+        output_data = io.StringIO()
+        with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+            run_cli_interactive()
+        out = output_data.getvalue()
+        self.assertIn("virtual", out.lower())
+        self.assertIn("execution", out.lower())
+        self.assertIn("fractional kelly sizing", out.lower())
+        self.assertIn("regime detection", out.lower())
+        self.assertIn("current session", out.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
+
