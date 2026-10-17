@@ -346,6 +346,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
+            "• `/cooldown [reset]` — Anti-spam limits, cooldown timers & loss streaks\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
@@ -520,6 +521,12 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Risk Mode:** {mode_icon} `{s.mode.upper()}` | **Today PnL:** `${s.daily_pnl:+,.2f}`\n"
         f"• **Broker:** `{bname}` (Mode: `{bmode}`){b_extra}\n"
     )
+    try:
+        from anti_spam import get_anti_spam_limiter
+        _lim = get_anti_spam_limiter()
+        msg += f"• **Anti-Spam:** Entry `{_lim.entry_cooldown_sec}s` | Loss `{_lim.loss_cooldown_sec}s` | Max/Sym `{_lim.max_positions_per_symbol}` (/cooldown)\n"
+    except Exception:
+        pass
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
@@ -533,6 +540,25 @@ async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Consecutive Errors:** `{monitoring_health.get('consecutive_errors', 0)}`\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View or reset anti-spam rate limiting and cooldown status."""
+    try:
+        from anti_spam import get_anti_spam_limiter
+        limiter = get_anti_spam_limiter()
+        args = ctx.args or []
+        if args and args[0].lower() in ("reset", "clear"):
+            sym = args[1].upper() if len(args) > 1 else None
+            limiter.reset(sym)
+            target = f"for `{sym}`" if sym else "globally"
+            await update.message.reply_text(f"✅ Anti-spam cooldowns and loss streaks have been reset {target}.", parse_mode="Markdown")
+            return
+
+        report = limiter.get_status_report()
+        await update.message.reply_text(report, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Cooldown command error: {e}")
 
 
 def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_equity: Optional[float] = None) -> str:
@@ -619,6 +645,12 @@ def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_e
         ra.equity = float(risk_mgr.state.equity)
         ra.equity_peak = float(risk_mgr.state.equity)
         ra._save()
+    except Exception:
+        pass
+
+    try:
+        from anti_spam import get_anti_spam_limiter
+        get_anti_spam_limiter().reset()
     except Exception:
         pass
 
@@ -2714,9 +2746,23 @@ async def live_monitoring_worker(app):
                 if not autotrade_active and symbol in engine.pending_setups:
                     engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
+                from anti_spam import get_anti_spam_limiter
+                limiter = get_anti_spam_limiter()
+
                 events = engine.update_market_candle(symbol, candle_dict)
                 for ev in events:
                     logger.info(f"Execution Event: {ev['event']} - {ev.get('message')}")
+                    etype = ev.get("event")
+                    if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
+                        fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
+                        if fpnl < 0:
+                            limiter.record_loss(symbol, abs(fpnl))
+                        else:
+                            limiter.record_win(symbol)
+                    elif etype == "TRADE_EXECUTED":
+                        pos = ev.get("order")
+                        eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
+                        limiter.record_entry(symbol, eprice)
                     if config.TELEGRAM_CHAT_ID:
                         try:
                             await app.bot.send_message(
@@ -2728,7 +2774,28 @@ async def live_monitoring_worker(app):
                 is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                 max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2)) or 2
                 open_n = len(engine.active_positions) + len(engine.pending_setups)
-                can_open = (autotrade_active and open_n < max_trades) if is_scalping else (autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups and open_n < max_trades)
+                if not autotrade_active:
+                    can_open = False
+                elif is_scalping:
+                    can_open, spam_reason = limiter.check_can_enter(
+                        symbol=symbol,
+                        current_price=candle_dict["close"],
+                        engine=engine,
+                        max_open=max_trades,
+                    )
+                else:
+                    can_open = (
+                        open_n < max_trades
+                        and symbol not in engine.active_positions
+                        and symbol not in engine.pending_setups
+                    )
+                    if can_open:
+                        can_open, spam_reason = limiter.check_can_enter(
+                            symbol=symbol,
+                            current_price=candle_dict["close"],
+                            engine=engine,
+                            max_open=max_trades,
+                        )
                 if can_open:
                     sig, why, votes = arbiter.decide(
                         df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr, symbol=symbol, on_demand=True
@@ -2737,6 +2804,7 @@ async def live_monitoring_worker(app):
                         logger.info("Autotrade: no setup — %s", why)
                     if sig:
                         order = engine.register_setup(sig, reason=sig.get("reason", ""))
+                        limiter.record_entry(symbol, order.entry_level)
                         lot_mode_tag = " (Manual)" if getattr(order, "lot_mode", "auto") == "manual" else " (Auto)"
                         alert = (
                             f"⚡ **NEW MULTI-AGENT SETUP**\n"
@@ -2754,6 +2822,17 @@ async def live_monitoring_worker(app):
                                 pass
                         trig_events = engine.update_market_candle(symbol, candle_dict)
                         for ev in trig_events:
+                            etype = ev.get("event")
+                            if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
+                                fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
+                                if fpnl < 0:
+                                    limiter.record_loss(symbol, abs(fpnl))
+                                else:
+                                    limiter.record_win(symbol)
+                            elif etype == "TRADE_EXECUTED":
+                                pos = ev.get("order")
+                                eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
+                                limiter.record_entry(symbol, eprice)
                             if config.TELEGRAM_CHAT_ID:
                                 try:
                                     await app.bot.send_message(
@@ -3671,6 +3750,7 @@ def main():
                 BotCommand("closed", "Recently closed trades history & PnL"),
                 BotCommand("status", "Portfolio equity & margin capacity"),
                 BotCommand("health", "System health & background worker telemetry"),
+                BotCommand("cooldown", "Anti-spam rate limiting & cooldown status"),
                 BotCommand("risk", "Risk tier report, sizing & reset"),
                 BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
                 BotCommand("leverage", "Set or view leverage (1-200x, manual/auto)"),
@@ -3754,6 +3834,7 @@ def main():
     # Risk & Safety
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("health", health_command))
+    app.add_handler(CommandHandler(["cooldown", "cooldowns", "antispam", "spam"], cooldown_command))
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler(["resetrisk", "riskreset"], resetrisk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))

@@ -39,6 +39,18 @@ class StrategyProfile:
     poll_interval: int = 2          # Fast 2s polling in autotrade
     fast_poll_interval: int = 1     # 1s poll when monitoring positions
     max_open_trades: int = 2        # Up to 2 slots
+    # Scalp Trailing Stop Loss & Anti-Spam Controls
+    scalp_trail_enabled: bool = True
+    scalp_trail_activation_usd: float = 1.00
+    scalp_trail_distance_usd: float = 0.80
+    scalp_trail_activation_pct: float = 0.04
+    scalp_trail_distance_pct: float = 0.03
+    scalp_be_lock_usd: float = 0.50
+    scalp_entry_cooldown_sec: float = 45.0
+    scalp_loss_cooldown_sec: float = 90.0
+    scalp_global_cooldown_sec: float = 10.0
+    scalp_max_positions_per_symbol: int = 2
+    scalp_min_price_distance_pct: float = 0.08
 
 
 DEFAULT_PROFILES = {
@@ -75,6 +87,17 @@ DEFAULT_PROFILES = {
         poll_interval=2,
         fast_poll_interval=1,
         max_open_trades=2,
+        scalp_trail_enabled=True,
+        scalp_trail_activation_usd=1.00,
+        scalp_trail_distance_usd=0.80,
+        scalp_trail_activation_pct=0.04,
+        scalp_trail_distance_pct=0.03,
+        scalp_be_lock_usd=0.50,
+        scalp_entry_cooldown_sec=45.0,
+        scalp_loss_cooldown_sec=90.0,
+        scalp_global_cooldown_sec=10.0,
+        scalp_max_positions_per_symbol=2,
+        scalp_min_price_distance_pct=0.08,
     ),
     "swing": StrategyProfile(
         name="swing",
@@ -195,6 +218,12 @@ def apply_profile(
             engine.scalp_sl_usd = getattr(p, "scalp_sl_usd", 3.00)
             engine.scalp_tp_pct = getattr(p, "scalp_tp_pct", 0.10)
             engine.scalp_sl_pct = getattr(p, "scalp_sl_pct", 0.12)
+            engine.scalp_trail_enabled = getattr(p, "scalp_trail_enabled", True)
+            engine.scalp_trail_activation_usd = getattr(p, "scalp_trail_activation_usd", 1.00)
+            engine.scalp_trail_distance_usd = getattr(p, "scalp_trail_distance_usd", 0.80)
+            engine.scalp_trail_activation_pct = getattr(p, "scalp_trail_activation_pct", 0.04)
+            engine.scalp_trail_distance_pct = getattr(p, "scalp_trail_distance_pct", 0.03)
+            engine.scalp_be_lock_usd = getattr(p, "scalp_be_lock_usd", 0.50)
 
     if config is not None:
         config.CURRENT_PROFILE = p.name
@@ -205,6 +234,28 @@ def apply_profile(
             config.SCALP_TAKE_PROFIT_PCT = getattr(p, "scalp_tp_pct", 0.10)
             config.SCALP_STOP_LOSS_USD = getattr(p, "scalp_sl_usd", 3.00)
             config.SCALP_STOP_LOSS_PCT = getattr(p, "scalp_sl_pct", 0.12)
+            config.SCALP_TRAIL_ENABLED = getattr(p, "scalp_trail_enabled", True)
+            config.SCALP_TRAIL_ACTIVATION_USD = getattr(p, "scalp_trail_activation_usd", 1.00)
+            config.SCALP_TRAIL_DISTANCE_USD = getattr(p, "scalp_trail_distance_usd", 0.80)
+            config.SCALP_TRAIL_ACTIVATION_PCT = getattr(p, "scalp_trail_activation_pct", 0.04)
+            config.SCALP_TRAIL_DISTANCE_PCT = getattr(p, "scalp_trail_distance_pct", 0.03)
+            config.SCALP_BE_LOCK_USD = getattr(p, "scalp_be_lock_usd", 0.50)
+            config.SCALP_ENTRY_COOLDOWN_SEC = getattr(p, "scalp_entry_cooldown_sec", 45.0)
+            config.SCALP_LOSS_COOLDOWN_SEC = getattr(p, "scalp_loss_cooldown_sec", 90.0)
+            config.SCALP_GLOBAL_COOLDOWN_SEC = getattr(p, "scalp_global_cooldown_sec", 10.0)
+            config.SCALP_MAX_POSITIONS_PER_SYMBOL = getattr(p, "scalp_max_positions_per_symbol", 2)
+            config.SCALP_MIN_PRICE_DISTANCE_PCT = getattr(p, "scalp_min_price_distance_pct", 0.08)
+
+    try:
+        from anti_spam import get_anti_spam_limiter
+        limiter = get_anti_spam_limiter()
+        limiter.entry_cooldown_sec = int(getattr(p, "scalp_entry_cooldown_sec", 45))
+        limiter.loss_cooldown_sec = int(getattr(p, "scalp_loss_cooldown_sec", 90))
+        limiter.global_cooldown_sec = int(getattr(p, "scalp_global_cooldown_sec", 10))
+        limiter.max_positions_per_symbol = int(getattr(p, "scalp_max_positions_per_symbol", 2))
+        limiter.min_price_distance_pct = float(getattr(p, "scalp_min_price_distance_pct", 0.08))
+    except Exception:
+        pass
 
     summary = (
         f"⚡ **STRATEGY PROFILE ACTIVATED: {p.name.upper()}**\n"
@@ -217,6 +268,8 @@ def apply_profile(
             f"• ⚡ **Rapid Micro-Scalping Mode**: ACTIVE\n"
             f"  - Micro TP: `{p.scalp_tp_pct:.2f}%` move or `${p.scalp_tp_usd:.2f}` USD profit\n"
             f"  - Micro SL: `{p.scalp_sl_pct:.2f}%` move or `${p.scalp_sl_usd:.2f}` USD loss\n"
+            f"  - 🛡️ Dynamic Trailing SL: ACTIVE (Trigger `${getattr(p, 'scalp_trail_activation_usd', 1.0):.2f}` / Trail `${getattr(p, 'scalp_trail_distance_usd', 0.8):.2f}`)\n"
+            f"  - ⏳ Anti-Spam Cooldown: `{getattr(p, 'scalp_entry_cooldown_sec', 45.0):.0f}s` entry | `{getattr(p, 'scalp_loss_cooldown_sec', 90.0):.0f}s` loss cooldown\n"
             f"  - Polling: `{p.poll_interval}s` fast frequency | Market Fills: `Instant`\n"
             f"  - Max Open Slots: `{p.max_open_trades}` concurrent trades (Multi-position Gold & BTC)"
         )

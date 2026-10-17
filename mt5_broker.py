@@ -224,6 +224,15 @@ class MT5Broker(Broker):
         # Auto-connect
         self.connect()
 
+    def _get_sim_positions_list(self) -> List[Position]:
+        seen = set()
+        out = []
+        for p in self._sim_positions.values():
+            if id(p) not in seen:
+                seen.add(id(p))
+                out.append(p)
+        return out
+
     @property
     def is_connected(self) -> bool:
         return self._connected
@@ -241,7 +250,7 @@ class MT5Broker(Broker):
             elif self.gateway_url and self._connected and self._cached_equity is not None:
                 return self._cached_equity
         # Paper calculation: balance + sum of unrealized PnL
-        unrealized = sum(p.unrealized_pnl for p in self._sim_positions.values())
+        unrealized = sum(p.unrealized_pnl for p in self._get_sim_positions_list())
         return round(self.balance + unrealized, 2)
 
     @property
@@ -257,7 +266,7 @@ class MT5Broker(Broker):
             elif self.gateway_url and self._connected and self._cached_margin is not None:
                 return self._cached_margin
         # Rough margin estimation
-        total_margin = sum((p.entry_price * p.qty) / self.leverage for p in self._sim_positions.values())
+        total_margin = sum((p.entry_price * p.qty) / self.leverage for p in self._get_sim_positions_list())
         return round(total_margin, 2)
 
     @property
@@ -591,7 +600,7 @@ class MT5Broker(Broker):
                     filled_price=fill_price,
                     filled_qty=qty,
                 )
-                self._sim_positions[resolved_sym] = Position(
+                pos = Position(
                     symbol=resolved_sym,
                     side=side_norm,
                     qty=qty,
@@ -600,7 +609,12 @@ class MT5Broker(Broker):
                     take_profit=take_profit,
                     unrealized_pnl=0.0,
                     current_price=fill_price,
+                    ticket=ticket,
+                    id=ticket_id,
                 )
+                self._sim_positions[ticket_id] = pos
+                self._sim_positions[str(ticket)] = pos
+                self._sim_positions[resolved_sym] = pos
                 logger.info("[MT5Broker] Cloud MT5 Live order filled: #%s %s %s %.2f @ %.2f (SL=%.2f, TP=%.2f)",
                             ticket, resolved_sym, side_norm.upper(), qty, fill_price, stop_loss or 0, take_profit or 0)
                 return order
@@ -672,9 +686,9 @@ class MT5Broker(Broker):
                     logger.error("[MT5Broker] Gateway get_positions error: %s", e)
                     raise ExecutionError(f"MT5 Gateway get_positions error: {e}") from e
             else:
-                return list(self._sim_positions.values())
+                return self._get_sim_positions_list()
 
-        return list(self._sim_positions.values()) if hasattr(self, "_sim_positions") else []
+        return self._get_sim_positions_list() if hasattr(self, "_sim_positions") else []
 
     def close_position(
         self,
@@ -682,8 +696,9 @@ class MT5Broker(Broker):
         qty: Optional[float] = None,
         price: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
+        ticket: Optional[Any] = None,
     ) -> bool:
-        """Close an open position on MT5 (full or partial)."""
+        """Close an open position on MT5 (full or partial), optionally targeting a specific ticket."""
         if not self._connected:
             raise OrderStateUnknownError(
                 "Cannot close position: MT5 Live terminal is not connected. "
@@ -694,13 +709,28 @@ class MT5Broker(Broker):
 
         if self.mode == "live" and self._connected:
             if native_mt5 is not None:
-                positions = native_mt5.positions_get(symbol=resolved_sym)
+                positions = None
+                if ticket is not None:
+                    try:
+                        positions = native_mt5.positions_get(ticket=int(ticket))
+                    except (ValueError, TypeError):
+                        positions = None
+                if not positions:
+                    positions = native_mt5.positions_get(symbol=resolved_sym)
                 if positions is None:
                     raise OrderStateUnknownError(f"Failed to query MT5 positions for {symbol}: terminal query returned None")
                 if len(positions) == 0:
                     logger.info("[MT5Broker] Native MT5: no open position found for %s to close", symbol)
                     return True
-                pos = positions[0]
+                pos = None
+                if ticket is not None:
+                    t_str = str(ticket)
+                    for p in positions:
+                        if str(getattr(p, "ticket", "")) == t_str:
+                            pos = p
+                            break
+                if pos is None:
+                    pos = positions[0]
                 close_side = native_mt5.ORDER_TYPE_SELL if pos.type == native_mt5.ORDER_TYPE_BUY else native_mt5.ORDER_TYPE_BUY
                 close_qty = float(qty) if qty and qty > 0 else float(pos.volume)
                 
@@ -760,42 +790,77 @@ class MT5Broker(Broker):
                     "qty": float(qty) if qty and qty > 0 else None,
                     "price": float(price) if price and price > 0 else None,
                     "magic": self.magic,
+                    "ticket": ticket,
                 }
                 if params:
                     req.update(params)
                 res = _gateway_request("POST", url, req)
                 return bool(res.get("closed", res.get("ok", False)))
             else:
-                for key in (resolved_sym, symbol.upper()):
-                    if key in self._sim_positions:
-                        pos = self._sim_positions[key]
-                        close_qty = float(qty) if qty and 0 < qty <= pos.qty else pos.qty
-                        close_price = float(price) if price and price > 0 else (pos.current_price or pos.entry_price)
-                        pnl = (close_price - pos.entry_price) * close_qty if pos.side == "buy" else (pos.entry_price - close_price) * close_qty
-                        self.balance += pnl
-                        if close_qty >= pos.qty - 1e-6:
-                            self._sim_positions.pop(key, None)
-                        else:
-                            pos.qty -= close_qty
-                        logger.info(
-                            "[MT5Broker] Cloud MT5 Live position closed: %s qty=%.2f @ %.2f (PnL=%.2f)",
-                            key, close_qty, close_price, pnl
-                        )
-                        return True
+                target_key = None
+                if ticket is not None:
+                    t_str = str(ticket)
+                    for k, p in list(self._sim_positions.items()):
+                        if str(getattr(p, "ticket", "")) == t_str or str(getattr(p, "id", "")) == t_str or k == t_str:
+                            target_key = k
+                            break
+                if not target_key:
+                    for key in (resolved_sym, symbol.upper()):
+                        if key in self._sim_positions:
+                            target_key = key
+                            break
+                if target_key:
+                    pos = self._sim_positions[target_key]
+                    close_qty = float(qty) if qty and 0 < qty <= pos.qty else pos.qty
+                    close_price = float(price) if price and price > 0 else (pos.current_price or pos.entry_price)
+                    pnl = (close_price - pos.entry_price) * close_qty if pos.side == "buy" else (pos.entry_price - close_price) * close_qty
+                    self.balance += pnl
+                    if close_qty >= pos.qty - 1e-6:
+                        for k, p in list(self._sim_positions.items()):
+                            if p is pos or k == target_key:
+                                self._sim_positions.pop(k, None)
+                    else:
+                        pos.qty -= close_qty
+                    logger.info(
+                        "[MT5Broker] Cloud MT5 Live position closed: %s qty=%.2f @ %.2f (PnL=%.2f)",
+                        target_key, close_qty, close_price, pnl
+                    )
+                    return True
                 logger.info("[MT5Broker] Cloud MT5 Live: no open position found for %s to close", symbol)
                 return True
 
         return False
 
-    def modify_position(self, symbol: str, stop_loss: Optional[float] = None, take_profit: Optional[float] = None) -> bool:
-        """Modify SL and TP of an open MT5 position (e.g. for dynamic trailing stop)."""
+    def modify_position(
+        self,
+        symbol: str,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        ticket: Optional[Any] = None,
+    ) -> bool:
+        """Modify SL and TP of an open MT5 position (e.g. for dynamic trailing stop), optionally targeting a ticket."""
         resolved_sym = resolve_mt5_symbol(symbol)
         if self.mode == "live" and self._connected:
             if native_mt5 is not None:
-                positions = native_mt5.positions_get(symbol=resolved_sym)
+                positions = None
+                if ticket is not None:
+                    try:
+                        positions = native_mt5.positions_get(ticket=int(ticket))
+                    except (ValueError, TypeError):
+                        positions = None
+                if not positions:
+                    positions = native_mt5.positions_get(symbol=resolved_sym)
                 if not positions:
                     return False
-                pos = positions[0]
+                pos = None
+                if ticket is not None:
+                    t_str = str(ticket)
+                    for p in positions:
+                        if str(getattr(p, "ticket", "")) == t_str:
+                            pos = p
+                            break
+                if pos is None:
+                    pos = positions[0]
                 req = {
                     "action": native_mt5.TRADE_ACTION_SLTP,
                     "position": pos.ticket,
@@ -812,29 +877,50 @@ class MT5Broker(Broker):
                     "stop_loss": float(stop_loss) if stop_loss else None,
                     "take_profit": float(take_profit) if take_profit else None,
                     "magic": self.magic,
+                    "ticket": ticket,
                 }
                 res = _gateway_request("POST", url, req)
                 return bool(res.get("modified", res.get("ok", False)))
             else:
-                for key in (resolved_sym, symbol.upper()):
-                    if key in self._sim_positions:
-                        pos = self._sim_positions[key]
-                        if stop_loss is not None:
-                            pos.stop_loss = stop_loss
-                        if take_profit is not None:
-                            pos.take_profit = take_profit
-                        return True
+                target = None
+                if ticket is not None:
+                    t_str = str(ticket)
+                    for k, p in self._sim_positions.items():
+                        if str(getattr(p, "ticket", "")) == t_str or str(getattr(p, "id", "")) == t_str or k == t_str:
+                            target = p
+                            break
+                if target is None:
+                    for key in (resolved_sym, symbol.upper()):
+                        if key in self._sim_positions:
+                            target = self._sim_positions[key]
+                            break
+                if target is not None:
+                    if stop_loss is not None:
+                        target.stop_loss = float(stop_loss)
+                    if take_profit is not None:
+                        target.take_profit = float(take_profit)
+                    return True
                 return False
 
         # Paper update
-        for key in (resolved_sym, symbol.upper()):
-            if key in self._sim_positions:
-                pos = self._sim_positions[key]
-                if stop_loss is not None:
-                    pos.stop_loss = stop_loss
-                if take_profit is not None:
-                    pos.take_profit = take_profit
-                return True
+        target = None
+        if ticket is not None:
+            t_str = str(ticket)
+            for k, p in self._sim_positions.items():
+                if str(getattr(p, "ticket", "")) == t_str or str(getattr(p, "id", "")) == t_str or k == t_str:
+                    target = p
+                    break
+        if target is None:
+            for key in (resolved_sym, symbol.upper()):
+                if key in self._sim_positions:
+                    target = self._sim_positions[key]
+                    break
+        if target is not None:
+            if stop_loss is not None:
+                target.stop_loss = float(stop_loss)
+            if take_profit is not None:
+                target.take_profit = float(take_profit)
+            return True
         return False
 
     def update_mark_price(self, symbol: str, price: float) -> None:
@@ -1129,7 +1215,13 @@ class MockMT5Broker(Broker):
     def get_positions(self) -> List[Position]:
         if not self._connected:
             raise OrderStateUnknownError("Cannot query positions: MT5 Live terminal is not connected.")
-        return list(self._positions.values())
+        seen = set()
+        out = []
+        for p in self._positions.values():
+            if id(p) not in seen:
+                seen.add(id(p))
+                out.append(p)
+        return out
 
     def place_order(
         self,
@@ -1161,7 +1253,7 @@ class MockMT5Broker(Broker):
             filled_price=fill_price,
             filled_qty=qty,
         )
-        self._positions[resolved_sym] = Position(
+        pos = Position(
             symbol=resolved_sym,
             side=side.lower(),
             qty=qty,
@@ -1169,7 +1261,12 @@ class MockMT5Broker(Broker):
             stop_loss=stop_loss,
             take_profit=take_profit,
             current_price=fill_price,
+            ticket=ticket,
+            id=ticket_id,
         )
+        self._positions[ticket_id] = pos
+        self._positions[str(ticket)] = pos
+        self._positions[resolved_sym] = pos
         return order
 
     def close_position(
@@ -1178,16 +1275,31 @@ class MockMT5Broker(Broker):
         qty: Optional[float] = None,
         price: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
+        ticket: Optional[Any] = None,
     ) -> bool:
         if not self._connected:
             raise OrderStateUnknownError("Cannot close position: MT5 Live terminal is not connected.")
-        resolved_sym = resolve_mt5_symbol(symbol)
-        for key in (resolved_sym, symbol.upper()):
+        target_keys = []
+        if ticket is not None:
+            t_str = str(ticket)
+            for k, p in list(self._positions.items()):
+                if str(getattr(p, "ticket", "")) == t_str or str(getattr(p, "id", "")) == t_str or k == t_str:
+                    target_keys.append(k)
+                    break
+        if not target_keys:
+            resolved_sym = resolve_mt5_symbol(symbol)
+            for key in (resolved_sym, symbol.upper()):
+                if key in self._positions:
+                    target_keys.append(key)
+                    break
+        for key in target_keys:
             if key in self._positions:
                 pos = self._positions[key]
                 close_qty = float(qty) if qty and 0 < qty <= pos.qty else pos.qty
                 if close_qty >= pos.qty - 1e-6:
-                    self._positions.pop(key, None)
+                    for k, p in list(self._positions.items()):
+                        if p is pos or k == key:
+                            self._positions.pop(k, None)
                 else:
                     pos.qty -= close_qty
         return True
@@ -1197,16 +1309,27 @@ class MockMT5Broker(Broker):
         symbol: str,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        ticket: Optional[Any] = None,
     ) -> bool:
-        resolved_sym = resolve_mt5_symbol(symbol)
-        for key in (resolved_sym, symbol.upper()):
-            if key in self._positions:
-                pos = self._positions[key]
-                if stop_loss is not None:
-                    pos.stop_loss = float(stop_loss)
-                if take_profit is not None:
-                    pos.take_profit = float(take_profit)
-                return True
+        target = None
+        if ticket is not None:
+            t_str = str(ticket)
+            for k, p in self._positions.items():
+                if str(getattr(p, "ticket", "")) == t_str or str(getattr(p, "id", "")) == t_str or k == t_str:
+                    target = p
+                    break
+        if target is None:
+            resolved_sym = resolve_mt5_symbol(symbol)
+            for key in (resolved_sym, symbol.upper()):
+                if key in self._positions:
+                    target = self._positions[key]
+                    break
+        if target is not None:
+            if stop_loss is not None:
+                target.stop_loss = float(stop_loss)
+            if take_profit is not None:
+                target.take_profit = float(take_profit)
+            return True
         return False
 
     def get_account_info(self) -> MT5AccountInfo:

@@ -529,6 +529,163 @@ class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RAPID SCALP AUTOTRADE ACTIVATED", text)
         self.assertIn("SCALP", text)
 
+    async def test_telegram_cooldown_command(self):
+        from main import cooldown_command
+        self.ctx.args = []
+        await cooldown_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Anti-Spam & Cooldown Telemetry", text)
+
+        # Test reset
+        self.message.reply_text.reset_mock()
+        self.ctx.args = ["reset"]
+        await cooldown_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        reset_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("reset globally", reset_text)
+
+
+class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
+    def setUp(self):
+        self.risk_mgr = RiskManager(equity=1000.0, symbol="XAUUSD")
+        self.engine = ExecutionEngine(risk_manager=self.risk_mgr)
+        self.engine.scalp_mode = True
+        self.engine.scalp_trail_enabled = True
+        self.engine.scalp_trail_activation_usd = 1.00
+        self.engine.scalp_trail_distance_usd = 0.80
+        self.engine.scalp_tp_usd = 10.0  # High ceiling so trailing exit triggers first
+        self.engine.scalp_tp_pct = 5.0
+        self.engine.max_open_trades = 5
+
+    def test_multi_position_scalp_trailing_sl_independent_tracking(self):
+        # Open 2 separate positions on Gold
+        p1 = TradeOrder(
+            id="gold-pos-1", symbol="XAUUSD", direction="LONG", entry_level=2650.0,
+            stop_loss=2645.0, tp1=2665.0, tp2=2675.0, tp3=None, lots=0.01, size=1.0,
+            leverage=20.0, margin_required=26.5, liquidation_price=2600.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="Gold Scalp #1", status=OrderStatus.OPEN, executed_price=2650.0,
+            remaining_size=1.0, is_scalp=True, ticket=101,
+        )
+        p2 = TradeOrder(
+            id="gold-pos-2", symbol="XAUUSD", direction="LONG", entry_level=2652.0,
+            stop_loss=2645.0, tp1=2665.0, tp2=2675.0, tp3=None, lots=0.01, size=1.0,
+            leverage=20.0, margin_required=26.5, liquidation_price=2600.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="Gold Scalp #2", status=OrderStatus.OPEN, executed_price=2652.0,
+            remaining_size=1.0, is_scalp=True, ticket=102,
+        )
+        self.engine.active_positions[p1.id] = p1
+        self.engine.active_positions[p2.id] = p2
+
+        # Candle 1 moves to 2653.5 -> Both positions gain profit:
+        # P1: +$3.50 (>= $1.00 activation) -> Trails to 2653.5 - 0.80 = 2652.70
+        # P2: +$1.50 (>= $1.00 activation) -> Trails to 2653.5 - 0.80 = 2652.70
+        candle1 = {"open": 2652.0, "high": 2653.5, "low": 2652.0, "close": 2653.5}
+        evs1 = self.engine.update_market_candle("XAUUSD", candle1)
+        self.assertTrue(p1.trailing_sl_active)
+        self.assertTrue(p2.trailing_sl_active)
+        self.assertAlmostEqual(p1.stop_loss, 2652.70, delta=0.05)
+        self.assertAlmostEqual(p2.stop_loss, 2652.70, delta=0.05)
+
+        # Candle 2 pulls back to 2652.5:
+        # 2652.5 <= 2652.70 -> Trailing SL HIT for both!
+        candle2 = {"open": 2653.0, "high": 2653.0, "low": 2652.5, "close": 2652.6}
+        evs2 = self.engine.update_market_candle("XAUUSD", candle2)
+        trail_hits = [e for e in evs2 if e["event"] == "SCALP_TRAIL_HIT"]
+        self.assertEqual(len(trail_hits), 2)
+        self.assertNotIn(p1.id, self.engine.active_positions)
+        self.assertNotIn(p2.id, self.engine.active_positions)
+        # Position 1 secured +$2.70 profit, Position 2 secured +$0.70 profit!
+        self.assertGreater(p1.realized_pnl, 2.50)
+        self.assertGreater(p2.realized_pnl, 0.50)
+
+    def test_anti_spam_rate_limiter_suite(self):
+        from anti_spam import AntiSpamRateLimiter
+        limiter = AntiSpamRateLimiter(
+            entry_cooldown_sec=45,
+            loss_cooldown_sec=90,
+            global_cooldown_sec=10,
+            max_positions_per_symbol=2,
+            min_price_distance_pct=0.08,
+        )
+
+        # 1. Allowed initially
+        ok, reason = limiter.check_can_enter("XAUUSD", 2650.0, self.engine, max_open=4, timestamp=1000.0)
+        self.assertTrue(ok, reason)
+
+        # 2. Record entry at ts=1000.0
+        limiter.record_entry("XAUUSD", 2650.0, timestamp=1000.0)
+
+        # 3. Global cooldown active for BTCUSDT at ts=1005.0 (< 10s)
+        ok, reason = limiter.check_can_enter("BTCUSDT", 65000.0, self.engine, max_open=4, timestamp=1005.0)
+        self.assertFalse(ok)
+        self.assertIn("Global cooldown", reason)
+
+        # 4. Global cooldown expires at ts=1015.0 -> BTCUSDT allowed
+        ok, reason = limiter.check_can_enter("BTCUSDT", 65000.0, self.engine, max_open=4, timestamp=1015.0)
+        self.assertTrue(ok, reason)
+
+        # 5. Symbol entry cooldown active for XAUUSD at ts=1030.0 (< 45s)
+        ok, reason = limiter.check_can_enter("XAUUSD", 2660.0, self.engine, max_open=4, timestamp=1030.0)
+        self.assertFalse(ok)
+        self.assertIn("Entry cooldown", reason)
+
+        # 6. Min price distance: at ts=1050.0, if XAUUSD price is 2651.0 (0.038% from 2650.0 < 0.08%)
+        p_dummy = TradeOrder(
+            id="g1", symbol="XAUUSD", direction="LONG", entry_level=2650.0,
+            stop_loss=2645.0, tp1=2665.0, tp2=2675.0, tp3=None, lots=0.01, size=1.0,
+            leverage=20.0, margin_required=26.5, liquidation_price=2600.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="Gold", status=OrderStatus.OPEN, executed_price=2650.0,
+            remaining_size=1.0, is_scalp=True,
+        )
+        self.engine.active_positions[p_dummy.id] = p_dummy
+        ok, reason = limiter.check_can_enter("XAUUSD", 2651.0, self.engine, max_open=4, timestamp=1050.0)
+        self.assertFalse(ok)
+        self.assertIn("Price too close", reason)
+
+        # Distance >= 0.08% (e.g. 2655.0 is ~0.19% away) -> Allowed
+        ok, reason = limiter.check_can_enter("XAUUSD", 2655.0, self.engine, max_open=4, timestamp=1050.0)
+        self.assertTrue(ok, reason)
+
+        # 7. Max positions per symbol (2)
+        p_dummy2 = TradeOrder(
+            id="g2", symbol="XAUUSD", direction="LONG", entry_level=2655.0,
+            stop_loss=2645.0, tp1=2665.0, tp2=2675.0, tp3=None, lots=0.01, size=1.0,
+            leverage=20.0, margin_required=26.5, liquidation_price=2600.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="Gold 2", status=OrderStatus.OPEN, executed_price=2655.0,
+            remaining_size=1.0, is_scalp=True,
+        )
+        self.engine.active_positions[p_dummy2.id] = p_dummy2
+        ok, reason = limiter.check_can_enter("XAUUSD", 2670.0, self.engine, max_open=4, timestamp=1050.0)
+        self.assertFalse(ok)
+        self.assertIn("Max 2 positions reached", reason)
+
+        # Clear positions for loss test
+        self.engine.active_positions.clear()
+
+        # 8. Loss cooldown: record SL hit at ts=2000.0
+        limiter.record_loss("XAUUSD", 3.0, timestamp=2000.0)
+        # Blocked at ts=2050.0 (< 90s)
+        ok, reason = limiter.check_can_enter("XAUUSD", 2650.0, self.engine, max_open=4, timestamp=2050.0)
+        self.assertFalse(ok)
+        self.assertIn("Loss cooldown", reason)
+
+        # 9. Consecutive loss escalation: 2nd consecutive loss extends cooldown to 180s
+        limiter.record_loss("XAUUSD", 3.0, timestamp=2100.0)
+        self.assertEqual(limiter.get_loss_cooldown_duration("XAUUSD"), 180)
+        # Blocked at ts=2250.0 (150s elapsed < 180s)
+        ok, reason = limiter.check_can_enter("XAUUSD", 2650.0, self.engine, max_open=4, timestamp=2250.0)
+        self.assertFalse(ok)
+
+        # 10. Win resets streak
+        limiter.record_win("XAUUSD")
+        self.assertEqual(limiter._get_state("XAUUSD").consecutive_losses, 0)
+
+        # 11. Reset clears all state
+        limiter.reset()
+        ok, reason = limiter.check_can_enter("XAUUSD", 2650.0, self.engine, max_open=4, timestamp=2251.0)
+        self.assertTrue(ok, reason)
+
 
 if __name__ == "__main__":
     unittest.main()

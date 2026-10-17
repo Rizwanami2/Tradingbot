@@ -81,6 +81,9 @@ class Position:
     take_profit: Optional[float] = None
     unrealized_pnl: float = 0.0
     current_price: Optional[float] = None
+    ticket: Optional[Any] = None
+    id: Optional[str] = None
+    trailing_stop: Optional[float] = None
 
 
 class Broker(ABC):

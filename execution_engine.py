@@ -79,6 +79,9 @@ class TradeOrder:
     is_scalp: bool = False
     fast_market_fill: bool = False
     lot_mode: str = "auto"
+    ticket: Optional[Any] = None
+    trailing_sl_active: bool = False
+    highest_profit_usd: float = 0.0
 
 
     def to_dict(self) -> Dict:
@@ -251,6 +254,22 @@ class ExecutionEngine:
         self.scalp_sl_usd: float = 3.00
         self.scalp_tp_pct: float = 0.10
         self.scalp_sl_pct: float = 0.12
+        self.scalp_trail_enabled: bool = True
+        self.scalp_trail_activation_usd: float = 1.00
+        self.scalp_trail_distance_usd: float = 0.80
+        self.scalp_trail_activation_pct: float = 0.04
+        self.scalp_trail_distance_pct: float = 0.03
+        self.scalp_be_lock_usd: float = 0.50
+        try:
+            import config as _cfg_tr
+            self.scalp_trail_enabled = bool(getattr(_cfg_tr, "SCALP_TRAIL_ENABLED", True))
+            self.scalp_trail_activation_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_USD", 1.00))
+            self.scalp_trail_distance_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_USD", 0.80))
+            self.scalp_trail_activation_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_PCT", 0.04))
+            self.scalp_trail_distance_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_PCT", 0.03))
+            self.scalp_be_lock_usd = float(getattr(_cfg_tr, "SCALP_BE_LOCK_USD", 0.50))
+        except Exception:
+            pass
         self.state_file: str = state_file or os.getenv("EXECUTION_STATE_FILE") or _DEFAULT_STATE_FILE
         if state_file or (
             "pytest" not in sys.modules
@@ -262,6 +281,56 @@ class ExecutionEngine:
     def reset_halt(self) -> None:
         """Clear execution halt state so setups can be registered again."""
         self.execution_halted = False
+
+    def _broker_close(
+        self,
+        symbol: str,
+        qty: Optional[float] = None,
+        price: Optional[float] = None,
+        ticket: Optional[Any] = None,
+    ) -> Any:
+        """Safely invoke broker close_position, falling back gracefully if broker does not support ticket keyword."""
+        if not getattr(self, "broker", None) or not hasattr(self.broker, "close_position"):
+            return True
+        kwargs: Dict[str, Any] = {}
+        if qty is not None:
+            kwargs["qty"] = qty
+        if price is not None:
+            kwargs["price"] = price
+        if ticket is not None:
+            kwargs["ticket"] = ticket
+        try:
+            return self.broker.close_position(symbol, **kwargs)
+        except TypeError as ex:
+            if "ticket" in str(ex):
+                kwargs.pop("ticket", None)
+                return self.broker.close_position(symbol, **kwargs)
+            raise
+
+    def _broker_modify(
+        self,
+        symbol: str,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        ticket: Optional[Any] = None,
+    ) -> Any:
+        """Safely invoke broker modify_position, falling back gracefully if broker does not support ticket keyword."""
+        if not getattr(self, "broker", None) or not hasattr(self.broker, "modify_position"):
+            return True
+        kwargs: Dict[str, Any] = {}
+        if stop_loss is not None:
+            kwargs["stop_loss"] = stop_loss
+        if take_profit is not None:
+            kwargs["take_profit"] = take_profit
+        if ticket is not None:
+            kwargs["ticket"] = ticket
+        try:
+            return self.broker.modify_position(symbol, **kwargs)
+        except TypeError as ex:
+            if "ticket" in str(ex):
+                kwargs.pop("ticket", None)
+                return self.broker.modify_position(symbol, **kwargs)
+            raise
 
     def save_state(self, filepath: Optional[str] = None) -> str:
         """Persist current active positions, pending setups, and execution state to disk."""
@@ -710,6 +779,7 @@ class ExecutionEngine:
                     setup.lowest_price = exec_price
                     setup.remaining_size = setup.size
                     setup.remaining_lots = setup.lots
+                    setup.ticket = getattr(broker_order, "order_id", None) or getattr(broker_order, "ticket", None) or setup.id
                     setup._just_executed = True
                     self.active_positions[setup.id] = setup
                     self.pending_setups.pop(setup.id, None)
@@ -784,95 +854,215 @@ class ExecutionEngine:
                 )
             )
 
-            # 1. Micro Scalp Take Profit (Fast Capital Accumulation)
-            if scalp_on and pos.unrealized_pnl > 0:
-                hit_pct = False
-                if scalp_pct > 0 and entry > 0:
-                    move_pct = abs(curr_price - entry) / entry * 100.0
-                    hit_pct = move_pct >= scalp_pct
-                hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= scalp_usd
-                if hit_usd or hit_pct:
-                    broker_ok = True
-                    if getattr(self, "broker", None):
+            if scalp_on:
+                pos.highest_profit_usd = max(float(getattr(pos, "highest_profit_usd", 0.0) or 0.0), pos.unrealized_pnl)
+                pos_ticket = getattr(pos, "ticket", None) or pos.id
+
+                # (1) Scalp Progressive Break-Even Lock
+                be_act_usd = float(getattr(self, "scalp_be_lock_usd", 0.50))
+                be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.04))
+                move_gain_pct = ((pos.highest_price - entry) / entry * 100.0) if is_long else ((entry - pos.lowest_price) / entry * 100.0)
+                if pos.be_stage < 1 and (pos.highest_profit_usd >= be_act_usd or move_gain_pct >= be_act_pct):
+                    pos.be_stage = 1
+                    be_level = round(entry * 1.0002, 4) if is_long else round(entry * 0.9998, 4)
+                    if (is_long and be_level > pos.stop_loss) or (not is_long and be_level < pos.stop_loss):
+                        old_sl = pos.stop_loss
+                        pos.stop_loss = be_level
                         try:
-                            res = self.broker.close_position(sym, price=curr_price)
+                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                        except Exception:
+                            pass
+                        be_msg = (
+                            f"🛡️ **SCALP BREAK-EVEN SECURED** ({pos.symbol} [#{pos.id}])\n"
+                            f"SL secured: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                            f"Profit protected: `+${pos.highest_profit_usd:,.2f}`"
+                        )
+                        events.append({"event": "SCALP_BE_LOCKED", "order": pos, "new_stop": pos.stop_loss, "message": be_msg})
+                        self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
+
+                # (2) Scalp Dynamic Trailing Stop
+                trail_on = bool(getattr(self, "scalp_trail_enabled", True))
+                trail_act_usd = float(getattr(self, "scalp_trail_activation_usd", 1.00))
+                trail_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.04))
+                trail_dist_pct = float(getattr(self, "scalp_trail_distance_pct", 0.03))
+                trail_dist_usd = float(getattr(self, "scalp_trail_distance_usd", 0.80))
+
+                trail_stop_before = pos.stop_loss
+
+                if trail_on and (pos.highest_profit_usd >= trail_act_usd or move_gain_pct >= trail_act_pct):
+                    pos.trailing_sl_active = True
+                    if is_long:
+                        pct_trail = pos.highest_price * (1.0 - trail_dist_pct / 100.0)
+                        usd_trail = (pos.highest_price - (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
+                        new_sl = round(max(pct_trail, usd_trail), 4)
+                        new_sl = max(new_sl, round(entry * 1.0002, 4))
+                        if new_sl > pos.stop_loss:
+                            old_sl = pos.stop_loss
+                            pos.stop_loss = new_sl
+                            try:
+                                self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                            except Exception:
+                                pass
+                            tr_msg = (
+                                f"📈 **SCALP TRAIL SL ADVANCED** ({pos.symbol} [#{pos.id}])\n"
+                                f"Trailing Stop: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                                f"Peak Profit: `+${pos.highest_profit_usd:,.2f}`"
+                            )
+                            events.append({"event": "SCALP_TRAIL_UPDATED", "order": pos, "new_stop": pos.stop_loss, "message": tr_msg})
+                            self._dispatch_event("SCALP_TRAIL_UPDATED", pos, tr_msg)
+                    else:
+                        pct_trail = pos.lowest_price * (1.0 + trail_dist_pct / 100.0)
+                        usd_trail = (pos.lowest_price + (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
+                        new_sl = round(min(pct_trail, usd_trail), 4)
+                        new_sl = min(new_sl, round(entry * 0.9998, 4))
+                        if new_sl < pos.stop_loss:
+                            old_sl = pos.stop_loss
+                            pos.stop_loss = new_sl
+                            try:
+                                self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                            except Exception:
+                                pass
+                            tr_msg = (
+                                f"📈 **SCALP TRAIL SL ADVANCED** ({pos.symbol} [#{pos.id}])\n"
+                                f"Trailing Stop: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                                f"Peak Profit: `+${pos.highest_profit_usd:,.2f}`"
+                            )
+                            events.append({"event": "SCALP_TRAIL_UPDATED", "order": pos, "new_stop": pos.stop_loss, "message": tr_msg})
+                            self._dispatch_event("SCALP_TRAIL_UPDATED", pos, tr_msg)
+
+                # (3) Micro Scalp Hard Take Profit (Safety Ceiling)
+                if pos.unrealized_pnl > 0:
+                    hit_pct = False
+                    if scalp_pct > 0 and entry > 0:
+                        move_pct = abs(curr_price - entry) / entry * 100.0
+                        hit_pct = move_pct >= scalp_pct
+                    hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= scalp_usd
+                    if hit_usd or hit_pct:
+                        broker_ok = True
+                        try:
+                            res = self._broker_close(sym, price=curr_price, ticket=pos_ticket)
                             if res is False:
                                 broker_ok = False
                         except Exception as ex:
                             broker_ok = False
                             logger.error("[ExecutionEngine] Broker scalp close failed for %s: %s", sym, ex)
-                    if not broker_ok:
-                        self.execution_halted = True
-                        msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{sym}` [#{pos.id}]. Local position retained. Execution halted."
-                        self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                        if not broker_ok:
+                            self.execution_halted = True
+                            msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{sym}` [#{pos.id}]. Local position retained. Execution halted."
+                            self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                            continue
+
+                        pos.exit_price = curr_price
+                        pos.realized_pnl = pos.unrealized_pnl
+                        pos.status = OrderStatus.CLOSED
+                        pos.closed_at = datetime.now(timezone.utc).isoformat()
+                        pos.close_reason = f"Scalp TP (${pos.realized_pnl:+.2f})"
+                        try:
+                            self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=0.5)
+                        except Exception:
+                            pass
+                        self._notify_brain_close(pos, 0.5)
+                        self.trade_history.append(pos)
+                        self.active_positions.pop(pos.id, None)
+                        self.save_state()
+                        msg = (
+                            f"⚡ **SCALP AUTO-CLOSE** `{sym}` [#{pos.id}]\n"
+                            f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
+                            f"_Fast scalp profit target hit_"
+                        )
+                        events.append({"event": "SCALP_CLOSE", "order": pos, "price": curr_price, "message": msg})
+                        self._dispatch_event("SCALP_CLOSE", pos, msg)
                         continue
 
-                    pos.exit_price = curr_price
-                    pos.realized_pnl = pos.unrealized_pnl
-                    pos.status = OrderStatus.CLOSED
-                    pos.closed_at = datetime.now(timezone.utc).isoformat()
-                    pos.close_reason = f"Scalp TP (${pos.realized_pnl:+.2f})"
-                    try:
-                        self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=0.0)
-                    except Exception:
-                        pass
-                    self._notify_brain_close(pos, 0.5)
-                    self.trade_history.append(pos)
-                    self.active_positions.pop(pos.id, None)
-                    self.save_state()
-                    msg = (
-                        f"⚡ **SCALP AUTO-CLOSE** `{sym}` [#{pos.id}]\n"
-                        f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
-                        f"_Fast scalp profit target hit_"
-                    )
-                    events.append({"event": "SCALP_CLOSE", "order": pos, "price": curr_price, "message": msg})
-                    self._dispatch_event("SCALP_CLOSE", pos, msg)
-                    continue
+                # (4) Scalp Trailing SL Exit Hit
+                if pos.trailing_sl_active:
+                    stop_tightened_in_candle = (pos.stop_loss != trail_stop_before)
+                    if stop_tightened_in_candle:
+                        trail_hit = (curr_price <= pos.stop_loss) if is_long else (curr_price >= pos.stop_loss)
+                    else:
+                        trail_hit = (low <= pos.stop_loss) if is_long else (high >= pos.stop_loss)
 
-            # 2. Micro Scalp Stop Loss (Fast Loss Cut to Preserve Capital)
-            if scalp_on and pos.unrealized_pnl < 0:
-                hit_sl_pct = False
-                if scalp_sl_pct > 0 and entry > 0:
-                    move_pct = abs(curr_price - entry) / entry * 100.0
-                    hit_sl_pct = move_pct >= scalp_sl_pct
-                hit_sl_usd = scalp_sl_usd > 0 and pos.unrealized_pnl <= -scalp_sl_usd
-                if hit_sl_usd or hit_sl_pct:
-                    broker_ok = True
-                    if getattr(self, "broker", None):
+                    if trail_hit:
+                        exit_price = pos.stop_loss
+                        broker_ok = True
                         try:
-                            res = self.broker.close_position(sym, price=curr_price)
+                            res = self._broker_close(sym, price=exit_price, ticket=pos_ticket)
+                            if res is False:
+                                broker_ok = False
+                        except Exception as ex:
+                            broker_ok = False
+                            logger.error("[ExecutionEngine] Broker scalp trail close failed for %s: %s", sym, ex)
+                        if not broker_ok:
+                            self.execution_halted = True
+                            msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{sym}` [#{pos.id}]. Local position retained. Execution halted."
+                            self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                            continue
+
+                        pos.exit_price = exit_price
+                        pos.realized_pnl = (exit_price - entry) * pos.remaining_size if is_long else (entry - exit_price) * pos.remaining_size
+                        pos.status = OrderStatus.CLOSED
+                        pos.closed_at = datetime.now(timezone.utc).isoformat()
+                        pos.close_reason = f"Scalp Trailing SL Exit (+${pos.realized_pnl:+.2f})"
+                        try:
+                            self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=0.5)
+                        except Exception:
+                            pass
+                        self._notify_brain_close(pos, 0.5)
+                        self.trade_history.append(pos)
+                        self.active_positions.pop(pos.id, None)
+                        self.save_state()
+                        msg = (
+                            f"🏆 **SCALP TRAIL PROFIT SECURED** `{sym}` [#{pos.id}]\n"
+                            f"Exit: `${exit_price:,.2f}` | PnL: `+${pos.realized_pnl:,.2f}`\n"
+                            f"_Dynamic trailing stop locked in scalp gains_"
+                        )
+                        events.append({"event": "SCALP_TRAIL_HIT", "order": pos, "price": exit_price, "message": msg})
+                        self._dispatch_event("SCALP_TRAIL_HIT", pos, msg)
+                        continue
+
+                # (5) Micro Scalp Stop Loss (Fast Loss Cut to Preserve Capital)
+                if not pos.trailing_sl_active and pos.unrealized_pnl < 0:
+                    hit_sl_pct = False
+                    if scalp_sl_pct > 0 and entry > 0:
+                        move_pct = abs(curr_price - entry) / entry * 100.0
+                        hit_sl_pct = move_pct >= scalp_sl_pct
+                    hit_sl_usd = scalp_sl_usd > 0 and pos.unrealized_pnl <= -scalp_sl_usd
+                    if hit_sl_usd or hit_sl_pct:
+                        broker_ok = True
+                        try:
+                            res = self._broker_close(sym, price=curr_price, ticket=pos_ticket)
                             if res is False:
                                 broker_ok = False
                         except Exception as ex:
                             broker_ok = False
                             logger.error("[ExecutionEngine] Broker scalp SL cut failed for %s: %s", sym, ex)
-                    if not broker_ok:
-                        self.execution_halted = True
-                        msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{sym}` [#{pos.id}]. Local position retained. Execution halted."
-                        self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
-                        continue
+                        if not broker_ok:
+                            self.execution_halted = True
+                            msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{sym}` [#{pos.id}]. Local position retained. Execution halted."
+                            self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
+                            continue
 
-                    pos.exit_price = curr_price
-                    pos.realized_pnl = pos.unrealized_pnl
-                    pos.status = OrderStatus.CLOSED
-                    pos.closed_at = datetime.now(timezone.utc).isoformat()
-                    pos.close_reason = f"Scalp SL (${pos.realized_pnl:+.2f})"
-                    try:
-                        self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=-1.0)
-                    except Exception:
-                        pass
-                    self._notify_brain_close(pos, -1.0)
-                    self.trade_history.append(pos)
-                    self.active_positions.pop(pos.id, None)
-                    self.save_state()
-                    msg = (
-                        f"🛡️ **SCALP STOP LOSS CUT** `{sym}` [#{pos.id}]\n"
-                        f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
-                        f"_Tight micro stop loss protection triggered_"
-                    )
-                    events.append({"event": "SCALP_SL", "order": pos, "price": curr_price, "message": msg})
-                    self._dispatch_event("SCALP_SL", pos, msg)
-                    continue
+                        pos.exit_price = curr_price
+                        pos.realized_pnl = pos.unrealized_pnl
+                        pos.status = OrderStatus.CLOSED
+                        pos.closed_at = datetime.now(timezone.utc).isoformat()
+                        pos.close_reason = f"Scalp SL (${pos.realized_pnl:+.2f})"
+                        try:
+                            self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=-1.0)
+                        except Exception:
+                            pass
+                        self._notify_brain_close(pos, -1.0)
+                        self.trade_history.append(pos)
+                        self.active_positions.pop(pos.id, None)
+                        self.save_state()
+                        msg = (
+                            f"🛡️ **SCALP STOP LOSS CUT** `{sym}` [#{pos.id}]\n"
+                            f"Exit `${curr_price:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
+                            f"_Tight micro stop loss protection triggered_"
+                        )
+                        events.append({"event": "SCALP_SL", "order": pos, "price": curr_price, "message": msg})
+                        self._dispatch_event("SCALP_SL", pos, msg)
+                        continue
 
             # (A) Check Liquidation barrier for leveraged positions
             if pos.liquidation_price and pos.leverage > 1.0:
@@ -907,6 +1097,10 @@ class ExecutionEngine:
                     self._dispatch_event(ev["event"], pos, ev["message"])
                     continue
 
+            if scalp_on:
+                # Micro-scalp positions are fully managed by the dedicated scalp lifecycle above
+                continue
+
             # (B) Check Progressive Auto Break-Even
             old_stop = pos.stop_loss
             be_stop, be_reason = self.risk_manager.auto_breakeven_stop(
@@ -917,11 +1111,10 @@ class ExecutionEngine:
                 stage = 2 if "full" in be_reason.lower() else 1
                 if stage > pos.be_stage:
                     pos.be_stage = stage
-                    if getattr(self, "broker", None) and hasattr(self.broker, "modify_position"):
-                        try:
-                            self.broker.modify_position(pos.symbol, stop_loss=be_stop)
-                        except Exception:
-                            pass
+                    try:
+                        self._broker_modify(pos.symbol, stop_loss=be_stop, ticket=getattr(pos, "ticket", None) or pos.id)
+                    except Exception:
+                        pass
                     ev = {
                         "event": "AUTO_BE_LOCKED",
                         "order": pos,
@@ -956,16 +1149,14 @@ class ExecutionEngine:
                 pos.stop_loss = (entry + buf) if is_long else (entry - buf)
                 pos.be_stage = 2
 
-                if getattr(self, "broker", None):
-                    try:
-                        self.broker.close_position(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp1)
-                    except Exception as ex:
-                        print(f"[ExecutionEngine] Broker TP1 close: {ex}")
-                    if hasattr(self.broker, "modify_position"):
-                        try:
-                            self.broker.modify_position(pos.symbol, stop_loss=pos.stop_loss, take_profit=pos.tp2)
-                        except Exception:
-                            pass
+                try:
+                    self._broker_close(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp1, ticket=getattr(pos, "ticket", None) or pos.id)
+                except Exception as ex:
+                    print(f"[ExecutionEngine] Broker TP1 close: {ex}")
+                try:
+                    self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, take_profit=pos.tp2, ticket=getattr(pos, "ticket", None) or pos.id)
+                except Exception:
+                    pass
 
                 ev = {
                     "event": "TP1_PARTIAL_TAKEN",
@@ -1001,11 +1192,10 @@ class ExecutionEngine:
                     if trail_ev:
                         events.append(trail_ev)
                         self._dispatch_event(trail_ev["event"], pos, trail_ev["message"])
-                        if getattr(self, "broker", None) and hasattr(self.broker, "modify_position"):
-                            try:
-                                self.broker.modify_position(pos.symbol, stop_loss=pos.stop_loss)
-                            except Exception:
-                                pass
+                        try:
+                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=getattr(pos, "ticket", None) or pos.id)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -1026,16 +1216,14 @@ class ExecutionEngine:
                     pos.direction.lower(), entry, pos.stop_loss, pos.highest_price, pos.lowest_price, initial_risk, tp1_hit=True
                 )
 
-                if getattr(self, "broker", None):
-                    try:
-                        self.broker.close_position(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp2)
-                    except Exception as ex:
-                        print(f"[ExecutionEngine] Broker TP2 close: {ex}")
-                    if hasattr(self.broker, "modify_position"):
-                        try:
-                            self.broker.modify_position(pos.symbol, stop_loss=pos.stop_loss)
-                        except Exception:
-                            pass
+                try:
+                    self._broker_close(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp2, ticket=getattr(pos, "ticket", None) or pos.id)
+                except Exception as ex:
+                    print(f"[ExecutionEngine] Broker TP2 close: {ex}")
+                try:
+                    self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=getattr(pos, "ticket", None) or pos.id)
+                except Exception:
+                    pass
 
                 ev = {
                     "event": "TP2_PARTIAL_TAKEN",
@@ -1074,14 +1262,13 @@ class ExecutionEngine:
             if stop_hit:
                 exit_price = pos.stop_loss
                 broker_ok = True
-                if getattr(self, "broker", None):
-                    try:
-                        res = self.broker.close_position(pos.symbol, price=exit_price)
-                        if res is False:
-                            broker_ok = False
-                    except Exception as ex:
+                try:
+                    res = self._broker_close(pos.symbol, price=exit_price, ticket=getattr(pos, "ticket", None) or pos.id)
+                    if res is False:
                         broker_ok = False
-                        logger.error("[ExecutionEngine] Broker exit close failed for %s: %s", pos.symbol, ex)
+                except Exception as ex:
+                    broker_ok = False
+                    logger.error("[ExecutionEngine] Broker exit close failed for %s: %s", pos.symbol, ex)
                 if not broker_ok:
                     self.execution_halted = True
                     msg = f"🚨 **CRITICAL: BROKER CLOSE FAILED** for `{pos.symbol}` [#{pos.id}]. Local position retained. Execution halted."
@@ -1147,7 +1334,7 @@ class ExecutionEngine:
             # If broker attached, attempt broker close first
             if getattr(self, "broker", None):
                 try:
-                    res = self.broker.close_position(pos.symbol, price=current_price)
+                    res = self._broker_close(pos.symbol, price=current_price, ticket=getattr(pos, "ticket", None) or pos.id)
                     if res is False:
                         self.execution_halted = True
                         msg = f"🚨 **CRITICAL: BROKER CLOSE REJECTED** for `{pos.symbol}` [#{pos.id}]. Local position retained. Execution halted."
@@ -1305,12 +1492,17 @@ class ExecutionEngine:
                 entry_fmt = f"${entry:,.2f}" if entry >= 1.0 else f"${entry:,.4f}"
                 curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"
                 oid_str = f" [#{pos.id}]" if getattr(pos, "id", None) else ""
+                tkt_str = f" | **Ticket:** `{pos.ticket}`" if getattr(pos, "ticket", None) else ""
+                trail_str = ""
+                if getattr(pos, "trailing_sl_active", False):
+                    peak = float(getattr(pos, "highest_profit_usd", 0.0) or 0.0)
+                    trail_str = f"\n• **Trail SL:** 🎯 Active (Peak: `+${peak:,.2f}` | Stop: `${float(pos.stop_loss):,.2f}`)"
 
                 lines.append(
-                    f"\n{dir_icon} `{sym}` **{pos.direction}**{oid_str}\n"
+                    f"\n{dir_icon} `{sym}` **{pos.direction}**{oid_str}{tkt_str}\n"
                     f"• **Entry:** `{entry_fmt}` | **Current Market:** `{curr_fmt}` | **PnL:** {pnl_icon} `${u:+,.2f}`{pnl_pct_str}\n"
                     f"• **SL:** `${float(pos.stop_loss):,.2f}` | **TP1:** `${float(pos.tp1):,.2f}` | **TP2:** `${float(pos.tp2):,.2f}`\n"
-                    f"• **Lots:** `{pos.lots}` | **Lev:** `{float(pos.leverage or 1):.0f}x` | **Margin:** `${float(pos.margin_required or 0):,.2f}`"
+                    f"• **Lots:** `{pos.lots}` | **Lev:** `{float(pos.leverage or 1):.0f}x` | **Margin:** `${float(pos.margin_required or 0):,.2f}`{trail_str}"
                 )
         if self.pending_setups:
             lines.append(f"\n⏳ **Pending Setups ({len(self.pending_setups)}):**")

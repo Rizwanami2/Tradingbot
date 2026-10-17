@@ -377,3 +377,19 @@ SCALP_STOP_LOSS_USD = _safe_float(os.getenv("BOT_SCALP_SL_USD"), 3.0)
 SCALP_STOP_LOSS_PCT = _safe_float(os.getenv("BOT_SCALP_SL_PCT"), 0.12)
 SCALP_ENABLED = os.getenv("BOT_SCALP", "true").lower() in ("true", "1", "yes", "on")
 CURRENT_PROFILE = os.getenv("BOT_PROFILE", "scalp").lower()
+
+# Scalp Trailing Stop Loss Configuration
+SCALP_TRAIL_ENABLED = os.getenv("BOT_SCALP_TRAIL_ENABLED", "true").lower() in ("true", "1", "yes", "on")
+SCALP_TRAIL_ACTIVATION_USD = _safe_float(os.getenv("BOT_SCALP_TRAIL_ACTIVATION_USD"), 1.00)
+SCALP_TRAIL_DISTANCE_USD = _safe_float(os.getenv("BOT_SCALP_TRAIL_DISTANCE_USD"), 0.80)
+SCALP_TRAIL_ACTIVATION_PCT = _safe_float(os.getenv("BOT_SCALP_TRAIL_ACTIVATION_PCT"), 0.04)
+SCALP_TRAIL_DISTANCE_PCT = _safe_float(os.getenv("BOT_SCALP_TRAIL_DISTANCE_PCT"), 0.03)
+SCALP_BE_LOCK_USD = _safe_float(os.getenv("BOT_SCALP_BE_LOCK_USD"), 0.50)
+
+# Scalp Anti-Spam & Rate-Limiting Cooldown Controls
+SCALP_ENTRY_COOLDOWN_SEC = _safe_float(os.getenv("BOT_SCALP_ENTRY_COOLDOWN_SEC"), 45.0)
+SCALP_LOSS_COOLDOWN_SEC = _safe_float(os.getenv("BOT_SCALP_LOSS_COOLDOWN_SEC"), 90.0)
+SCALP_GLOBAL_COOLDOWN_SEC = _safe_float(os.getenv("BOT_SCALP_GLOBAL_COOLDOWN_SEC"), 10.0)
+SCALP_MAX_POSITIONS_PER_SYMBOL = _safe_int(os.getenv("BOT_SCALP_MAX_POSITIONS_PER_SYMBOL"), 2)
+SCALP_MIN_PRICE_DISTANCE_PCT = _safe_float(os.getenv("BOT_SCALP_MIN_PRICE_DISTANCE_PCT"), 0.08)
+

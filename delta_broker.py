@@ -754,6 +754,8 @@ class DeltaBroker(Broker):
         qty: Optional[float] = None,
         price: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
+        ticket: Optional[Any] = None,
+        **kwargs: Any,
     ) -> bool:
         """Close an active position using an opposite market order with reduce_only=True."""
         if not self._connected:
@@ -802,6 +804,8 @@ class DeltaBroker(Broker):
         symbol: str,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        ticket: Optional[Any] = None,
+        **kwargs: Any,
     ) -> bool:
         """Update bracket stop-loss or take-profit on an active position."""
         if not self._connected:
@@ -1043,6 +1047,8 @@ class MockDeltaBroker(Broker):
         qty: Optional[float] = None,
         price: Optional[float] = None,
         params: Optional[Dict[str, Any]] = None,
+        ticket: Optional[Any] = None,
+        **kwargs: Any,
     ) -> bool:
         if not self._connected:
             raise OrderStateUnknownError("Cannot close position: Delta Exchange broker is disconnected.")
@@ -1061,7 +1067,14 @@ class MockDeltaBroker(Broker):
                     pos.qty -= close_qty
         return True
 
-    def modify_position(self, symbol: str, stop_loss: Optional[float] = None, take_profit: Optional[float] = None) -> bool:
+    def modify_position(
+        self,
+        symbol: str,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        ticket: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> bool:
         delta_sym = resolve_delta_symbol(symbol)
         for key in (delta_sym, symbol.upper()):
             if key in self._positions:

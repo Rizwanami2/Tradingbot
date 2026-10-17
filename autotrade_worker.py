@@ -116,9 +116,24 @@ async def live_monitoring_worker(
                     if not autotrade_active and symbol in engine.pending_setups:
                         engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
+                    from anti_spam import get_anti_spam_limiter
+                    limiter = get_anti_spam_limiter()
+
                     events = engine.update_market_candle(symbol, candle_dict)
                     for ev in events:
                         logger.info("Execution Event: %s - %s", ev["event"], ev.get("message"))
+                        etype = ev.get("event")
+                        if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
+                            fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
+                            if fpnl < 0:
+                                limiter.record_loss(symbol, abs(fpnl))
+                            else:
+                                limiter.record_win(symbol)
+                        elif etype == "TRADE_EXECUTED":
+                            pos = ev.get("order")
+                            eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
+                            limiter.record_entry(symbol, eprice)
+
                         if config.TELEGRAM_CHAT_ID:
                             try:
                                 await app.bot.send_message(
@@ -129,15 +144,32 @@ async def live_monitoring_worker(
 
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
-                    if is_scalping:
-                        can_open = autotrade_active and open_n < max_open
+                    if not autotrade_active:
+                        can_open = False
+                    elif is_scalping:
+                        can_open, spam_reason = limiter.check_can_enter(
+                            symbol=symbol,
+                            current_price=candle_dict["close"],
+                            engine=engine,
+                            max_open=max_open,
+                        )
+                        if not can_open:
+                            logger.debug("Autotrade %s: scalp entry blocked by anti-spam — %s", symbol, spam_reason)
                     else:
                         can_open = (
-                            autotrade_active
+                            open_n < max_open
                             and symbol not in engine.active_positions
                             and symbol not in engine.pending_setups
-                            and open_n < max_open
                         )
+                        if can_open:
+                            can_open, spam_reason = limiter.check_can_enter(
+                                symbol=symbol,
+                                current_price=candle_dict["close"],
+                                engine=engine,
+                                max_open=max_open,
+                            )
+                            if not can_open:
+                                logger.debug("Autotrade %s: entry blocked by anti-spam — %s", symbol, spam_reason)
                     if can_open:
                         sig, why, votes = arbiter.decide(
                             df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr,
@@ -184,6 +216,7 @@ async def live_monitoring_worker(
 
                             try:
                                 order = engine.register_setup(sig, reason=sig.get("reason", ""))
+                                limiter.record_entry(symbol, order.entry_level)
                             except RuntimeError as reg_err:
                                 logger.info("Autotrade %s: register blocked — %s", symbol, reg_err)
                                 continue
@@ -210,6 +243,17 @@ async def live_monitoring_worker(
                                 except Exception:
                                     pass
                             for ev in engine.update_market_candle(symbol, candle_dict):
+                                etype = ev.get("event")
+                                if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
+                                    fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
+                                    if fpnl < 0:
+                                        limiter.record_loss(symbol, abs(fpnl))
+                                    else:
+                                        limiter.record_win(symbol)
+                                elif etype == "TRADE_EXECUTED":
+                                    pos = ev.get("order")
+                                    eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
+                                    limiter.record_entry(symbol, eprice)
                                 if config.TELEGRAM_CHAT_ID:
                                     try:
                                         await app.bot.send_message(
