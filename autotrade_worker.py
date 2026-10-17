@@ -110,6 +110,18 @@ async def live_monitoring_worker(
             watchlist = list(current_watchlist)
         monitoring_health["watchlist"] = list(watchlist)
 
+        # Automated End-of-Session Performance Report trigger
+        try:
+            from session_reporter import check_and_generate_transition_report
+            transition = check_and_generate_transition_report(
+                open_positions=list(engine.active_positions.values())
+            )
+            if transition:
+                _, session_msg = transition
+                await _send_alert(session_msg)
+        except Exception as _sess_err:
+            logger.debug("Session report check error: %s", _sess_err)
+
         try:
             for symbol in watchlist:
                 try:
@@ -247,6 +259,24 @@ async def live_monitoring_worker(
                                 f"Lots `{order.lots}`{lot_tag} | Lev `{order.leverage:.0f}x`\n"
                                 f"_{order.setup_reason}_"
                             )
+                            try:
+                                from gemini_client import GeminiClient
+                                _gem = GeminiClient()
+                                rationale = _gem.generate_trade_rationale({
+                                    "symbol": symbol,
+                                    "direction": order.direction,
+                                    "entry": order.entry_level,
+                                    "stop_loss": order.stop_loss,
+                                    "take_profit": order.tp1,
+                                    "lots": order.lots,
+                                    "reason": order.setup_reason,
+                                    "regime": str(sig.get("regime") or "Trending"),
+                                    "is_scalp": is_scalp_order,
+                                })
+                                if rationale:
+                                    alert += f"\n\n{rationale}"
+                            except Exception:
+                                pass
                             await _send_alert(alert)
                             for ev in engine.update_market_candle(symbol, candle_dict):
                                 etype = ev.get("event")

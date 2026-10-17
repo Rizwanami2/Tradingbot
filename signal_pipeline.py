@@ -339,12 +339,21 @@ def format_signal_message(res: Dict[str, Any]) -> str:
             hist_txt = format_history_2y(h2)
     except Exception:
         hist_txt = ""
+
+    matrix_txt = ""
+    try:
+        from consensus_visualizer import format_agent_consensus_matrix
+        matrix_txt = format_agent_consensus_matrix(votes)
+    except Exception:
+        pass
+
     votes_txt = "\n".join(vote_lines) if vote_lines else "_No votes_"
+    votes_section = f"\n{matrix_txt}\n" if matrix_txt else f"\n**Agent Votes:**\n{votes_txt}\n\n⚡ **Consensus:** `{status}`"
+
     return (
         f"📊 **Multi-Agent Evaluation for {sym}**\n"
-        f"Mark: `${price_val:,.2f}` | Lev `{float(lev):.0f}x`\n\n"
-        f"**Agent Votes:**\n{votes_txt}\n\n"
-        f"⚡ **Consensus:** `{status}`"
+        f"Mark: `${price_val:,.2f}` | Lev `{float(lev):.0f}x`\n"
+        f"{votes_section}"
         f"{sig_box}"
         f"{plan_txt}"
         f"{hist_txt}"

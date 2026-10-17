@@ -6,7 +6,7 @@ Includes intelligent fallback trading assistant if GEMINI_API_KEY is not configu
 
 import re
 import requests
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import config
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -74,6 +74,75 @@ class GeminiClient:
 
         history.append({"role": "model", "text": reply})
         return reply
+
+    def generate_trade_rationale(
+        self,
+        trade_data: Dict[str, Any],
+        market_context: str = "",
+    ) -> str:
+        """
+        Generate an institutional AI trade rationale when an order fills.
+        Uses Gemini API if configured, or deterministic technical intelligence.
+        """
+        sym = trade_data.get("symbol", "ASSET")
+        dir_val = str(trade_data.get("direction", "BUY")).upper()
+        entry = float(trade_data.get("entry", trade_data.get("entry_level", trade_data.get("price", 0.0))) or 0.0)
+        sl = float(trade_data.get("stop_loss", trade_data.get("sl", 0.0)) or 0.0)
+        tp = float(trade_data.get("take_profit", trade_data.get("tp1", trade_data.get("tp", 0.0))) or 0.0)
+        lots = float(trade_data.get("lots", trade_data.get("size", trade_data.get("volume", 0.0))) or 0.0)
+        reason = str(trade_data.get("reason", trade_data.get("setup_reason", "")) or "Multi-Agent Consensus")
+        regime = str(trade_data.get("regime", "") or "Market Expansion")
+
+        # Try real Gemini API if key is present
+        if self.api_key:
+            prompt = (
+                f"You are a Senior Institutional Trade Execution Analyst. An automated trading order has just filled.\n"
+                f"Trade Details:\n"
+                f"- Symbol: {sym}\n"
+                f"- Direction: {dir_val}\n"
+                f"- Fill Price: {entry}\n"
+                f"- Stop Loss: {sl}\n"
+                f"- Take Profit (TP1): {tp}\n"
+                f"- Size: {lots} lots\n"
+                f"- Strategy Reason / Agent Setup: {reason}\n"
+                f"- Market Regime: {regime}\n\n"
+                f"Write a crisp, institutional trade fill rationale (under 120 words) for the client on Telegram.\n"
+                f"Use bullet points:\n"
+                f"• **Thesis:** core technical rationale & market structure\n"
+                f"• **Confluence:** alignment across signals / institutional patterns\n"
+                f"• **Invalidation:** exact price level where thesis is invalidated\n"
+                f"• **Management Plan:** risk reduction (e.g. break-even threshold) and target path\n"
+            )
+            try:
+                reply = self._call_gemini_api(
+                    [{"role": "user", "text": prompt}],
+                    system_instruction="You are an elite quantitative trading execution analyst providing real-time fill rationales.",
+                )
+                if reply:
+                    return f"🧠 **GEMINI AI TRADE RATIONALE**\n\n{reply.strip()}"
+            except Exception:
+                pass
+
+        # High quality technical fallback rationale
+        risk_dist = abs(entry - sl) if sl and entry else 0.0
+        tp_dist = abs(tp - entry) if tp and entry else 0.0
+        rr_ratio = round(tp_dist / risk_dist, 2) if risk_dist > 0 else 2.0
+
+        is_long = any(x in dir_val for x in ("BUY", "LONG", "1"))
+        invalidation_note = f"Break below ${sl:,.2f}" if is_long else f"Break above ${sl:,.2f}"
+        if not sl:
+            invalidation_note = "Tight trailing micro-stop threshold"
+
+        be_level = round(entry + (0.5 * (tp - entry) if tp else (risk_dist if is_long else -risk_dist)), 2) if entry else 0.0
+
+        tp_str = f"`${tp:,.2f}`" if tp else "Dynamic trailing TP"
+        return (
+            f"🧠 **AI TRADE RATIONALE: {sym} {dir_val}**\n\n"
+            f"• **Thesis:** Institutional entry executed at `${entry:,.2f}` based on {reason}.\n"
+            f"• **Confluence:** Setup aligned with prevailing {regime} regime, offering favorable asymmetry ({rr_ratio}R).\n"
+            f"• **Invalidation:** {invalidation_note} structural boundary.\n"
+            f"• **Management Plan:** Lock Break-Even at `${be_level:,.2f}`, primary objective at {tp_str}.\n"
+        )
 
     def _call_gemini_api(self, history: List[Dict[str, str]], system_instruction: str) -> str:
         """Call Google Gemini REST API."""

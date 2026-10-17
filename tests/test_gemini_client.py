@@ -34,6 +34,24 @@ class TestGeminiClient(unittest.TestCase):
         self.client.reset(chat_id=2)
         self.assertEqual(len(self.client.get_history(2)), 0)
 
+    def test_generate_trade_rationale_fallback(self):
+        trade_data = {
+            "symbol": "XAUUSD",
+            "direction": "BUY",
+            "entry": 2650.0,
+            "stop_loss": 2642.0,
+            "take_profit": 2668.0,
+            "lots": 0.05,
+            "reason": "Bullish SFP + Order Block mitigation",
+            "regime": "Trending",
+        }
+        res = self.client.generate_trade_rationale(trade_data)
+        self.assertIn("AI TRADE RATIONALE", res)
+        self.assertIn("XAUUSD BUY", res)
+        self.assertIn("2,650.00", res)
+        self.assertIn("Thesis", res)
+        self.assertIn("Invalidation", res)
+
 
 if __name__ == "__main__":
     unittest.main()
