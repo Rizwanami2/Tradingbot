@@ -350,6 +350,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
             "• `/leverage [1-200|auto]` — Set manual leverage or dynamic auto-leverage (up to 200x)\n"
+            "• `/lot [auto|manual|<size>]` — Auto dynamic risk lots or fixed manual lot size\n"
             "• `/kill [on|off]` — Emergency execution stop circuit breaker"
         )
     elif cat in ("backtest", "research", "abacktest"):
@@ -409,6 +410,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
             "• `/leverage [1-200]` — Set maximum account leverage ceiling\n"
+            "• `/lot [auto|manual|<size>]` — Auto dynamic risk lots or fixed manual lot size\n"
             "• `/kill [on|off]` — Emergency execution stop circuit breaker\n\n"
             "📈 **Backtesting & Research:**\n"
             "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
@@ -810,6 +812,145 @@ async def leverage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Invalid leverage '{args[0]}': {e}. Usage: `/leverage <1-200>` or `/leverage auto on|off`")
 
 
+def build_lot_dashboard() -> Tuple[str, InlineKeyboardMarkup]:
+    """Construct Markdown text and inline keyboard for the Lot Size dashboard."""
+    mode, cur_lot = risk_mgr.get_lot_mode()
+    eq = getattr(risk_mgr.state, "equity", 10000.0)
+    risk_pct, _ = risk_mgr.current_risk_pct()
+    mode_icon = "🟢" if mode == "auto" else "✏️"
+    mode_str = "AUTO (Dynamic Risk-Based)" if mode == "auto" else "MANUAL (Fixed Lot Size)"
+
+    sample_gold = risk_mgr.calc_lots(eq * (risk_pct / 100.0), 10.0)[0]
+    sample_btc = risk_mgr.calc_lots(eq * (risk_pct / 100.0), 500.0)[0]
+
+    overrides = getattr(risk_mgr.config, "manual_lot_sizes", {})
+    override_lines = []
+    if overrides and isinstance(overrides, dict):
+        for sym, l in sorted(overrides.items()):
+            override_lines.append(f"  • `{sym}`: `{l:.4f}` lots")
+    override_text = ("\n• **Symbol Overrides:**\n" + "\n".join(override_lines)) if override_lines else ""
+
+    text = (
+        f"📦 **Lot Size Management (Auto / Manual)**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Active Mode:** {mode_icon} **{mode_str}**\n"
+        f"• **Current Manual Lot:** `{cur_lot:.4f}` lots{override_text}\n"
+        f"• **Dynamic Auto Est. (Equity ${eq:,.2f}, Risk {risk_pct:.2f}%):**\n"
+        f"  • Gold (XAUUSD): ~`{sample_gold:.2f}` lots (at $10 SL)\n"
+        f"  • Bitcoin (BTC): ~`{sample_btc:.3f}` lots (at $500 SL)\n"
+        f"• **Instrument Bounds:** Min `0.01` | Step `0.01` | Max `{risk_mgr.config.max_lot:.1f}`\n\n"
+        f"✏️ **Set Manual Lot:**\n"
+        f"• `/lot manual <size>` — e.g. `/lot manual 0.05`\n"
+        f"• `/lot manual <size> <SYM>` — e.g. `/lot manual 0.02 XAUUSD`\n"
+        f"• `/lot <size> [SYM]` — e.g. `/lot 0.05`\n\n"
+        f"🤖 **Switch to Dynamic Auto Lots:**\n"
+        f"• `/lot auto` — Auto-calculate lots per trade from risk % and SL distance"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🤖 Switch to Auto Lots", callback_data="lot:auto"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="lot:refresh"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Manual 0.01", callback_data="lot:manual:0.01"),
+            InlineKeyboardButton("✏️ Manual 0.02", callback_data="lot:manual:0.02"),
+            InlineKeyboardButton("✏️ Manual 0.05", callback_data="lot:manual:0.05"),
+            InlineKeyboardButton("✏️ Manual 0.10", callback_data="lot:manual:0.10"),
+        ],
+    ])
+    return text, markup
+
+
+async def lot_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View and toggle Auto (dynamic risk-based) vs. Manual (fixed) lot size selection."""
+    args = ctx.args or []
+    if not args:
+        text, markup = build_lot_dashboard()
+        try:
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            await update.message.reply_text(text.replace("*", "").replace("`", ""), reply_markup=markup)
+        return
+
+    sub = args[0].strip().lower()
+    if sub in ("auto", "dynamic", "risk"):
+        risk_mgr.set_auto_lot()
+        config.set_lot_size_mode("auto")
+        await update.message.reply_text(
+            "🟢 **Auto Lot Sizing Activated**\n"
+            "• Mode: `AUTO (Dynamic Risk-Based)`\n"
+            "• Orders will now be sized dynamically per trade based on account equity, risk %, and stop loss distance.",
+            parse_mode="Markdown",
+        )
+        return
+
+    if sub in ("manual", "fixed", "man"):
+        if len(args) > 1:
+            try:
+                val = float(args[1])
+                target_sym = args[2].upper() if len(args) > 2 else None
+                ok, msg = risk_mgr.set_manual_lot(val, symbol=target_sym)
+                if not ok:
+                    await update.message.reply_text(f"❌ {msg}", parse_mode="Markdown")
+                    return
+                config.set_manual_lot_size(val, symbol=target_sym)
+                config.set_lot_size_mode("manual")
+                sym_str = f" for `{target_sym}`" if target_sym else " globally"
+                await update.message.reply_text(
+                    f"✏️ **Manual Lot Sizing Activated**\n"
+                    f"• **Fixed Lot Size:** `{val:.4f}` lots{sym_str}\n"
+                    f"• Mode: `MANUAL`\n"
+                    f"• Every new trade will execute with exactly `{val:.4f}` lots.",
+                    parse_mode="Markdown",
+                )
+                return
+            except ValueError:
+                await update.message.reply_text(f"❌ Invalid lot size '{args[1]}'. Example: `/lot manual 0.05`", parse_mode="Markdown")
+                return
+        else:
+            risk_mgr.set_lot_mode("manual")
+            config.set_lot_size_mode("manual")
+            cur = risk_mgr.get_manual_lot()
+            await update.message.reply_text(
+                f"✏️ **Manual Lot Sizing Activated**\n"
+                f"• **Fixed Lot Size:** `{cur:.4f}` lots\n"
+                f"• Mode: `MANUAL`\n"
+                f"• To change size: `/lot manual <size>` (e.g. `/lot manual 0.05`)",
+                parse_mode="Markdown",
+            )
+            return
+
+    # Direct number input: `/lot 0.05` or `/lot 0.02 XAUUSD`
+    try:
+        val = float(sub)
+        target_sym = args[1].upper() if len(args) > 1 else None
+        ok, msg = risk_mgr.set_manual_lot(val, symbol=target_sym)
+        if not ok:
+            await update.message.reply_text(f"❌ {msg}", parse_mode="Markdown")
+            return
+        config.set_manual_lot_size(val, symbol=target_sym)
+        config.set_lot_size_mode("manual")
+        sym_str = f" for `{target_sym}`" if target_sym else " globally"
+        await update.message.reply_text(
+            f"✏️ **Manual Lot Sizing Activated**\n"
+            f"• **Fixed Lot Size:** `{val:.4f}` lots{sym_str}\n"
+            f"• Mode: `MANUAL`\n"
+            f"• All orders will be placed with `{val:.4f}` lots.",
+            parse_mode="Markdown",
+        )
+    except ValueError:
+        await update.message.reply_text(
+            f"❌ Unknown lot command `{args[0]}`.\n"
+            f"Usage:\n"
+            f"• `/lot` — View lot status & quick settings\n"
+            f"• `/lot auto` — Switch to dynamic auto lot sizing\n"
+            f"• `/lot manual <size> [SYM]` — Set fixed manual lot size (e.g. `/lot manual 0.05`)\n"
+            f"• `/lot <size> [SYM]` — Direct set (e.g. `/lot 0.02 XAUUSD`)",
+            parse_mode="Markdown",
+        )
+
+
 async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         if hasattr(engine, "format_positions_detail"):
@@ -1016,6 +1157,7 @@ def build_watchlist_dashboard() -> tuple:
         f"• **Monitoring Status:** {auto_status}\n"
         f"• **Active Selection:** `{sel_label}`\n"
         f"• **Execution Mode:** `{broker_mode}` | **Profile:** `{profile}`\n"
+        f"• **Lot Sizing:** `{'AUTO (Dynamic)' if getattr(risk_mgr.config, 'lot_mode', 'auto') == 'auto' else f'MANUAL ({risk_mgr.get_manual_lot():.2f} lots)'}`\n"
         f"• **Slots:** `{open_count}/{max_trades}` active (`{slots}` free)\n\n"
         f"💡 **Switch Selection:**\n"
         f"• `/watchlist btc` — Trade BTC only\n"
@@ -1038,6 +1180,7 @@ def build_watchlist_dashboard() -> tuple:
         [
             InlineKeyboardButton("🔄 Refresh Watchlist", callback_data="wl:refresh"),
             InlineKeyboardButton("📊 Positions", callback_data="wl:positions"),
+            InlineKeyboardButton("📦 Lot Size", callback_data="lot:info"),
         ],
     ])
     return text, markup
@@ -1165,7 +1308,8 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **Micro Targets:** TP `{getattr(config, 'SCALP_TAKE_PROFIT_PCT', 0.10):.2f}%` / `${getattr(config, 'SCALP_TAKE_PROFIT_USD', 2.50):.2f}` | SL `{getattr(config, 'SCALP_STOP_LOSS_PCT', 0.12):.2f}%` / `${getattr(config, 'SCALP_STOP_LOSS_USD', 3.00):.2f}`\n"
             f"• **Execution:** Instant Market Fill & 1-2s Polling\n"
             f"• **Active Limit:** `{max_trades}` concurrent trades\n"
-            f"• **Active Watchlist:** `{symbols_str}`",
+            f"• **Active Watchlist:** `{symbols_str}`\n"
+            f"• **Lot Sizing:** `{'AUTO (Dynamic)' if getattr(risk_mgr.config, 'lot_mode', 'auto') == 'auto' else f'MANUAL ({risk_mgr.get_manual_lot():.2f} lots)'}`",
             parse_mode="Markdown",
         )
     elif arg in ("on", "1", "true", "enable") or (sym_choice and arg in (sym_choice.lower(), "btc", "gold", "both", "all")):
@@ -1176,7 +1320,8 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **Execution Mode:** `{broker_mode}`\n"
             f"• **Strategy Profile:** `{getattr(config, 'CURRENT_PROFILE', 'scalp').upper()}`\n"
             f"• **Active Trade Limit:** `{max_trades}` concurrent positions\n"
-            f"• **Active Watchlist:** `{symbols_str}`",
+            f"• **Active Watchlist:** `{symbols_str}`\n"
+            f"• **Lot Sizing:** `{'AUTO (Dynamic)' if getattr(risk_mgr.config, 'lot_mode', 'auto') == 'auto' else f'MANUAL ({risk_mgr.get_manual_lot():.2f} lots)'}`",
             parse_mode="Markdown",
         )
     elif arg in ("off", "0", "false", "disable", "stop"):
@@ -1304,6 +1449,44 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
         except Exception:
             pass
         return
+
+    if data.startswith("lot:"):
+        if data == "lot:auto":
+            risk_mgr.set_auto_lot()
+            config.set_lot_size_mode("auto")
+            try:
+                await query.message.reply_text(
+                    "🟢 **Auto Lot Sizing Activated**\n• Orders will be sized dynamically based on account equity, risk % and stop loss distance.",
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                await query.message.reply_text("Auto Lot Sizing Activated.")
+        elif data.startswith("lot:manual:"):
+            val_str = data.split(":", 2)[2]
+            try:
+                val = float(val_str)
+                risk_mgr.set_manual_lot(val)
+                config.set_manual_lot_size(val)
+                config.set_lot_size_mode("manual")
+                try:
+                    await query.message.reply_text(
+                        f"✏️ **Manual Lot Sizing Activated**\n• **Fixed Lot Size:** `{val:.4f}` lots globally.\n• Mode: `MANUAL`",
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    await query.message.reply_text(f"Manual lot set to {val} lots.")
+            except Exception as e:
+                await query.message.reply_text(f"Error setting lot size: {e}")
+        elif data in ("lot:refresh", "lot:info"):
+            pass
+
+        text, markup = build_lot_dashboard()
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            pass
+        return
+
 
     if data == "wl:btc":
         config.set_autotrade_symbols(["BTCUSDT"])
@@ -2554,11 +2737,12 @@ async def live_monitoring_worker(app):
                         logger.info("Autotrade: no setup — %s", why)
                     if sig:
                         order = engine.register_setup(sig, reason=sig.get("reason", ""))
+                        lot_mode_tag = " (Manual)" if getattr(order, "lot_mode", "auto") == "manual" else " (Auto)"
                         alert = (
                             f"⚡ **NEW MULTI-AGENT SETUP**\n"
                             f"`{symbol}` **{order.direction}**\n"
                             f"Entry `${order.entry_level:,.2f}` | SL `${order.stop_loss:,.2f}`\n"
-                            f"Lots `{order.lots}` | Lev `{order.leverage:.0f}x`\n"
+                            f"Lots `{order.lots}`{lot_mode_tag} | Lev `{order.leverage:.0f}x`\n"
                             f"_{order.setup_reason}_"
                         )
                         if config.TELEGRAM_CHAT_ID:
@@ -2766,6 +2950,47 @@ def run_cli_interactive():
                     print(f"Invalid leverage: {e}")
             else:
                 print(f"Current leverage: {risk_mgr.get_leverage():.0f}x")
+        elif name in ("lot", "lots", "lotsize"):
+            if len(parts) > 1:
+                sub = parts[1].lower()
+                if sub in ("auto", "dynamic", "risk"):
+                    risk_mgr.set_auto_lot()
+                    config.set_lot_size_mode("auto")
+                    print("Lot sizing mode set to AUTO (dynamic risk-based calculation)")
+                elif sub in ("manual", "fixed", "man"):
+                    if len(parts) > 2:
+                        try:
+                            val = float(parts[2])
+                            sym = parts[3].upper() if len(parts) > 3 else None
+                            ok, msg = risk_mgr.set_manual_lot(val, symbol=sym)
+                            if ok:
+                                config.set_manual_lot_size(val, symbol=sym)
+                                config.set_lot_size_mode("manual")
+                                print(f"Manual lot size set to {val:.4f} lots{' for ' + sym if sym else ''}")
+                            else:
+                                print(f"Error: {msg}")
+                        except Exception as e:
+                            print(f"Invalid lot size: {e}")
+                    else:
+                        risk_mgr.set_lot_mode("manual")
+                        config.set_lot_size_mode("manual")
+                        print(f"Lot sizing mode set to MANUAL ({risk_mgr.get_manual_lot():.4f} lots)")
+                else:
+                    try:
+                        val = float(sub)
+                        sym = parts[2].upper() if len(parts) > 2 else None
+                        ok, msg = risk_mgr.set_manual_lot(val, symbol=sym)
+                        if ok:
+                            config.set_manual_lot_size(val, symbol=sym)
+                            config.set_lot_size_mode("manual")
+                            print(f"Manual lot size set to {val:.4f} lots{' for ' + sym if sym else ''}")
+                        else:
+                            print(f"Error: {msg}")
+                    except ValueError:
+                        print("Usage: lot [auto | manual <size> [SYM] | <size> [SYM]]")
+            else:
+                m, l = risk_mgr.get_lot_mode()
+                print(f"Lot Sizing Mode: {m.upper()} (Manual lot: {l:.4f} lots)")
         elif name == "kill":
             try:
                 from advanced_integration import AdvancedEngine
@@ -3255,12 +3480,12 @@ def run_cli_interactive():
             print(f"⚠️ Native live broker '{name.upper()}' has been removed. MetaTrader 5 Live is the sole exclusive broker.")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], lot [CMD], kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
                 "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], mt5 [CMD]\n"
-                "🛡️ Risk: status, health, risk, leverage [LEV], kill [on|off]\n"
+                "🛡️ Risk: status, health, risk, leverage [LEV], lot [auto|manual|<size>], kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME]\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, relearn [SYM]\n"
                 "💬 Assistant: ask [TEXT], reset, exit"
@@ -3449,6 +3674,7 @@ def main():
                 BotCommand("risk", "Risk tier report, sizing & reset"),
                 BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
                 BotCommand("leverage", "Set or view leverage (1-200x, manual/auto)"),
+                BotCommand("lot", "Auto / Manual lot size selection"),
                 BotCommand("kill", "Emergency execution circuit breaker switch"),
                 BotCommand("mt5", "MetaTrader 5 live execution engine & dashboard"),
                 BotCommand("delta", "Delta Exchange status & controls (Crypto/Derivatives)"),
@@ -3531,6 +3757,7 @@ def main():
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler(["resetrisk", "riskreset"], resetrisk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
+    app.add_handler(CommandHandler(["lot", "lots", "lotsize"], lot_command))
     try:
         from telegram_advanced import kill_command
         app.add_handler(CommandHandler("kill", kill_command))

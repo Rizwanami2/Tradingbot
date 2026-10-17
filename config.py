@@ -6,7 +6,8 @@ Loads configuration from environment variables and an optional .env file.
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
+
 
 
 def load_dotenv(env_path: str = ".env"):
@@ -100,6 +101,97 @@ DEFAULT_RISK_PCT = _safe_float(os.getenv("BOT_RISK"), 0.20)
 DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
 AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false").lower() in ("true", "1", "yes", "on")
 AUTOTRADE_LIVE_OPT_IN = os.getenv("BOT_AUTOTRADE_LIVE_OPT_IN", "false").lower() in ("true", "1", "yes", "on")
+
+# Auto vs Manual Lot Sizing: "auto" (dynamic risk-based) or "manual" (fixed lot size)
+LOT_SIZE_MODE = (os.getenv("BOT_LOT_MODE") or os.getenv("LOT_SIZE_MODE") or "auto").lower()
+DEFAULT_MANUAL_LOT = _safe_float(os.getenv("BOT_MANUAL_LOT") or os.getenv("BOT_LOT_SIZE"), 0.01)
+MANUAL_LOT_SIZES: Dict[str, float] = {}
+
+_LOT_SETTINGS_PERSIST_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".runtime",
+    "lot_settings.json",
+)
+
+
+def _load_persisted_lot_settings() -> dict:
+    try:
+        p = Path(_LOT_SETTINGS_PERSIST_FILE)
+        if p.is_file():
+            import json
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_persisted_lot_settings(payload: dict) -> None:
+    try:
+        p = Path(_LOT_SETTINGS_PERSIST_FILE)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        from datetime import datetime, timezone
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
+def get_lot_size_mode() -> str:
+    """Return currently active lot size mode: 'auto' or 'manual'."""
+    global LOT_SIZE_MODE
+    return LOT_SIZE_MODE if LOT_SIZE_MODE in ("auto", "manual") else "auto"
+
+
+def set_lot_size_mode(mode: str, persist: bool = True) -> str:
+    """Set lot size mode ('auto' or 'manual')."""
+    global LOT_SIZE_MODE
+    m = str(mode or "").strip().lower()
+    if m in ("manual", "fixed", "man"):
+        LOT_SIZE_MODE = "manual"
+    else:
+        LOT_SIZE_MODE = "auto"
+    if persist:
+        cur = _load_persisted_lot_settings()
+        cur["mode"] = LOT_SIZE_MODE
+        _save_persisted_lot_settings(cur)
+    return LOT_SIZE_MODE
+
+
+def get_manual_lot_size(symbol: Optional[str] = None) -> float:
+    """Return configured manual lot size for symbol or global default."""
+    global DEFAULT_MANUAL_LOT, MANUAL_LOT_SIZES
+    if symbol:
+        sym_norm = normalize_trade_symbol(symbol)
+        if sym_norm in MANUAL_LOT_SIZES:
+            return MANUAL_LOT_SIZES[sym_norm]
+        sym_raw = symbol.upper()
+        if sym_raw in MANUAL_LOT_SIZES:
+            return MANUAL_LOT_SIZES[sym_raw]
+    return float(DEFAULT_MANUAL_LOT or 0.01)
+
+
+def set_manual_lot_size(lot: float, symbol: Optional[str] = None, persist: bool = True) -> float:
+    """Set fixed manual lot size globally or for a specific symbol."""
+    global DEFAULT_MANUAL_LOT, MANUAL_LOT_SIZES
+    val = max(0.001, round(float(lot), 4))
+    if symbol:
+        sym_norm = normalize_trade_symbol(symbol)
+        MANUAL_LOT_SIZES[sym_norm] = val
+        MANUAL_LOT_SIZES[symbol.upper()] = val
+    else:
+        DEFAULT_MANUAL_LOT = val
+    if persist:
+        cur = _load_persisted_lot_settings()
+        cur["default_manual_lot"] = DEFAULT_MANUAL_LOT
+        cur["manual_lot_sizes"] = dict(MANUAL_LOT_SIZES)
+        _save_persisted_lot_settings(cur)
+    return val
+
 
 
 STATUS_FILE = os.getenv(
@@ -269,6 +361,14 @@ if "pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"):
     _persisted = _load_persisted_watchlist()
     if _persisted:
         AUTOTRADE_SYMBOLS = _persisted
+    _persisted_lots = _load_persisted_lot_settings()
+    if _persisted_lots.get("mode"):
+        LOT_SIZE_MODE = _persisted_lots["mode"]
+    if _persisted_lots.get("default_manual_lot"):
+        DEFAULT_MANUAL_LOT = float(_persisted_lots["default_manual_lot"])
+    if isinstance(_persisted_lots.get("manual_lot_sizes"), dict):
+        MANUAL_LOT_SIZES.update(_persisted_lots["manual_lot_sizes"])
+
 
 
 SCALP_TAKE_PROFIT_USD = _safe_float(os.getenv("BOT_SCALP_TP_USD"), 2.5)

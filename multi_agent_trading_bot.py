@@ -615,6 +615,7 @@ class Arbiter:
             "symbol": symbol,
             "is_scalp": bool(getattr(self, "is_scalp", False)),
             "fast_market_fill": bool(getattr(self, "fast_market_fill", False)),
+            "lot_mode": getattr(plan, "lot_mode", "auto"),
         }
         status_msg = (
             f"⚡ SCALP {direction.name} score={score:.2f} (micro SL/TP)"

@@ -20,7 +20,7 @@ Features:
 Educational only. Not financial advice.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Optional, Dict, Tuple, Any
 from enum import Enum
 from datetime import date
@@ -107,6 +107,10 @@ class RiskConfig:
     rf_auto: bool = True              # auto-adjust RF from performance
     rf_up_on_exp: float = 0.05        # raise RF when expectancy is good
     rf_down_on_loss: float = 0.08     # lower RF after consecutive losses
+    # Lot Sizing Mode: "auto" (dynamic risk-based) or "manual" (fixed lot size)
+    lot_mode: str = "auto"
+    manual_lot_size: float = 0.01
+    manual_lot_sizes: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -128,6 +132,7 @@ class TradeRiskResult:
     margin_required: float = 0.0
     notional_value: float = 0.0
     liquidation_price: Optional[float] = None
+    lot_mode: str = "auto"
 
 
 @dataclass
@@ -147,6 +152,9 @@ class RiskState:
     mode: str = "normal"
     rf: float = 1.0
     leverage: float = 20.0
+    lot_mode: str = "auto"
+    manual_lot_size: float = 0.01
+
 
 
 class RiskManager:
@@ -160,7 +168,24 @@ class RiskManager:
         self.config = config or RiskConfig()
         self.set_symbol(symbol)
         self.state_file = state_file
-        self.state = RiskState(equity=equity, peak_equity=equity, leverage=self.config.leverage)
+        try:
+            import config
+            if hasattr(config, "get_lot_size_mode"):
+                self.config.lot_mode = config.get_lot_size_mode()
+            if hasattr(config, "get_manual_lot_size"):
+                self.config.manual_lot_size = config.get_manual_lot_size()
+            if hasattr(config, "MANUAL_LOT_SIZES") and isinstance(config.MANUAL_LOT_SIZES, dict):
+                self.config.manual_lot_sizes.update(config.MANUAL_LOT_SIZES)
+        except Exception:
+            pass
+
+        self.state = RiskState(
+            equity=equity,
+            peak_equity=equity,
+            leverage=self.config.leverage,
+            lot_mode=self.config.lot_mode,
+            manual_lot_size=self.config.manual_lot_size,
+        )
         self._load_state()
         # Clamp persisted settings too: older state files may contain leverage
         # values above the current configured ceiling.
@@ -229,6 +254,99 @@ class RiskManager:
     def get_leverage(self) -> float:
         return getattr(self.state, "leverage", self.config.leverage)
 
+    def get_lot_mode(self, symbol: Optional[str] = None) -> Tuple[str, float]:
+        """Returns (mode, effective_manual_lot_size). Mode is 'auto' or 'manual'."""
+        mode = getattr(self.config, "lot_mode", "auto")
+        lot = self.get_manual_lot(symbol)
+        return mode, lot
+
+    def get_manual_lot(self, symbol: Optional[str] = None) -> float:
+        """Returns manual lot for a given symbol or global default."""
+        sym = (symbol or self.symbol or "").upper().replace("/", "").replace("-", "")
+        if hasattr(self.config, "manual_lot_sizes") and isinstance(self.config.manual_lot_sizes, dict):
+            if sym in self.config.manual_lot_sizes:
+                return float(self.config.manual_lot_sizes[sym])
+        return float(getattr(self.config, "manual_lot_size", 0.01) or 0.01)
+
+    def set_lot_mode(
+        self,
+        mode: str,
+        lot_size: Optional[float] = None,
+        symbol: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Set lot size mode ('auto' or 'manual') and optional manual lot size."""
+        m = (mode or "").strip().lower()
+        if m in ("auto", "dynamic", "risk"):
+            self.config.lot_mode = "auto"
+            self.state.lot_mode = "auto"
+            self._save_state()
+            return True, "Lot sizing mode set to AUTO (dynamic risk-based calculation)."
+        elif m in ("manual", "fixed", "man"):
+            self.config.lot_mode = "manual"
+            self.state.lot_mode = "manual"
+            if lot_size is not None:
+                ok, msg = self.set_manual_lot(lot_size, symbol=symbol)
+                if not ok:
+                    return False, msg
+            self._save_state()
+            curr_lot = self.get_manual_lot(symbol)
+            target_str = f" for {symbol.upper()}" if symbol else ""
+            return True, f"Lot sizing mode set to MANUAL ({curr_lot:.4f} lots{target_str})."
+        else:
+            return False, f"Unknown lot mode '{mode}'. Choose 'auto' or 'manual'."
+
+    def set_manual_lot(self, lot: float, symbol: Optional[str] = None) -> Tuple[bool, str]:
+        """Set fixed manual lot size (and switch lot mode to manual)."""
+        try:
+            val = float(lot)
+        except (ValueError, TypeError):
+            return False, f"Invalid lot size '{lot}'. Must be a positive number."
+        if not math.isfinite(val) or val <= 0:
+            return False, f"Lot size must be greater than 0 (got {val})."
+
+        if symbol:
+            sym_clean = symbol.upper().replace("/", "").replace("-", "")
+            p = INSTRUMENTS.get(sym_clean, INSTRUMENTS.get("DEFAULT", self.profile))
+            min_lot = p.get("min_lot", 0.01)
+            step = p.get("lot_step", 0.01)
+            target_str = f" for {sym_clean}"
+            target_name = sym_clean
+        else:
+            sym_clean = None
+            p = self.profile
+            min_lot = self.config.min_lot_override or p.get("min_lot", 0.01)
+            step = p.get("lot_step", 0.01)
+            target_str = " globally"
+            target_name = self.symbol
+
+        max_lot = self.config.max_lot
+        if val < min_lot:
+            return False, f"Lot size {val} is below minimum allowed lot ({min_lot}) for {target_name}."
+        if val > max_lot:
+            return False, f"Lot size {val} exceeds maximum allowed lot ({max_lot})."
+
+        quantized = round(math.floor(val / step) * step, 4)
+        if quantized < min_lot:
+            quantized = min_lot
+
+        if sym_clean:
+            if not hasattr(self.config, "manual_lot_sizes") or not isinstance(self.config.manual_lot_sizes, dict):
+                self.config.manual_lot_sizes = {}
+            self.config.manual_lot_sizes[sym_clean] = quantized
+        else:
+            self.config.manual_lot_size = quantized
+            self.state.manual_lot_size = quantized
+
+        self.config.lot_mode = "manual"
+        self.state.lot_mode = "manual"
+        self._save_state()
+        return True, f"Manual lot size set to {quantized:.4f} lots{target_str}."
+
+    def set_auto_lot(self) -> Tuple[bool, str]:
+        """Switch lot mode to auto."""
+        return self.set_lot_mode("auto")
+
+
     def calc_margin(self, notional_value: float, leverage: Optional[float] = None) -> float:
         lev = leverage or self.get_leverage()
         return notional_value / max(lev, 1.0)
@@ -272,6 +390,14 @@ class RiskManager:
             self.state.total_wins = 0
         if not hasattr(self.state, "total_trades") or self.state.total_trades is None:
             self.state.total_trades = 0
+        if getattr(self.state, "lot_mode", None):
+            self.config.lot_mode = self.state.lot_mode
+        if getattr(self.state, "manual_lot_size", None):
+            try:
+                self.config.manual_lot_size = float(self.state.manual_lot_size)
+            except (ValueError, TypeError):
+                pass
+
 
     def _save_state(self):
         try:
@@ -470,6 +596,14 @@ class RiskManager:
         if stop_pips <= 0 or pip_value <= 0:
             return 0.0, stop_pips, pip_value
 
+        if getattr(self.config, "lot_mode", "auto") == "manual":
+            raw_lot = self.get_manual_lot(self.symbol)
+            lots = math.floor(raw_lot / step) * step
+            lots = max(min_lot, min(max_lot, lots))
+            if lots < min_lot:
+                lots = 0.0
+            return round(lots, 4), round(stop_pips, 2), pip_value
+
         lots = risk_amount / (stop_pips * pip_value)
         lots = math.floor(lots / step) * step
         lots = max(min_lot, min(max_lot, lots))
@@ -538,15 +672,22 @@ class RiskManager:
                 mode=self.state.mode, reason="invalid stop", symbol=self.symbol
             )
 
+        is_manual = getattr(self.config, "lot_mode", "auto") == "manual"
         risk_pct, reason = self.current_risk_pct()
+        if is_manual:
+            reason = f"manual lot ({self.get_manual_lot(self.symbol)})"
         risk_amount = self.state.equity * (risk_pct / 100.0)
         lots, stop_pips, pip_value = self.calc_lots(risk_amount, stop_dist)
-        unit_size = risk_amount / stop_dist if stop_dist > 0 else 0.0
+        if is_manual:
+            risk_amount = round(lots * stop_pips * pip_value, 2)
+            risk_pct = round((risk_amount / self.state.equity) * 100.0, 2) if self.state.equity > 0 else 0.0
+
+        contract_size = self.profile.get("contract_size", 100)
+        unit_size = (risk_amount / stop_dist) if (stop_dist > 0 and not is_manual) else (lots * contract_size)
         direction = "long" if entry > stop else "short"
         tps = self.take_profits(entry, stop, direction)
 
         lev = self.get_leverage()
-        contract_size = self.profile.get("contract_size", 100)
         notional_value = round(lots * contract_size * entry, 2)
         margin_required = round(self.calc_margin(notional_value, lev), 2)
 
@@ -602,6 +743,7 @@ class RiskManager:
             margin_required=margin_required,
             notional_value=notional_value,
             liquidation_price=liq_price,
+            lot_mode="manual" if is_manual else "auto",
         )
 
     def take_profits(self, entry: float, stop: float, direction: str = "long") -> Dict[str, float]:
@@ -869,6 +1011,7 @@ class RiskManager:
             "tp2_close_pct": self.config.tp2_close_pct,
             "mode": res.mode,
             "reason": res.reason,
+            "lot_mode": getattr(res, "lot_mode", "auto"),
         }
 
     def summary(self) -> str:
@@ -878,11 +1021,15 @@ class RiskManager:
         dd = (s.peak_equity - s.equity) / s.peak_equity * 100 if s.peak_equity else 0
         rf = getattr(s, "rf", self.config.rf)
         lev = getattr(s, "leverage", self.config.leverage)
+        lot_str = f"Lot:{self.config.lot_mode.upper()}"
+        if self.config.lot_mode == "manual":
+            lot_str += f"({self.get_manual_lot():.2f})"
         return (
             f"Eq:{s.equity:.2f} Peak:{s.peak_equity:.2f} DD:{dd:.1f}% | "
-            f"Risk:{risk:.2f}% RF×{rf:.2f} Lev:{lev:.0f}x ({reason}) Mode:{s.mode} | "
+            f"Risk:{risk:.2f}% RF×{rf:.2f} Lev:{lev:.0f}x ({reason}) {lot_str} Mode:{s.mode} | "
             f"DayPnL:{s.daily_pnl:.2f} | CanTrade:{ok} ({why}) | Symbol:{self.symbol}"
         )
+
 
 
 def lots_for_risk(equity: float, risk_pct: float, entry: float, stop: float, symbol: str = "XAUUSD") -> float:

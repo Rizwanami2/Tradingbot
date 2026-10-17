@@ -86,6 +86,7 @@ def run_signal(
                     sig["margin_required"] = plan.margin_required
                     sig["risk_amount"] = plan.risk_amount
                     sig["leverage"] = plan.leverage or lev
+                    sig["lot_mode"] = getattr(plan, "lot_mode", "auto")
                     lots, size = float(sig["lots"]), float(sig["size"])
             if size <= 0 and lots > 0:
                 sig["size"] = lots

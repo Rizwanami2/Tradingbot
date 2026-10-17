@@ -188,17 +188,18 @@ async def live_monitoring_worker(
                                 logger.info("Autotrade %s: register blocked — %s", symbol, reg_err)
                                 continue
                             is_scalp_order = getattr(engine, "scalp_mode", False) or getattr(order, "is_scalp", False)
+                            lot_tag = " (Manual)" if getattr(order, "lot_mode", "auto") == "manual" else " (Auto)"
                             alert = (
                                 f"⚡ **NEW SCALP SETUP** ({open_n + 1}/{max_open})\n"
                                 f"`{symbol}` **{order.direction}** @ `${order.entry_level:,.2f}`\n"
                                 f"Micro SL `${order.stop_loss:,.2f}` | Micro TP `${order.tp1:,.2f}`\n"
-                                f"Lots `{order.lots}` | Lev `{order.leverage:.0f}x`\n"
+                                f"Lots `{order.lots}`{lot_tag} | Lev `{order.leverage:.0f}x`\n"
                                 f"_{order.setup_reason}_"
                             ) if is_scalp_order else (
                                 f"⚡ **NEW MULTI-AGENT SETUP** ({open_n + 1}/{max_open})\n"
                                 f"`{symbol}` **{order.direction}**\n"
                                 f"Entry `${order.entry_level:,.2f}` | SL `${order.stop_loss:,.2f}`\n"
-                                f"Lots `{order.lots}` | Lev `{order.leverage:.0f}x`\n"
+                                f"Lots `{order.lots}`{lot_tag} | Lev `{order.leverage:.0f}x`\n"
                                 f"_{order.setup_reason}_"
                             )
                             if config.TELEGRAM_CHAT_ID:
