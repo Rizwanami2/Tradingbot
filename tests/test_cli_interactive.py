@@ -1,12 +1,25 @@
 import io
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import config
 from main import run_cli_interactive, engine
 from execution_engine import TradeOrder, OrderStatus
 
 
 class TestCliInteractive(unittest.TestCase):
+    def setUp(self):
+        self._orig_broker = engine.broker
+        self._orig_positions = dict(engine.active_positions)
+        self._orig_setups = dict(engine.pending_setups)
+        self._orig_mt5_backend = getattr(config, "MT5_BACKEND", "auto")
+
+    def tearDown(self):
+        engine.broker = self._orig_broker
+        engine.active_positions = self._orig_positions
+        engine.pending_setups = self._orig_setups
+        config.MT5_BACKEND = self._orig_mt5_backend
+
     def test_cli_help_and_exit(self):
         input_data = io.StringIO("help\nexit\n")
         output_data = io.StringIO()
@@ -173,6 +186,34 @@ class TestCliInteractive(unittest.TestCase):
             run_cli_interactive()
         out = output_data.getvalue()
         self.assertIn("Commands: signal", out)
+
+    def test_cli_bridge_commands(self):
+        from bridge import ea_client
+        mock_status = MagicMock(return_value={"ok": True, "positions": 1, "volume": 0.05, "login": 778899})
+        with patch.object(ea_client, "status", mock_status):
+            input_data = io.StringIO("bridge\nbridge ping\nbridge on\nbridge off\nbridge dir /tmp/test_bridge\nexit\n")
+            output_data = io.StringIO()
+            with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+                run_cli_interactive()
+            out = output_data.getvalue()
+            self.assertIn("EA Bridge Status:", out)
+            self.assertIn("EA Bridge Ping: PONG", out)
+            self.assertIn("Switched to EA Bridge backend", out)
+            self.assertIn("Switched to Auto MT5 backend", out)
+            self.assertIn("EA Bridge directory updated to: /tmp/test_bridge", out)
+
+    def test_cli_mt5_bridge_and_backend(self):
+        from bridge import ea_client
+        mock_status = MagicMock(return_value={"ok": True, "positions": 0, "volume": 0.0, "login": 123456})
+        with patch.object(ea_client, "status", mock_status):
+            input_data = io.StringIO("mt5 bridge\nmt5 backend\nmt5 backend ea_bridge\nexit\n")
+            output_data = io.StringIO()
+            with patch("sys.stdin", input_data), patch("sys.stdout", output_data):
+                run_cli_interactive()
+            out = output_data.getvalue()
+            self.assertIn("EA Bridge Status:", out)
+            self.assertIn("Configured backend:", out)
+            self.assertIn("MT5 backend set to: ea_bridge", out)
 
 
 if __name__ == "__main__":

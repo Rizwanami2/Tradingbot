@@ -31,6 +31,8 @@ from main import (
     alpaca_command,
     ccxt_command,
     set_paper_wallet_balance,
+    bridge_command,
+    mt5_command,
 )
 from execution_engine import TradeOrder, OrderStatus
 
@@ -51,9 +53,17 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
 
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
         self.ctx.args = []
+        self._orig_broker = engine.broker
+        self._orig_positions = dict(engine.active_positions)
+        self._orig_setups = dict(engine.pending_setups)
+        self._orig_mt5_backend = getattr(config, "MT5_BACKEND", "auto")
 
     async def asyncTearDown(self):
         config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
+        engine.broker = self._orig_broker
+        engine.active_positions = self._orig_positions
+        engine.pending_setups = self._orig_setups
+        config.MT5_BACKEND = self._orig_mt5_backend
 
     async def test_help_command_full_catalog(self):
         self.ctx.args = []
@@ -527,6 +537,78 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         out = output_data.getvalue()
         self.assertIn("delta [CMD]", out)
         self.assertIn("Delta Exchange", out)
+
+    async def test_telegram_bridge_command_status(self):
+        from bridge import ea_client
+        mock_status = MagicMock(return_value={"ok": True, "positions": 2, "volume": 0.15, "login": 889900})
+        with patch.object(ea_client, "status", mock_status):
+            self.ctx.args = []
+            await bridge_command(self.update, self.ctx)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("MetaTrader 5 EA Bridge Dashboard", msg)
+            self.assertIn("889900", msg)
+            self.assertIn("0.15", msg)
+
+    async def test_telegram_bridge_command_ping_success(self):
+        from bridge import ea_client
+        mock_status = MagicMock(return_value={"ok": True, "positions": 0, "volume": 0.0, "login": 123456})
+        with patch.object(ea_client, "status", mock_status):
+            self.ctx.args = ["ping"]
+            await bridge_command(self.update, self.ctx)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("EA Bridge Ping: PONG", msg)
+            self.assertIn("Responsive", msg)
+
+    async def test_telegram_bridge_command_ping_fail(self):
+        from bridge import ea_client
+        mock_status = MagicMock(return_value={"ok": False, "error": "timeout", "hint": "Check EA"})
+        with patch.object(ea_client, "status", mock_status):
+            self.ctx.args = ["ping"]
+            await bridge_command(self.update, self.ctx)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("EA Bridge Ping Failed", msg)
+            self.assertIn("Check EA", msg)
+
+    async def test_telegram_bridge_command_dir(self):
+        self.ctx.args = ["dir", "/custom/ea/bridge/dir"]
+        await bridge_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("EA Bridge Directory Updated", msg)
+        self.assertIn("/custom/ea/bridge/dir", msg)
+
+    async def test_telegram_bridge_command_on_and_off(self):
+        self.ctx.args = ["on"]
+        await bridge_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("Switched to EA Bridge Backend", msg)
+        self.assertEqual(config.MT5_BACKEND, "ea_bridge")
+
+        self.ctx.args = ["off"]
+        await bridge_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("Switched to Auto MT5 Backend", msg)
+        self.assertEqual(config.MT5_BACKEND, "auto")
+
+    async def test_telegram_mt5_bridge_and_backend_subcommands(self):
+        from bridge import ea_client
+        mock_status = MagicMock(return_value={"ok": True, "positions": 0, "volume": 0.0, "login": 99999})
+        with patch.object(ea_client, "status", mock_status):
+            self.ctx.args = ["bridge"]
+            await mt5_command(self.update, self.ctx)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("MetaTrader 5 EA Bridge Dashboard", msg)
+
+            self.ctx.args = ["backend"]
+            await mt5_command(self.update, self.ctx)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("MT5 Backend Status", msg)
+
+            self.ctx.args = ["backend", "ea_bridge"]
+            await mt5_command(self.update, self.ctx)
+            msg = self.message.reply_text.call_args[0][0]
+            self.assertIn("MT5 Backend Updated", msg)
+            self.assertIn("ea_bridge", msg)
+            self.assertEqual(config.MT5_BACKEND, "ea_bridge")
 
 
 if __name__ == "__main__":

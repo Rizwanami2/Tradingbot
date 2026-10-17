@@ -29,6 +29,7 @@ import logging
 from datetime import datetime, timezone
 import os
 import sys
+import time
 from typing import Any, Dict, Optional, Tuple
 
 if sys.platform == "win32":
@@ -1993,12 +1994,174 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
 
+    elif sub in ("bridge", "ea"):
+        await bridge_command(update, ctx)
+
+    elif sub in ("backend", "driver"):
+        b = engine.broker
+        if len(args) > 1:
+            req_backend = args[1].lower()
+            if req_backend in ("ea_bridge", "bridge", "ea"):
+                set_target = "ea_bridge"
+            elif req_backend in ("gateway", "rest"):
+                set_target = "gateway"
+            elif req_backend in ("native",):
+                set_target = "native"
+            elif req_backend in ("auto", "default"):
+                set_target = "auto"
+            else:
+                await update.message.reply_text("Usage: `/mt5 backend [ea_bridge|native|gateway|auto]`", parse_mode="Markdown")
+                return
+            config.MT5_BACKEND = set_target
+            if b and hasattr(b, "backend"):
+                b.backend = set_target
+                b.connect()
+            cur_eff = getattr(b, "effective_backend", "N/A") if b else "N/A"
+            await update.message.reply_text(
+                f"🔧 **MT5 Backend Updated**\n"
+                f"• **Configured Backend:** `{set_target}`\n"
+                f"• **Active Effective Driver:** `{cur_eff}`\n"
+                f"• Execution routed via `{cur_eff}`.",
+                parse_mode="Markdown",
+            )
+        else:
+            cur_cfg = getattr(config, "MT5_BACKEND", "auto")
+            cur_eff = getattr(b, "effective_backend", "N/A") if b else "N/A"
+            await update.message.reply_text(
+                f"🔧 **MT5 Backend Status**\n"
+                f"• **Configured Backend:** `{cur_cfg}`\n"
+                f"• **Active Effective Driver:** `{cur_eff}`\n\n"
+                f"💡 Change backend: `/mt5 backend [ea_bridge|native|gateway|auto]`",
+                parse_mode="Markdown",
+            )
+
     else:
         text, markup = build_mt5_dashboard()
         try:
             await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
         except Exception:
             await update.message.reply_text(text.replace("*", "").replace("`", ""), reply_markup=markup)
+
+
+async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """EA Bridge management: /bridge [status|ping|on|off|dir <path>]"""
+    from bridge import ea_client
+    args = ctx.args or []
+    sub = args[0].lower() if args else "status"
+    b = engine.broker
+    magic = getattr(b, "magic", 112233) if b else 112233
+
+    if sub in ("ping", "test"):
+        t0 = time.time()
+        res = ea_client.status(magic=magic, timeout=5.0)
+        elapsed = (time.time() - t0) * 1000.0
+        if res.get("ok"):
+            await update.message.reply_text(
+                f"🏓 **EA Bridge Ping: PONG ({elapsed:.1f}ms)**\n"
+                f"• **Status:** 🟢 Responsive\n"
+                f"• **MT5 Login:** `{res.get('login', 'N/A')}`\n"
+                f"• **Open Positions:** `{res.get('positions', 0)}` (Vol: `{res.get('volume', 0.0):.2f}`)\n"
+                f"• **Directory:** `{ea_client.BRIDGE_DIR}`",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                f"⚠️ **EA Bridge Ping Failed ({elapsed:.1f}ms)**\n"
+                f"• **Error:** `{res.get('error', 'timeout')}`\n"
+                f"• **Command File:** `{ea_client.CMD_FILE}`\n"
+                f"• **Hint:** {res.get('hint', 'Ensure EA_Bridge is attached to chart and AutoTrading is ON')}",
+                parse_mode="Markdown",
+            )
+
+    elif sub in ("on", "enable", "switch", "connect"):
+        config.MT5_BACKEND = "ea_bridge"
+        if b and hasattr(b, "backend"):
+            b.backend = "ea_bridge"
+            b.connect()
+        else:
+            from mt5_broker import MT5Broker
+            engine.broker = MT5Broker(mode="live", backend="ea_bridge", magic=magic)
+        await update.message.reply_text(
+            f"🟢 **Switched to EA Bridge Backend**\n"
+            f"• **Broker Mode:** `mt5_live`\n"
+            f"• **Backend Driver:** `ea_bridge`\n"
+            f"• Orders will now be executed via `EA_Bridge.mq5` file-bridge.\n"
+            f"• Directory: `{ea_client.BRIDGE_DIR}`",
+            parse_mode="Markdown",
+        )
+
+    elif sub in ("off", "disable", "auto"):
+        config.MT5_BACKEND = "auto"
+        if b and hasattr(b, "backend"):
+            b.backend = "auto"
+            try:
+                b.connect()
+            except Exception as _e:
+                logger.warning("[Bridge] Reconnect to auto backend notice: %s", _e)
+        else:
+            try:
+                from mt5_broker import MT5Broker
+                engine.broker = MT5Broker(mode="live", backend="auto", magic=magic)
+            except Exception as _e:
+                logger.warning("[Bridge] Recreate auto backend broker notice: %s", _e)
+        eff = getattr(engine.broker, "effective_backend", "auto") if engine.broker else "auto"
+        await update.message.reply_text(
+            f"⚪ **Switched to Auto MT5 Backend**\n"
+            f"• **Backend Driver:** `{eff}`\n"
+            f"• Standard native / gateway / cloud execution restored.",
+            parse_mode="Markdown",
+        )
+
+    elif sub in ("dir", "path", "setdir"):
+        if len(args) > 1:
+            new_path = " ".join(args[1:])
+            ea_client.set_bridge_dir(new_path)
+            config.EA_BRIDGE_DIR = new_path
+            await update.message.reply_text(
+                f"📁 **EA Bridge Directory Updated**\n"
+                f"• **New Directory:** `{new_path}`\n"
+                f"• **Commands:** `{ea_client.CMD_FILE}`\n"
+                f"• **Responses:** `{ea_client.RSP_FILE}`",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                f"📁 **EA Bridge Directory**\n"
+                f"• `{ea_client.BRIDGE_DIR}`\n"
+                f"Update path: `/bridge dir <path_to_common_files>`",
+                parse_mode="Markdown",
+            )
+
+    else:
+        # Default: status dashboard
+        cur_eff = getattr(b, "effective_backend", "N/A") if b else "N/A"
+        cur_backend = getattr(b, "backend", getattr(config, "MT5_BACKEND", "auto")) if b else "auto"
+        res = ea_client.status(magic=magic, timeout=2.0)
+        is_responsive = res.get("ok", False)
+        status_icon = "🟢 Responsive" if is_responsive else "⚪ Awaiting MT5 EA"
+        lines = [
+            f"🌉 **MetaTrader 5 EA Bridge Dashboard**",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"• **Configured Backend:** `{cur_backend}`",
+            f"• **Effective Driver:** `{cur_eff}`",
+            f"• **EA Heartbeat:** {status_icon}",
+            f"• **Magic Identifier:** `{magic}`",
+            f"• **Bridge Directory:** `{ea_client.BRIDGE_DIR}`",
+            f"• **Commands File:** `{'Found' if ea_client.CMD_FILE.exists() else 'Ready'}`",
+            f"• **Responses File:** `{'Found' if ea_client.RSP_FILE.exists() else 'Waiting'}`",
+        ]
+        if is_responsive:
+            lines.append(f"• **MT5 Account Login:** `{res.get('login', 'N/A')}`")
+            lines.append(f"• **EA Active Positions:** `{res.get('positions', 0)}` (Vol: `{res.get('volume', 0.0):.2f}` lots)")
+        lines.extend([
+            f"",
+            f"**Controls:**",
+            f"• `/bridge ping` — Ping chart EA for latency",
+            f"• `/bridge on` — Switch active broker to EA Bridge",
+            f"• `/bridge off` — Switch active broker back to auto",
+            f"• `/bridge dir <path>` — Change MT5 common directory",
+        ])
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def switch_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3289,8 +3452,125 @@ def run_cli_interactive():
                 if hasattr(engine, "reset_halt"):
                     engine.reset_halt()
                 print("MT5 execution halt cleared. All trading requests and order placements unblocked.")
+            elif sub in ("bridge", "ea"):
+                from bridge import ea_client
+                b = engine.broker
+                magic = getattr(b, "magic", 112233) if b else 112233
+                b_action = parts[2].lower() if len(parts) > 2 else "status"
+                if b_action in ("ping", "test"):
+                    t0 = time.time()
+                    res = ea_client.status(magic=magic, timeout=5.0)
+                    elapsed = (time.time() - t0) * 1000.0
+                    print(f"EA Bridge Ping: {'PONG' if res.get('ok') else 'FAIL'} ({elapsed:.1f}ms) | {res}")
+                elif b_action in ("on", "enable", "switch"):
+                    config.MT5_BACKEND = "ea_bridge"
+                    if b and hasattr(b, "backend"):
+                        b.backend = "ea_bridge"
+                        b.connect()
+                    else:
+                        from mt5_broker import MT5Broker
+                        engine.broker = MT5Broker(mode="live", backend="ea_bridge", magic=magic)
+                    print(f"Switched to EA Bridge backend (directory: {ea_client.BRIDGE_DIR})")
+                elif b_action in ("off", "disable", "auto"):
+                    config.MT5_BACKEND = "auto"
+                    if b and hasattr(b, "backend"):
+                        b.backend = "auto"
+                        try:
+                            b.connect()
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            from mt5_broker import MT5Broker
+                            engine.broker = MT5Broker(mode="live", backend="auto", magic=magic)
+                        except Exception:
+                            pass
+                    eff_name = getattr(engine.broker, 'effective_backend', 'auto') if engine.broker else 'auto'
+                    print(f"Switched to Auto MT5 backend (effective: {eff_name})")
+                elif b_action in ("dir", "path", "setdir"):
+                    if len(parts) > 3:
+                        new_d = " ".join(parts[3:])
+                        ea_client.set_bridge_dir(new_d)
+                        config.EA_BRIDGE_DIR = new_d
+                        print(f"EA Bridge directory updated to: {new_d}")
+                    else:
+                        print(f"EA Bridge directory: {ea_client.BRIDGE_DIR}")
+                else:
+                    cur_eff = getattr(b, "effective_backend", "N/A") if b else "N/A"
+                    res = ea_client.status(magic=magic, timeout=2.0)
+                    print(f"EA Bridge Status: {'Responsive' if res.get('ok') else 'Awaiting MT5 EA'} | Driver: {cur_eff} | Dir: {ea_client.BRIDGE_DIR} | Status: {res}")
+            elif sub in ("backend", "driver"):
+                b = engine.broker
+                if len(parts) > 2:
+                    tgt = parts[2].lower()
+                    if tgt in ("ea_bridge", "bridge", "ea"):
+                        tgt = "ea_bridge"
+                    elif tgt in ("gateway", "rest"):
+                        tgt = "gateway"
+                    elif tgt in ("native",):
+                        tgt = "native"
+                    elif tgt in ("auto", "default"):
+                        tgt = "auto"
+                    else:
+                        print("Usage: mt5 backend [ea_bridge|native|gateway|auto]")
+                        tgt = None
+                    if tgt:
+                        config.MT5_BACKEND = tgt
+                        if b and hasattr(b, "backend"):
+                            b.backend = tgt
+                            b.connect()
+                        print(f"MT5 backend set to: {tgt} (effective driver: {getattr(b, 'effective_backend', 'N/A')})")
+                else:
+                    print(f"Configured backend: {getattr(config, 'MT5_BACKEND', 'auto')} | Effective driver: {getattr(b, 'effective_backend', 'N/A')}")
             else:
-                print("Usage: mt5 [status|add|accounts|balance|switch|remove|live|paper|positions|check|reset]")
+                print("Usage: mt5 [status|add|accounts|balance|switch|remove|live|paper|positions|check|reset|bridge|backend]")
+        elif name in ("bridge", "ea"):
+            from bridge import ea_client
+            b = engine.broker
+            magic = getattr(b, "magic", 112233) if b else 112233
+            sub = parts[1].lower() if len(parts) > 1 else "status"
+            if sub in ("ping", "test"):
+                t0 = time.time()
+                res = ea_client.status(magic=magic, timeout=5.0)
+                elapsed = (time.time() - t0) * 1000.0
+                print(f"EA Bridge Ping: {'PONG' if res.get('ok') else 'FAIL'} ({elapsed:.1f}ms) | {res}")
+            elif sub in ("on", "enable", "switch"):
+                config.MT5_BACKEND = "ea_bridge"
+                if b and hasattr(b, "backend"):
+                    b.backend = "ea_bridge"
+                    b.connect()
+                else:
+                    from mt5_broker import MT5Broker
+                    engine.broker = MT5Broker(mode="live", backend="ea_bridge", magic=magic)
+                print(f"Switched to EA Bridge backend (directory: {ea_client.BRIDGE_DIR})")
+            elif sub in ("off", "disable", "auto"):
+                config.MT5_BACKEND = "auto"
+                if b and hasattr(b, "backend"):
+                    b.backend = "auto"
+                    try:
+                        b.connect()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        from mt5_broker import MT5Broker
+                        engine.broker = MT5Broker(mode="live", backend="auto", magic=magic)
+                    except Exception:
+                        pass
+                eff_name = getattr(engine.broker, 'effective_backend', 'auto') if engine.broker else 'auto'
+                print(f"Switched to Auto MT5 backend (effective: {eff_name})")
+            elif sub in ("dir", "path", "setdir"):
+                if len(parts) > 2:
+                    new_d = " ".join(parts[2:])
+                    ea_client.set_bridge_dir(new_d)
+                    config.EA_BRIDGE_DIR = new_d
+                    print(f"EA Bridge directory updated to: {new_d}")
+                else:
+                    print(f"EA Bridge directory: {ea_client.BRIDGE_DIR}")
+            else:
+                cur_eff = getattr(b, "effective_backend", "N/A") if b else "N/A"
+                res = ea_client.status(magic=magic, timeout=2.0)
+                print(f"EA Bridge Status: {'Responsive' if res.get('ok') else 'Awaiting MT5 EA'} | Driver: {cur_eff} | Dir: {ea_client.BRIDGE_DIR} | Status: {res}")
         elif name in ("switch", "switchbroker"):
             from mt5_accounts import get_account_manager, switch_broker_mode
             if len(parts) > 1:
@@ -3824,6 +4104,7 @@ def main():
     app.add_handler(CommandHandler(["balance", "wallet", "equity"], balance_command))
     app.add_handler(CommandHandler(["delta", "deltaindia"], delta_command))
     app.add_handler(CommandHandler("mt5", mt5_command))
+    app.add_handler(CommandHandler(["bridge", "ea"], bridge_command))
     app.add_handler(CommandHandler(["switch", "switchbroker"], switch_command))
     app.add_handler(CommandHandler(["live", "livetrade"], live_command))
     app.add_handler(CommandHandler("broker", broker_command))
