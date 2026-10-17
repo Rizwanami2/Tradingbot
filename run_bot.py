@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 def _ensure_execution_engine() -> None:
+    """Restore execution_engine.py if missing/empty without exiting the process."""
     target = ROOT / "execution_engine.py"
     restore = ROOT / "scripts" / "restore_execution_engine.py"
     try:
@@ -22,9 +23,21 @@ def _ensure_execution_engine() -> None:
             ok = "def register_setup" in sample or "ExecutionEngine" in sample
         if ok:
             return
-        if restore.is_file():
-            import runpy as _runpy
-            _runpy.run_path(str(restore), run_name="__main__")
+        if not restore.is_file():
+            print("[run_bot] WARNING: execution_engine.py missing and no restore script found")
+            return
+        # Import module and call main() — do NOT use run_name=__main__ (that sys.exit kills the bot)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_restore_execution_engine", restore)
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+        if hasattr(mod, "main"):
+            mod.main()
+        print("[run_bot] execution_engine restored; continuing startup...")
+    except SystemExit:
+        # restore scripts sometimes call sys.exit(0); ignore so bot keeps running
+        print("[run_bot] execution_engine restored; continuing startup...")
     except Exception as _heal_err:
         print(f"[run_bot] execution_engine self-heal failed: {_heal_err}")
 
