@@ -372,6 +372,9 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Paper Trading Removed", self.message.reply_text.call_args[0][0])
 
         # 2. List accounts callback
+        mgr = get_account_manager()
+        if not mgr.list_accounts():
+            mgr.add_account("100200300", "P@ssw0rd123", "Demo-Server", alias="mytestacc")
         self.message.reply_text.reset_mock()
         query.data = "mt5:list_accounts"
         await autotrade_callback_handler(self.update, self.ctx)

@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from execution import OrderStateUnknownError
 from risk_manager import RiskManager
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +198,16 @@ class ExecutionEngine:
         max_open_trades: Optional[int] = None,
         state_file: Optional[str] = None,
     ):
+        import config
         self.risk_manager = risk_manager
         self.event_callback = event_callback
+        is_test_env = (
+            "pytest" in sys.modules
+            or "unittest" in sys.modules
+            or bool(os.getenv("PYTEST_CURRENT_TEST"))
+            or bool(os.getenv("TESTING"))
+            or getattr(config, "TESTING", False)
+        )
         if broker is not None:
             self.broker = broker
         else:
@@ -224,7 +233,7 @@ class ExecutionEngine:
                     delta_max_leverage=getattr(config, "DELTA_EXCHANGE_MAX_LEVERAGE", 200.0),
                 )
             except Exception:
-                if "PYTEST_CURRENT_TEST" in os.environ or getattr(config, "TESTING", False):
+                if is_test_env:
                     b_m = str(getattr(config, "BROKER_MODE", "")).lower()
                     if "delta" in b_m:
                         from delta_broker import MockDeltaBroker
@@ -270,13 +279,17 @@ class ExecutionEngine:
             self.scalp_be_lock_usd = float(getattr(_cfg_tr, "SCALP_BE_LOCK_USD", 0.50))
         except Exception:
             pass
-        self.state_file: str = state_file or os.getenv("EXECUTION_STATE_FILE") or _DEFAULT_STATE_FILE
-        if state_file or (
-            "pytest" not in sys.modules
-            and not os.getenv("PYTEST_CURRENT_TEST")
-        ):
-            if os.path.isfile(self.state_file):
-                self.restore_state(self.state_file)
+        if state_file:
+            self.state_file: str = state_file
+        elif os.getenv("EXECUTION_STATE_FILE"):
+            self.state_file = os.environ["EXECUTION_STATE_FILE"]
+        elif not is_test_env:
+            self.state_file = _DEFAULT_STATE_FILE
+        else:
+            self.state_file = ""
+
+        if self.state_file and os.path.isfile(self.state_file):
+            self.restore_state(self.state_file)
 
     def reset_halt(self) -> None:
         """Clear execution halt state so setups can be registered again."""
@@ -334,7 +347,10 @@ class ExecutionEngine:
 
     def save_state(self, filepath: Optional[str] = None) -> str:
         """Persist current active positions, pending setups, and execution state to disk."""
-        target = Path(filepath or self.state_file or _DEFAULT_STATE_FILE)
+        target_path = filepath or self.state_file
+        if not target_path:
+            return ""
+        target = Path(target_path)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             data = {
@@ -355,7 +371,10 @@ class ExecutionEngine:
 
     def restore_state(self, filepath: Optional[str] = None) -> bool:
         """Restore active positions, pending setups, and execution state from disk."""
-        target = Path(filepath or self.state_file or _DEFAULT_STATE_FILE)
+        target_path = filepath or self.state_file
+        if not target_path:
+            return False
+        target = Path(target_path)
         if not target.is_file():
             return False
         try:

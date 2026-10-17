@@ -267,7 +267,7 @@ def main():
     parser.add_argument("--dir", default=None, help="Custom MT5 Common\\Files directory path")
     parser.add_argument("--magic", type=int, default=ea_client.DEFAULT_MAGIC, help="Magic number to test")
     parser.add_argument("--timeout", type=float, default=5.0, help="Response timeout in seconds")
-    parser.add_argument("--sim", action="store_true", help="Run with simulated EA in background")
+    parser.add_argument("--sim", "--simulate", dest="sim", action="store_true", help="Run with simulated EA in background")
     parser.add_argument("--json", action="store_true", help="Print result as JSON")
     args = parser.parse_args()
 

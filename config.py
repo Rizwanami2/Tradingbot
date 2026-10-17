@@ -359,7 +359,13 @@ AUTOTRADE_SYMBOLS = [
     if is_trading_allowed(s)
 ] or ["BTCUSDT", "XAUUSD"]
 
-if "pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"):
+if (
+    "pytest" not in sys.modules
+    and "unittest" not in sys.modules
+    and not os.getenv("PYTEST_CURRENT_TEST")
+    and not os.getenv("TESTING")
+    and not globals().get("TESTING", False)
+):
     _persisted = _load_persisted_watchlist()
     if _persisted:
         AUTOTRADE_SYMBOLS = _persisted

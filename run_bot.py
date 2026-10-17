@@ -19,8 +19,8 @@ def _ensure_execution_engine() -> None:
     try:
         ok = target.is_file() and target.stat().st_size > 1000
         if ok:
-            sample = target.read_text(encoding="utf-8", errors="replace")[:2000]
-            ok = "def register_setup" in sample or "ExecutionEngine" in sample
+            text = target.read_text(encoding="utf-8", errors="replace")
+            ok = "class ExecutionEngine" in text or "def register_setup" in text
         if ok:
             return
         if not restore.is_file():
