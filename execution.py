@@ -438,10 +438,12 @@ def create_broker_fail_closed(
             login = getattr(config, "MT5_LOGIN", 0) or 0
             password = getattr(config, "MT5_PASSWORD", "") or api_secret or ""
             server = getattr(config, "MT5_SERVER", "") or exchange_id or ""
-            if not login or not password or not server:
-                raise BrokerConfigurationError(
-                    "MT5 Live mode requested, but credentials (MT5_LOGIN, MT5_PASSWORD, MT5_SERVER) are missing."
-                )
+            backend = getattr(config, "MT5_BACKEND", "auto")
+            if str(backend).strip().lower() not in ("ea_bridge", "bridge", "ea"):
+                if not login or not password or not server:
+                    raise BrokerConfigurationError(
+                        "MT5 Live mode requested, but credentials (MT5_LOGIN, MT5_PASSWORD, MT5_SERVER) are missing."
+                    )
             from mt5_broker import MT5Broker
             return MT5Broker(
                 mode="live",
@@ -451,6 +453,7 @@ def create_broker_fail_closed(
                 path=getattr(config, "MT5_PATH", ""),
                 magic=getattr(config, "MT5_MAGIC", 112233),
                 gateway_url=getattr(config, "MT5_GATEWAY_URL", ""),
+                backend=backend,
                 initial_balance=initial_balance,
             )
         except Exception as exc:
@@ -655,16 +658,17 @@ def create_broker(
     """Factory creating exclusive MT5 Live broker with fail-closed safety."""
     from mt5_broker import MT5Broker
 
+    try:
+        import config as _cfg
+    except Exception:
+        _cfg = None
+
     effective_mode = (broker_mode or "").strip().lower()
     if effective_mode == "mt5":
         effective_mode = "mt5_live"
 
     def _make_delta():
         from delta_broker import DeltaBroker
-        try:
-            import config as _cfg
-        except Exception:
-            _cfg = None
         k = delta_api_key or api_key or getattr(_cfg, "DELTA_EXCHANGE_API_KEY", "") or getattr(_cfg, "EXCHANGE_API_KEY", "")
         s = delta_api_secret or api_secret or getattr(_cfg, "DELTA_EXCHANGE_API_SECRET", "") or getattr(_cfg, "EXCHANGE_API_SECRET", "")
         t = delta_testnet or (effective_mode == "delta_testnet") or getattr(_cfg, "DELTA_EXCHANGE_TESTNET", False)
@@ -696,6 +700,7 @@ def create_broker(
             magic=mt5_magic,
             path=mt5_path,
             gateway_url=mt5_gateway_url,
+            backend=getattr(_cfg, "MT5_BACKEND", "auto") if _cfg else "auto",
             initial_balance=initial_balance,
         ),
         delta_factory=_make_delta,

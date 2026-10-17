@@ -58,6 +58,7 @@ void ProcessCommands()
    long   magic  = (long)JNum(raw, "magic");
    if(magic == 0)
       magic = MagicNumber;
+   ulong  ticket = (ulong)JNum(raw, "ticket");
 
    StringToUpper(action);
 
@@ -67,7 +68,11 @@ void ProcessCommands()
    else if(action == "SELL")
       result = DoTrade(ORDER_TYPE_SELL, symbol, volume, sl, tp, magic);
    else if(action == "CLOSE_ALL")
-      result = CloseAll(magic);
+      result = ClosePosition("", 0, magic);
+   else if(action == "CLOSE" || action == "CLOSE_POSITION")
+      result = ClosePosition(symbol, ticket, magic);
+   else if(action == "MODIFY" || action == "SLTP")
+      result = ModifyPosition(symbol, ticket, sl, tp, magic);
    else if(action == "STATUS")
       result = StatusJSON(magic);
    else
@@ -182,7 +187,7 @@ string DoTrade(ENUM_ORDER_TYPE type, string symbol, double volume, double sl, do
 }
 
 //+------------------------------------------------------------------+
-string CloseAll(long magic)
+string ClosePosition(string symbol, ulong ticket_filter, long magic)
 {
    int closed = 0;
 
@@ -193,10 +198,15 @@ string CloseAll(long magic)
          continue;
       if(!PositionSelectByTicket(ticket))
          continue;
-      if(PositionGetInteger(POSITION_MAGIC) != magic)
+      if(magic > 0 && PositionGetInteger(POSITION_MAGIC) != magic)
+         continue;
+      if(ticket_filter > 0 && ticket != ticket_filter)
          continue;
 
       string sym   = PositionGetString(POSITION_SYMBOL);
+      if(symbol != "" && sym != symbol)
+         continue;
+
       double vol   = PositionGetDouble(POSITION_VOLUME);
       long   ptype = PositionGetInteger(POSITION_TYPE);
 
@@ -246,6 +256,48 @@ string CloseAll(long magic)
    }
 
    return StringFormat("{\"ok\":true,\"closed\":%d}", closed);
+}
+
+string CloseAll(long magic)
+{
+   return ClosePosition("", 0, magic);
+}
+
+string ModifyPosition(string symbol, ulong ticket_filter, double sl, double tp, long magic)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(magic > 0 && PositionGetInteger(POSITION_MAGIC) != magic)
+         continue;
+      if(ticket_filter > 0 && ticket != ticket_filter)
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      if(symbol != "" && sym != symbol)
+         continue;
+
+      MqlTradeRequest req;
+      MqlTradeResult  res;
+      ZeroMemory(req);
+      ZeroMemory(res);
+
+      req.action   = TRADE_ACTION_SLTP;
+      req.position = ticket;
+      req.symbol   = sym;
+      req.sl       = sl;
+      req.tp       = tp;
+
+      if(OrderSend(req, res) && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_DONE_PARTIAL))
+         return StringFormat("{\"ok\":true,\"modified\":true,\"ticket\":%I64d}", ticket);
+      else
+         return StringFormat("{\"ok\":false,\"error\":\"%s\",\"retcode\":%d}", res.comment, res.retcode);
+   }
+   return "{\"ok\":false,\"error\":\"position not found\"}";
 }
 
 //+------------------------------------------------------------------+

@@ -172,6 +172,7 @@ class MT5Broker(Broker):
         initial_balance: Optional[float] = None,
         commission_pct: float = 0.0004,
         gateway_url: str = "",
+        backend: Optional[str] = None,
     ):
         req_mode = str(mode or "live").strip().lower()
         if req_mode in ("paper", "demo", "sim"):
@@ -186,13 +187,15 @@ class MT5Broker(Broker):
         self.magic = int(magic or 112233)
         self.commission_pct = float(commission_pct or 0.0004)
         self.gateway_url = str(gateway_url or "").strip()
+        raw_backend = backend or getattr(config, "MT5_BACKEND", "auto") or os.getenv("MT5_BACKEND", "auto")
+        self.backend = str(raw_backend or "auto").strip().lower()
+        self.effective_backend: str = "auto"
 
         # Balance & Account state
         if initial_balance is not None and float(initial_balance) > 0:
             resolved_balance = float(initial_balance)
         else:
             try:
-                import config
                 resolved_balance = float(
                     getattr(config, "MT5_BALANCE", None)
                     or getattr(config, "INITIAL_EQUITY", None)
@@ -274,10 +277,43 @@ class MT5Broker(Broker):
         return max(0.0, round(self.equity - self.margin, 2))
 
     def connect(self) -> bool:
-        """Initialize connection to MT5 terminal or simulated broker engine."""
+        """Initialize connection to MT5 terminal, EA bridge, or cloud broker engine."""
         self._last_error = ""
 
+        # Determine effective backend: "ea_bridge" | "native" | "gateway" | "cloud"
+        if self.backend in ("ea_bridge", "bridge", "ea"):
+            self.effective_backend = "ea_bridge"
+        elif self.backend == "native":
+            self.effective_backend = "native"
+        elif self.backend in ("gateway", "rest"):
+            self.effective_backend = "gateway"
+        else:  # "auto"
+            if self.gateway_url:
+                self.effective_backend = "gateway"
+            elif native_mt5 is not None:
+                self.effective_backend = "native"
+            else:
+                self.effective_backend = "cloud"
+
         if self.mode == "live":
+            # EA Bridge backend handles execution through attached chart EA
+            if self.effective_backend == "ea_bridge":
+                try:
+                    from bridge import ea_client
+                    self.ea_client = ea_client
+                except Exception as exc:
+                    self._connected = False
+                    self._last_error = f"EA Bridge client import failed: {exc}"
+                    logger.error("[MT5Broker] %s", self._last_error)
+                    raise BrokerConfigurationError(self._last_error) from exc
+                self._connected = True
+                self._last_error = ""
+                logger.info(
+                    "[MT5Broker] Connected to MT5 via EA File-Bridge backend (magic=%s, dir=%s)",
+                    self.magic, getattr(self.ea_client, "BRIDGE_DIR", "default")
+                )
+                return True
+
             # Live mode validation
             if not self.login or not self.password or not self.server:
                 self._connected = False
@@ -285,7 +321,7 @@ class MT5Broker(Broker):
                 logger.error("[MT5Broker] %s", self._last_error)
                 raise BrokerConfigurationError(self._last_error)
 
-            if native_mt5 is not None:
+            if native_mt5 is not None and self.effective_backend != "gateway":
                 try:
                     mt5_exe = self.path or getattr(config, "MT5_PATH", "") or getattr(config, "find_default_mt5_path", lambda: "")()
                     init_kwargs = {"path": mt5_exe} if mt5_exe else {}
@@ -415,7 +451,57 @@ class MT5Broker(Broker):
         fill_price = float(price) if price is not None and price > 0 else 100.0
 
         if self.mode == "live" and self._connected:
-            if native_mt5 is not None:
+            if self.effective_backend == "ea_bridge":
+                from bridge import ea_client
+                sl_val = float(stop_loss) if stop_loss else 0.0
+                tp_val = float(take_profit) if take_profit else 0.0
+                if side_norm == "buy":
+                    res = ea_client.buy(resolved_sym, float(qty), sl=sl_val, tp=tp_val, magic=self.magic)
+                else:
+                    res = ea_client.sell(resolved_sym, float(qty), sl=sl_val, tp=tp_val, magic=self.magic)
+
+                if not res.get("ok"):
+                    err = res.get("error", "EA Bridge order placement failed")
+                    raise ExecutionError(f"EA Bridge order failed: {err}")
+
+                ticket_id = str(res.get("ticket") or int(time.time()))
+                filled_price = float(res.get("price") or fill_price)
+                filled_qty = float(res.get("volume") or qty)
+                order = Order(
+                    id=ticket_id,
+                    symbol=resolved_sym,
+                    side=side_norm,
+                    order_type=order_type,
+                    qty=qty,
+                    price=fill_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    status="filled",
+                    filled_price=filled_price,
+                    filled_qty=filled_qty,
+                )
+                pos = Position(
+                    symbol=resolved_sym,
+                    side=side_norm,
+                    qty=filled_qty,
+                    entry_price=filled_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    unrealized_pnl=0.0,
+                    current_price=filled_price,
+                    ticket=int(res.get("ticket") or 0) if str(res.get("ticket", "")).isdigit() else 0,
+                    id=ticket_id,
+                )
+                self._sim_positions[ticket_id] = pos
+                self._sim_positions[str(pos.ticket)] = pos
+                self._sim_positions[resolved_sym] = pos
+                logger.info(
+                    "[MT5Broker] EA Bridge order filled: #%s %s %s %.2f @ %.2f (SL=%.2f, TP=%.2f)",
+                    ticket_id, resolved_sym, side_norm.upper(), filled_qty, filled_price, sl_val, tp_val
+                )
+                return order
+
+            elif native_mt5 is not None and not self.gateway_url and self.effective_backend != "gateway":
                 # 0. Pre-flight Terminal & Account Trading Permission Checks
                 term = native_mt5.terminal_info()
                 if term and not getattr(term, "trade_allowed", True):
@@ -636,7 +722,9 @@ class MT5Broker(Broker):
         if self.mode == "live":
             if not self._connected:
                 raise OrderStateUnknownError("Cannot query positions: MT5 Live terminal is not connected.")
-            if native_mt5 is not None:
+            if self.effective_backend == "ea_bridge":
+                return self._get_sim_positions_list()
+            if native_mt5 is not None and self.effective_backend != "gateway":
                 try:
                     raw_positions = native_mt5.positions_get()
                     if raw_positions is None:
@@ -708,7 +796,23 @@ class MT5Broker(Broker):
         resolved_sym = resolve_mt5_symbol(symbol)
 
         if self.mode == "live" and self._connected:
-            if native_mt5 is not None:
+            if self.effective_backend == "ea_bridge":
+                from bridge import ea_client
+                t_int = int(ticket) if ticket and str(ticket).isdigit() else 0
+                if not symbol or str(symbol).upper() in ("ALL", "*"):
+                    res = ea_client.close_all(magic=self.magic)
+                else:
+                    res = ea_client.close(symbol=resolved_sym, ticket=t_int, magic=self.magic)
+
+                # Clean up local positions cache
+                if not symbol or str(symbol).upper() in ("ALL", "*"):
+                    self._sim_positions.clear()
+                else:
+                    for key in (resolved_sym, symbol.upper(), str(ticket)):
+                        self._sim_positions.pop(key, None)
+                return bool(res.get("ok", False))
+
+            elif native_mt5 is not None and self.effective_backend != "gateway":
                 positions = None
                 if ticket is not None:
                     try:
@@ -841,7 +945,21 @@ class MT5Broker(Broker):
         """Modify SL and TP of an open MT5 position (e.g. for dynamic trailing stop), optionally targeting a ticket."""
         resolved_sym = resolve_mt5_symbol(symbol)
         if self.mode == "live" and self._connected:
-            if native_mt5 is not None:
+            if self.effective_backend == "ea_bridge":
+                from bridge import ea_client
+                t_int = int(ticket) if ticket and str(ticket).isdigit() else 0
+                sl_val = float(stop_loss) if stop_loss else 0.0
+                tp_val = float(take_profit) if take_profit else 0.0
+                res = ea_client.modify(symbol=resolved_sym, ticket=t_int, sl=sl_val, tp=tp_val, magic=self.magic)
+                for key in (resolved_sym, symbol.upper(), str(ticket)):
+                    if key in self._sim_positions:
+                        if stop_loss is not None:
+                            self._sim_positions[key].stop_loss = float(stop_loss)
+                        if take_profit is not None:
+                            self._sim_positions[key].take_profit = float(take_profit)
+                return bool(res.get("ok", False))
+
+            elif native_mt5 is not None and self.effective_backend != "gateway":
                 positions = None
                 if ticket is not None:
                     try:
@@ -947,7 +1065,37 @@ class MT5Broker(Broker):
     def get_account_info(self) -> MT5AccountInfo:
         """Return standardized MT5 account telemetry."""
         if self.mode == "live" and self._connected:
-            if native_mt5 is not None:
+            if self.effective_backend == "ea_bridge":
+                login_val = self.login
+                try:
+                    from bridge import ea_client
+                    st = ea_client.status(magic=self.magic, timeout=2.0)
+                    if st.get("ok") and "login" in st and st["login"]:
+                        login_val = int(st["login"])
+                        self.login = login_val
+                except Exception:
+                    pass
+                eq = self.equity
+                mg = self.margin
+                lvl = (eq / mg * 100.0) if mg > 0 else 0.0
+                return MT5AccountInfo(
+                    login=login_val,
+                    server=self.server or "EA-Bridge",
+                    trade_mode="live",
+                    connected=self._connected,
+                    balance=self.balance,
+                    equity=eq,
+                    margin=mg,
+                    free_margin=self.free_margin,
+                    margin_level_pct=lvl,
+                    leverage=self.leverage,
+                    currency=self.currency,
+                    company="EA-Bridge (MetaTrader 5)",
+                    trade_allowed=True,
+                    trade_expert=True,
+                    terminal_trade_allowed=True,
+                )
+            elif native_mt5 is not None and self.effective_backend != "gateway":
                 try:
                     acc = native_mt5.account_info()
                     term = native_mt5.terminal_info()

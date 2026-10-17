@@ -440,6 +440,72 @@ class TestMT5Broker(unittest.TestCase):
             self.assertEqual(order.status, "filled")
             self.assertEqual(mock_mt5.order_send.call_count, 2)
 
+    def test_mt5_ea_bridge_connection(self):
+        broker = MT5Broker(mode="live", backend="ea_bridge")
+        self.assertTrue(broker.is_connected)
+        self.assertEqual(broker.effective_backend, "ea_bridge")
+        self.assertEqual(broker.backend, "ea_bridge")
+
+    def test_mt5_ea_bridge_order_placement(self):
+        from bridge import ea_client
+        mock_buy = MagicMock(return_value={"ok": True, "ticket": 554433, "price": 2650.50, "volume": 0.05, "retcode": 10009})
+        with patch.object(ea_client, "buy", mock_buy):
+            broker = MT5Broker(mode="live", backend="ea_bridge")
+            order = broker.place_order("XAUUSD", "buy", 0.05, stop_loss=2640.0, take_profit=2670.0)
+            mock_buy.assert_called_once_with("XAUUSD", 0.05, sl=2640.0, tp=2670.0, magic=112233)
+            self.assertEqual(order.id, "554433")
+            self.assertEqual(order.status, "filled")
+            self.assertEqual(order.filled_price, 2650.50)
+            self.assertEqual(len(broker.get_positions()), 1)
+
+    def test_mt5_ea_bridge_close_position(self):
+        from bridge import ea_client
+        mock_buy = MagicMock(return_value={"ok": True, "ticket": 554433, "price": 2650.50, "volume": 0.05, "retcode": 10009})
+        mock_close = MagicMock(return_value={"ok": True, "closed": 1})
+        mock_close_all = MagicMock(return_value={"ok": True, "closed": 1})
+        with patch.object(ea_client, "buy", mock_buy), \
+             patch.object(ea_client, "close", mock_close), \
+             patch.object(ea_client, "close_all", mock_close_all):
+            broker = MT5Broker(mode="live", backend="ea_bridge")
+            broker.place_order("XAUUSD", "buy", 0.05)
+            self.assertEqual(len(broker.get_positions()), 1)
+
+            # Close single position
+            res = broker.close_position("XAUUSD", ticket=554433)
+            self.assertTrue(res)
+            mock_close.assert_called_once_with(symbol="XAUUSD", ticket=554433, magic=112233)
+            self.assertEqual(len(broker.get_positions()), 0)
+
+            # Close all
+            res_all = broker.close_position("ALL")
+            self.assertTrue(res_all)
+            mock_close_all.assert_called_once_with(magic=112233)
+
+    def test_mt5_ea_bridge_modify_position(self):
+        from bridge import ea_client
+        mock_buy = MagicMock(return_value={"ok": True, "ticket": 554433, "price": 2650.50, "volume": 0.05, "retcode": 10009})
+        mock_modify = MagicMock(return_value={"ok": True, "modified": True, "ticket": 554433})
+        with patch.object(ea_client, "buy", mock_buy), patch.object(ea_client, "modify", mock_modify):
+            broker = MT5Broker(mode="live", backend="ea_bridge")
+            broker.place_order("XAUUSD", "buy", 0.05, stop_loss=2640.0)
+
+            mod_ok = broker.modify_position("XAUUSD", stop_loss=2645.0, take_profit=2680.0, ticket=554433)
+            self.assertTrue(mod_ok)
+            mock_modify.assert_called_once_with(symbol="XAUUSD", ticket=554433, sl=2645.0, tp=2680.0, magic=112233)
+            pos = broker.get_positions()[0]
+            self.assertEqual(pos.stop_loss, 2645.0)
+            self.assertEqual(pos.take_profit, 2680.0)
+
+    def test_mt5_ea_bridge_account_info(self):
+        from bridge import ea_client
+        mock_status = MagicMock(return_value={"ok": True, "positions": 2, "volume": 0.10, "login": 887766})
+        with patch.object(ea_client, "status", mock_status):
+            broker = MT5Broker(mode="live", backend="ea_bridge")
+            info = broker.get_account_info()
+            self.assertEqual(info.login, 887766)
+            self.assertEqual(info.company, "EA-Bridge (MetaTrader 5)")
+            self.assertTrue(info.connected)
+
 
 if __name__ == "__main__":
     unittest.main()

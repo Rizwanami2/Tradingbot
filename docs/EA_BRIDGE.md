@@ -27,9 +27,32 @@ Commands use MT5 **Common\\Files**:
 
 ## API
 
-- `status()` — EA / account ping
-- `buy(symbol, volume, sl=0, tp=0)`
-- `sell(symbol, volume, sl=0, tp=0)`
-- `close_all(magic=112233)`
+- `status(magic=112233)` — EA / account ping & open position telemetry
+- `buy(symbol, volume, sl=0, tp=0, magic=112233)` — Execute BUY deal
+- `sell(symbol, volume, sl=0, tp=0, magic=112233)` — Execute SELL deal
+- `close(symbol="", ticket=0, magic=112233)` — Close specific position or symbol
+- `close_all(magic=112233)` — Close all positions with matching magic number
+- `modify(symbol="", ticket=0, sl=0, tp=0, magic=112233)` — Dynamic SL/TP trailing adjustment
+- `set_bridge_dir(path)` — Dynamic custom MT5 common files path override
 
 Volume is rounded inside the EA to symbol min/step. Filling mode is auto-detected (IOC/FOK/RETURN).
+
+## Integration with MT5Broker
+
+The EA Bridge is directly integrated as a selectable backend for `MT5Broker`:
+
+```ini
+# .env
+BOT_BROKER_MODE=mt5_live
+MT5_BACKEND=ea_bridge
+```
+
+Or programmatically:
+```python
+from mt5_broker import MT5Broker
+
+broker = MT5Broker(mode="live", backend="ea_bridge")
+order = broker.place_order("XAUUSD", "buy", 0.05, stop_loss=2640.0, take_profit=2680.0)
+broker.modify_position("XAUUSD", stop_loss=2645.0, ticket=order.id)
+broker.close_position("XAUUSD", ticket=order.id)
+```
