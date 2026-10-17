@@ -69,6 +69,12 @@ except ImportError:
     MeanReversionVWAPAgent = None
     MRDir = None
 
+try:
+    from fake_breakout_strategy import FakeBreakoutAgent, FBDir
+except ImportError:
+    FakeBreakoutAgent = None
+    FBDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -444,6 +450,7 @@ class Arbiter:
         "NEWS": 0.70,
         "GAUTAM-JHA": 1.55,
         "MEAN-REVERSION": 1.35,
+        "FAKE-BREAKOUT": 1.35,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -486,6 +493,7 @@ class Arbiter:
         self.news = NewsAgent()
         self.gautam = GautamJhaAgent() if GautamJhaAgent is not None else None
         self.mr = MeanReversionVWAPAgent() if MeanReversionVWAPAgent is not None else None
+        self.fb = FakeBreakoutAgent() if FakeBreakoutAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -510,6 +518,15 @@ class Arbiter:
                 dname = getattr(mv.direction, "name", str(mv.direction))
                 direction = Dir.LONG if dname == "LONG" else (Dir.SHORT if dname == "SHORT" else Dir.FLAT)
                 votes.append(Vote(mv.agent, direction, float(mv.strength), mv.reason))
+            except Exception:
+                pass
+
+        if getattr(self, "fb", None) is not None:
+            try:
+                fb_v = self.fb.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(fb_v.direction, "name", str(fb_v.direction))
+                direction = Dir.LONG if dname == "LONG" else (Dir.SHORT if dname == "SHORT" else Dir.FLAT)
+                votes.append(Vote(fb_v.agent, direction, float(fb_v.strength), fb_v.reason))
             except Exception:
                 pass
 

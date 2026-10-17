@@ -31,6 +31,12 @@ except ImportError:
     BacktestConfig = None
     _ema_backtest = None
 
+try:
+    from fake_breakout_strategy import FakeBreakoutAgent, FBDir
+except ImportError:
+    FakeBreakoutAgent = None
+    FBDir = None
+
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -415,12 +421,51 @@ def multiagent_proxy_signal(window: pd.DataFrame) -> Optional[Dict]:
     rsi_ok_long = 40 < rsi < 70
     rsi_ok_short = 30 < rsi < 60
 
+    # Institutional Fake Breakout / Liquidity Sweep confluence
+    if FakeBreakoutAgent is not None:
+        try:
+            fb = FakeBreakoutAgent().vote(window)
+            if fb.direction == FBDir.LONG and fb.strength >= 0.70:
+                stop_dist = max(atr * 1.1, entry * 0.001)
+                return {"direction": "long", "entry": entry, "stop": entry - stop_dist,
+                        "tp1": entry + stop_dist * 2.2, "reason": fb.reason}
+            elif fb.direction == FBDir.SHORT and fb.strength >= 0.70:
+                stop_dist = max(atr * 1.1, entry * 0.001)
+                return {"direction": "short", "entry": entry, "stop": entry + stop_dist,
+                        "tp1": entry - stop_dist * 2.2, "reason": fb.reason}
+        except Exception:
+            pass
+
     if trend_long and bos_long and rsi_ok_long:
         return {"direction": "long", "entry": entry, "stop": entry - atr * 1.3,
                 "tp1": entry + atr * 1.3 * 2.0}
     if trend_short and bos_short and rsi_ok_short:
         return {"direction": "short", "entry": entry, "stop": entry + atr * 1.3,
                 "tp1": entry - atr * 1.3 * 2.0}
+    return None
+
+
+def fake_breakout_signal(window: pd.DataFrame) -> Optional[Dict]:
+    """Pure institutional Fake Breakout & Liquidity Sweep strategy signal."""
+    if len(window) < 25 or FakeBreakoutAgent is None:
+        return None
+    c = window["close"].astype(float)
+    h, l = window["high"].astype(float), window["low"].astype(float)
+    prev_c = c.shift(1)
+    tr = pd.concat([h - l, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().iloc[-1]
+    entry = float(c.iloc[-1])
+    atr = max(float(atr) if math.isfinite(float(atr)) else 0.0, entry * 0.001)
+
+    fb = FakeBreakoutAgent().vote(window)
+    if fb.direction == FBDir.LONG and fb.strength >= 0.70:
+        stop_dist = max(atr * 1.0, entry * 0.001)
+        return {"direction": "long", "entry": entry, "stop": entry - stop_dist,
+                "tp1": entry + stop_dist * 2.4, "reason": fb.reason}
+    elif fb.direction == FBDir.SHORT and fb.strength >= 0.70:
+        stop_dist = max(atr * 1.0, entry * 0.001)
+        return {"direction": "short", "entry": entry, "stop": entry + stop_dist,
+                "tp1": entry - stop_dist * 2.4, "reason": fb.reason}
     return None
 
 
@@ -737,7 +782,7 @@ def main():
     parser.add_argument("--bars", type=int, default=3000)
     parser.add_argument("--source", default="demo")
     parser.add_argument("--csv", default=None)
-    parser.add_argument("--mode", choices=["single", "walkforward", "montecarlo", "sweep", "multiagent"], default="single")
+    parser.add_argument("--mode", choices=["single", "walkforward", "montecarlo", "sweep", "multiagent", "fake_breakout"], default="single")
     parser.add_argument("--mc-runs", type=int, default=500)
     parser.add_argument("--windows", type=int, default=5)
     parser.add_argument("--equity", type=float, default=10000.0)
@@ -760,6 +805,13 @@ def main():
     elif args.mode == "multiagent":
         m, trades, curve = sim.run(df, multiagent_proxy_signal, args.symbol)
         print(m.summary())
+
+    elif args.mode == "fake_breakout":
+        m, trades, curve = sim.run(df, fake_breakout_signal, args.symbol)
+        print(m.summary())
+        print(f"Sample trades: {min(5, len(trades))}")
+        for t in trades[:5]:
+            print(f"  {t.direction} R={t.r_multiple:+.2f} PnL={t.pnl:+.2f} MAE={t.mae:.2f} MFE={t.mfe:.2f} ({t.reason})")
 
     elif args.mode == "walkforward":
         wf = walk_forward(df, ema_cross_signal, n_windows=args.windows, cfg=cfg, symbol=args.symbol)
