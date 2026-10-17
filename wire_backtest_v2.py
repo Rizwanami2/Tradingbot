@@ -60,3 +60,8 @@ def apply():
             return _orig_load(symbol, bars, source, csv)
     ab.load_data = _load_smart
     print("[wire_backtest_v2] trend-pullback primary + daily load active")
+
+
+apply_growth = apply
+apply_target25 = apply
+

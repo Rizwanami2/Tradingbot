@@ -89,6 +89,14 @@ class TestStrategyResearch(unittest.TestCase):
                  "trades": 10, "win_rate_pct": 50, "profit_factor": 1.1}
             ])
 
+    def test_wire_backtest_growth_and_target25_aliases(self):
+        from wire_backtest_v2 import apply_growth, apply_target25, apply
+        self.assertTrue(callable(apply_growth))
+        self.assertTrue(callable(apply_target25))
+        self.assertEqual(apply_growth, apply)
+        self.assertEqual(apply_target25, apply)
+
 
 if __name__ == "__main__":
     unittest.main()
+
