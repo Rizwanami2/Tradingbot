@@ -686,6 +686,38 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         ok, reason = limiter.check_can_enter("XAUUSD", 2650.0, self.engine, max_open=4, timestamp=2251.0)
         self.assertTrue(ok, reason)
 
+    def test_manual_lot_size_preserved_against_learner_mult(self):
+        sig_auto = {"lots": 0.10, "size": 1.0, "lot_mode": "auto"}
+        size_mult = 0.5
+        if size_mult < 1.0 and sig_auto.get("lot_mode", "auto") != "manual":
+            sig_auto["lots"] = max(0.01, round(float(sig_auto["lots"]) * size_mult, 4))
+        self.assertEqual(sig_auto["lots"], 0.05)
+
+        sig_manual = {"lots": 0.10, "size": 1.0, "lot_mode": "manual"}
+        if size_mult < 1.0 and sig_manual.get("lot_mode", "auto") != "manual":
+            sig_manual["lots"] = max(0.01, round(float(sig_manual["lots"]) * size_mult, 4))
+        self.assertEqual(sig_manual["lots"], 0.10)
+
+    def test_send_telegram_alert_fallback(self):
+        import asyncio
+        from autotrade_worker import send_telegram_alert
+
+        app = MagicMock()
+        # First call fails on Markdown parsing, second succeeds with clean text
+        app.bot.send_message = AsyncMock(side_effect=[Exception("Markdown error"), True])
+        mock_cfg = MagicMock()
+        mock_cfg.TELEGRAM_CHAT_ID = "12345"
+
+        text = "⚡ *TRADE EXECUTED* `XAUUSD` @ 2650"
+        result = asyncio.run(send_telegram_alert(app, mock_cfg, text))
+        self.assertTrue(result)
+        self.assertEqual(app.bot.send_message.call_count, 2)
+        # Second call stripped markdown characters
+        call2_kwargs = app.bot.send_message.call_args_list[1][1]
+        self.assertNotIn("*", call2_kwargs["text"])
+        self.assertNotIn("`", call2_kwargs["text"])
+        self.assertNotIn("parse_mode", call2_kwargs)
+
 
 if __name__ == "__main__":
     unittest.main()

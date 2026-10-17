@@ -11,6 +11,22 @@ import pandas as pd
 logger = logging.getLogger("autotrade_worker")
 
 
+async def send_telegram_alert(app: Any, config: Any, text: str) -> bool:
+    """Send Telegram alert with automatic plain text fallback on Markdown parse errors."""
+    if not getattr(config, "TELEGRAM_CHAT_ID", None) or not text or not getattr(app, "bot", None):
+        return False
+    try:
+        await app.bot.send_message(chat_id=config.TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
+        return True
+    except Exception:
+        try:
+            clean = text.replace("*", "").replace("`", "").replace("_", "")
+            await app.bot.send_message(chat_id=config.TELEGRAM_CHAT_ID, text=clean)
+            return True
+        except Exception:
+            return False
+
+
 async def live_monitoring_worker(
     app,
     *,
@@ -25,6 +41,8 @@ async def live_monitoring_worker(
     now_iso: Callable[[], str],
 ):
     """Poll Gold + BTC only; open up to MAX_OPEN_TRADES concurrent setups/positions."""
+    async def _send_alert(text: str) -> None:
+        await send_telegram_alert(app, config, text)
     try:
         from multi_agent_trading_bot import _norm_trade_symbol
     except Exception:
@@ -134,13 +152,7 @@ async def live_monitoring_worker(
                             eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
                             limiter.record_entry(symbol, eprice)
 
-                        if config.TELEGRAM_CHAT_ID:
-                            try:
-                                await app.bot.send_message(
-                                    chat_id=config.TELEGRAM_CHAT_ID, text=ev["message"], parse_mode="Markdown"
-                                )
-                            except Exception:
-                                pass
+                        await _send_alert(ev.get("message", ""))
 
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
@@ -206,7 +218,7 @@ async def live_monitoring_worker(
                                 if not ok:
                                     logger.info("Autotrade %s: vetoed by Autonomous Learner — %s", symbol, reason)
                                     continue
-                                if size_mult < 1.0:
+                                if size_mult < 1.0 and sig.get("lot_mode", "auto") != "manual":
                                     if sig.get("lots"):
                                         sig["lots"] = max(0.01, round(float(sig["lots"]) * size_mult, 4))
                                     if sig.get("size"):
@@ -235,13 +247,7 @@ async def live_monitoring_worker(
                                 f"Lots `{order.lots}`{lot_tag} | Lev `{order.leverage:.0f}x`\n"
                                 f"_{order.setup_reason}_"
                             )
-                            if config.TELEGRAM_CHAT_ID:
-                                try:
-                                    await app.bot.send_message(
-                                        chat_id=config.TELEGRAM_CHAT_ID, text=alert, parse_mode="Markdown"
-                                    )
-                                except Exception:
-                                    pass
+                            await _send_alert(alert)
                             for ev in engine.update_market_candle(symbol, candle_dict):
                                 etype = ev.get("event")
                                 if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
@@ -254,13 +260,7 @@ async def live_monitoring_worker(
                                     pos = ev.get("order")
                                     eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
                                     limiter.record_entry(symbol, eprice)
-                                if config.TELEGRAM_CHAT_ID:
-                                    try:
-                                        await app.bot.send_message(
-                                            chat_id=config.TELEGRAM_CHAT_ID, text=ev["message"], parse_mode="Markdown"
-                                        )
-                                    except Exception:
-                                        pass
+                                await _send_alert(ev.get("message", ""))
                 except Exception as sym_err:
                     logger.error("Monitoring %s error: %s", symbol, sym_err)
 
