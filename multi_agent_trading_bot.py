@@ -75,6 +75,18 @@ except ImportError:
     FakeBreakoutAgent = None
     FBDir = None
 
+try:
+    from mtf_fvg_ob import MTFConfluenceAgent, MTFDir
+except ImportError:
+    MTFConfluenceAgent = None
+    MTFDir = None
+
+try:
+    from asian_range_breakout import AsianBreakoutAgent, AsianDir
+except ImportError:
+    AsianBreakoutAgent = None
+    AsianDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -451,6 +463,8 @@ class Arbiter:
         "GAUTAM-JHA": 1.55,
         "MEAN-REVERSION": 1.35,
         "FAKE-BREAKOUT": 1.35,
+        "MTF-CONFLUENCE": 1.40,
+        "ASIAN-BREAKOUT": 1.25,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -494,6 +508,8 @@ class Arbiter:
         self.gautam = GautamJhaAgent() if GautamJhaAgent is not None else None
         self.mr = MeanReversionVWAPAgent() if MeanReversionVWAPAgent is not None else None
         self.fb = FakeBreakoutAgent() if FakeBreakoutAgent is not None else None
+        self.mtf = MTFConfluenceAgent() if MTFConfluenceAgent is not None else None
+        self.asian = AsianBreakoutAgent() if AsianBreakoutAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -527,6 +543,24 @@ class Arbiter:
                 dname = getattr(fb_v.direction, "name", str(fb_v.direction))
                 direction = Dir.LONG if dname == "LONG" else (Dir.SHORT if dname == "SHORT" else Dir.FLAT)
                 votes.append(Vote(fb_v.agent, direction, float(fb_v.strength), fb_v.reason))
+            except Exception:
+                pass
+
+        if getattr(self, "mtf", None) is not None:
+            try:
+                mtf_v = self.mtf.vote(df1, df5=df5, df15=df15, df1h=df1h)
+                dname = getattr(mtf_v.direction, "name", str(mtf_v.direction)).upper()
+                direction = Dir.LONG if "BULLISH" in dname else (Dir.SHORT if "BEARISH" in dname else Dir.FLAT)
+                votes.append(Vote(mtf_v.agent, direction, float(mtf_v.strength), mtf_v.reason))
+            except Exception:
+                pass
+
+        if getattr(self, "asian", None) is not None:
+            try:
+                av = self.asian.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(av.direction, "name", str(av.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                votes.append(Vote(av.agent, direction, float(av.strength), av.reason))
             except Exception:
                 pass
 

@@ -324,11 +324,14 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/autotrade on|off` — Multi-symbol autotrading (up to 5 concurrent active trades)\n"
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
-            "• `/closed` — Recently closed trades history & realized PnL"
+            "• `/closed` — Recently closed trades history & realized PnL\n"
+            "• `/vstops [clear]` — Client-side anti-stop-hunt virtual hidden stops\n"
+            "• `/slippage` — Broker execution latency, slippage USD & grade (A+ to F)"
         )
-    elif cat in ("mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca", "switch", "live", "delta"):
+    elif cat in ("mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca", "switch", "live", "delta", "bridge"):
         text = (
             "🏦 **MetaTrader 5 & Broker Accounts:**\n"
+            "• `/bridge [ping|test|deploy|on|off|dir]` — MT5 EA Bridge diagnostics & auto-deploy\n"
             "• `/switch [delta|live|<login>|<alias>]` — Fast switcher between brokers & MT5 accounts\n"
             "• `/delta [status|live|testnet|leverage|auto_leverage|positions]` — Delta Exchange India Live REST broker (Max 200x)\n"
             "• `/live [on|off|<login> <pass> <server>]` — Quick MT5 Live trading toggle & connect\n"
@@ -337,7 +340,6 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/mt5 switch [<login>|<alias>]` — Switch active MT5 account\n"
             "• `/mt5 balance [amount]` — View or update MT5 live balance\n"
             "• `/mt5 accounts` — List registered MT5 accounts\n"
-            "• `/mt5 remove <login|alias|all>` — Remove a saved account or all accounts\n"
             "• `/balance [amount]` — View or update active broker balance, equity, and margin\n"
             "• `/broker` — View active broker environment & telemetry\n"
             "• `/broker [mt5|delta]` — Switch active execution broker engine"
@@ -353,15 +355,18 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
             "• `/leverage [1-200|auto]` — Set manual leverage or dynamic auto-leverage (up to 200x)\n"
             "• `/lot [auto|manual|<size>]` — Auto dynamic risk lots or fixed manual lot size\n"
+            "• `/kelly [SYM]` — Fractional Kelly lot sizing & 99% portfolio VaR / CVaR\n"
+            "• `/session [asian|london|ny]` — End-of-session performance report & killzones\n"
             "• `/kill [on|off]` — Emergency execution stop circuit breaker"
         )
-    elif cat in ("backtest", "research", "abacktest"):
+    elif cat in ("backtest", "research", "abacktest", "regime"):
         text = (
             "📈 **Backtesting & Research:**\n"
             "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
             "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
             "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
-            "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)"
+            "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
+            "• `/regime [auto|calibrate|switch]` — Real-time regime detector & Sharpe calibrator"
         )
     elif cat in ("ai", "brain", "learner", "agent", "agents"):
         text = (
@@ -385,17 +390,20 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
             "• `/news [SYM]` — Macro calendar & economic sentiment\n\n"
             "🎯 **Signals & Strategy Confluence:**\n"
-            "• `/signal [SYM]` — 7-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP)\n"
+            "• `/signal [SYM]` — 9-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP, MTF-FVG, Asian)\n"
             "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
             "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n\n"
             "⚡ **Execution & Positions (Active Limit: 5):**\n"
             "• `/positions` — Open active trades, pending setups & real-time PnL\n"
             "• `/autotrade [on|off|scalp|btc|gold|both]` — Multi-symbol autotrading (Gold/BTC)\n"
             "• `/watchlist [btc|gold|both]` — View & switch active Gold/BTC autotrade watchlist\n"
+            "• `/vstops [clear]` — Client-side hidden virtual stop loss manager\n"
+            "• `/slippage` — Broker execution latency & realized slippage tracker\n"
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL\n\n"
             "🏦 **Brokers & Execution (MT5 & Delta India):**\n"
+            "• `/bridge [ping|test|deploy|on|off|dir]` — EA Bridge diagnostics & auto-deploy\n"
             "• `/switch [delta|live|<login>]` — Fast switcher between brokers & MT5 accounts\n"
             "• `/delta` — Delta Exchange India status, credentials & leverage controls\n"
             "• `/live [on|off]` — Quick MT5 Live trading switch\n"
@@ -403,12 +411,14 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/mt5 add <login> <pass> <server> [alias]` — Save live MT5 trading account\n"
             "• `/mt5 accounts` — List registered MT5 accounts\n"
             "• `/balance` — View active broker balance, equity & margin\n"
-            "• `/broker` — View active broker environment & telemetry\n"
-            "• `/broker [mt5|delta]` — Switch execution broker engine\n\n"
+            "• `/broker` — View active broker environment & telemetry\n\n"
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+            "• `/kelly [SYM]` — Fractional Kelly lot sizing & portfolio VaR 99%\n"
+            "• `/session` — End-of-session performance report & killzones\n"
+            "• `/regime` — Market regime detector, auto-switcher & Sharpe calibrator\n"
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
             "• `/leverage [1-200]` — Set maximum account leverage ceiling\n"
@@ -2051,7 +2061,7 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     b = engine.broker
     magic = getattr(b, "magic", 112233) if b else 112233
 
-    if sub in ("ping", "test"):
+    if sub == "ping":
         t0 = time.time()
         res = ea_client.status(magic=magic, timeout=5.0)
         elapsed = (time.time() - t0) * 1000.0
@@ -2072,6 +2082,55 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"• **Hint:** {res.get('hint', 'Ensure EA_Bridge is attached to chart and AutoTrading is ON')}",
                 parse_mode="Markdown",
             )
+
+    elif sub in ("test", "diag", "diagnose", "diagnostics", "sim"):
+        from scripts.test_ea_bridge import run_diagnostics
+        is_sim = sub == "sim"
+        diag_res = await _to_thread(run_diagnostics, magic=magic, timeout=3.0, simulate=is_sim)
+        badge = "🟢 PASS: Bridge Operational" if diag_res.status == "PASS" else ("🟡 WARN: EA Offline" if diag_res.status == "WARN" else "🔴 FAIL: I/O Error")
+        lines = [
+            f"🔍 **EA Bridge Self-Diagnostic**",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"• **Status:** {badge}",
+            f"• **Bridge Directory:** `{diag_res.bridge_dir}`",
+            f"• **I/O Latency:** `{diag_res.write_latency_ms:.2f}ms` (Writable: {diag_res.dir_writable})",
+            f"• **EA Roundtrip Ping:** `{diag_res.ea_roundtrip_ms:.2f}ms`",
+            f"• **EA Connected:** `{'Yes' if diag_res.ea_connected else 'No'}`",
+        ]
+        if diag_res.account_info:
+            acc = diag_res.account_info
+            lines.extend([
+                f"• **Account:** `{acc.get('account')}` | Equity: `${acc.get('equity', 0):,.2f}`",
+                f"• **Free Margin:** `${acc.get('free_margin', 0):,.2f}` (1:{acc.get('leverage')})",
+                f"• **Active Positions:** `{len(diag_res.open_positions)}`",
+            ])
+        if diag_res.warnings:
+            lines.append(f"⚠️ *Warning:* {diag_res.warnings[0]}")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    elif sub in ("deploy", "install"):
+        from scripts.deploy_ea import discover_terminals, deploy_ea
+        terms = discover_terminals()
+        if not terms:
+            await update.message.reply_text(
+                "⚠️ **No MetaTrader 5 Terminals Auto-Detected**\n"
+                "• Manually specify your terminal data directory with:\n"
+                "  `/bridge dir <path_to_Common_Files>`\n"
+                "• Or manually copy `mql5/EA_Bridge.mq5` into your terminal's `MQL5/Experts` folder.",
+                parse_mode="Markdown",
+            )
+        else:
+            results = deploy_ea(terms, dry_run=False, compile_ea=False)
+            lines = [
+                f"🚀 **EA Bridge Auto-Deployment Report**",
+                f"━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"Found `{len(terms)}` terminal instances.",
+            ]
+            for r in results:
+                status_ico = "✅" if r.copied else "❌"
+                lines.append(f"{status_ico} Terminal `{r.terminal_id}`: {'Copied' if r.copied else 'Error'} ({r.file_size} bytes)")
+            lines.append("Restart or refresh Experts in MT5 navigator to attach `EA_Bridge`.")
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif sub in ("on", "enable", "switch", "connect"):
         config.MT5_BACKEND = "ea_bridge"
@@ -2157,11 +2216,216 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"",
             f"**Controls:**",
             f"• `/bridge ping` — Ping chart EA for latency",
+            f"• `/bridge test` — Run self-diagnostic suite",
+            f"• `/bridge deploy` — Auto-deploy EA to MT5 terminals",
             f"• `/bridge on` — Switch active broker to EA Bridge",
             f"• `/bridge off` — Switch active broker back to auto",
             f"• `/bridge dir <path>` — Change MT5 common directory",
         ])
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View and control market regime auto-switcher: /regime [auto|calibrate|switch <profile>]"""
+    from regime_auto_switcher import compute_regime_indicators, RegimeAutoSwitcher, calibrate_rolling_sharpe_weights
+    from strategy_profiles import get_current_profile, apply_profile, DEFAULT_PROFILES
+    from multi_agent_trading_bot import MarketDataFeed
+    args = ctx.args or []
+    sub = args[0].lower() if args else ""
+
+    if sub in ("auto", "evaluate", "check"):
+        feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
+        data = await _to_thread(feed.multi_tf, limit_1m=100)
+        df1 = data.get("1m") if data else None
+        if df1 is None or df1.empty:
+            await update.message.reply_text("⚠️ Could not fetch market data to evaluate regime.")
+            return
+        switcher = getattr(arbiter, "_regime_switcher", None) or RegimeAutoSwitcher()
+        res = switcher.evaluate_and_switch(df1, symbol="XAUUSD", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+        sw_text = f"🔄 Switched from `{res.previous_profile}` to `{res.current_profile}`" if res.switched else f"Held current profile `{res.current_profile}`"
+        lines = [
+            f"🌐 **Market Regime Auto-Evaluation**",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"• **Regime Detected:** `{res.regime_detected}`",
+            f"• **ADX (14):** `{res.metrics.get('adx', 0.0):.1f}`",
+            f"• **ATR Volatility:** `{res.metrics.get('atr_pct', 0.0):.3f}%`",
+            f"• **BB Band Width:** `{res.metrics.get('bb_width', 0.0):.4f}`",
+            f"• **Action:** {sw_text}",
+            f"• **Rationale:** _{res.reason}_",
+        ]
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return
+
+    if sub in ("calibrate", "weights", "sharpe"):
+        new_weights = calibrate_rolling_sharpe_weights(arbiter)
+        lines = [
+            f"⚖️ **Dynamic Rolling Sharpe Agent Weights**",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━",
+        ]
+        for agent, w in new_weights.items():
+            lines.append(f"• `{agent:<15}` : **{w:.2f}x**")
+        lines.append("\nWeights applied to active multi-agent Arbiter.")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return
+
+    if sub in ("switch", "set") and len(args) > 1:
+        target = args[1].lower()
+        if target in DEFAULT_PROFILES:
+            apply_profile(target, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+            await update.message.reply_text(f"✅ Active strategy profile switched to `{target}`.")
+        else:
+            valid = ", ".join(DEFAULT_PROFILES.keys())
+            await update.message.reply_text(f"❌ Unknown profile `{target}`. Valid: `{valid}`")
+        return
+
+    feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
+    data = await _to_thread(feed.multi_tf, limit_1m=60)
+    df1 = data.get("1m") if data else None
+    metrics = compute_regime_indicators(df1) if df1 is not None else {"adx": 22.0, "atr_pct": 0.15, "bb_width": 0.005}
+    cur_prof = get_current_profile()
+    regime_desc = "Strong Trend" if metrics["adx"] >= 28 else ("Range / Chop" if metrics["adx"] < 20 else "Balanced Consolidation")
+
+    lines = [
+        f"📊 **Market Regime & Strategy Profile**",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"• **Active Profile:** `{cur_prof.name.upper()}` ({cur_prof.description})",
+        f"• **Detected Regime:** `{regime_desc}`",
+        f"• **Trend Strength (ADX):** `{metrics['adx']:.1f}`",
+        f"• **ATR Volatility:** `{metrics['atr_pct']:.3f}%`",
+        f"• **Bollinger Width:** `{metrics['bb_width']:.4f}`",
+        f"• **Min Agreement:** `{cur_prof.min_agreement}` agents (Min Score: `{cur_prof.min_score}`)",
+        f"",
+        f"**Controls:**",
+        f"• `/regime auto` — Evaluate regime and auto-switch profile",
+        f"• `/regime calibrate` — Recalibrate weights by Rolling Sharpe",
+        f"• `/regime switch <profile>` — Switch profile (scalp/swing/gold_only/crypto/balanced)",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def session_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View trading session status and performance report: /session [asian|london|ny]"""
+    from session_reporter import compile_session_summary, format_session_telegram_message, SESSION_WINDOWS
+    args = ctx.args or []
+    target_session = args[0].upper() if args else None
+
+    now_utc = datetime.now(timezone.utc)
+    curr_time = now_utc.time()
+
+    if not target_session or target_session not in SESSION_WINDOWS:
+        if curr_time < SESSION_WINDOWS["ASIAN"]["end"]:
+            active_s = "ASIAN"
+        elif curr_time < SESSION_WINDOWS["LONDON"]["end"]:
+            active_s = "LONDON"
+        else:
+            active_s = "NEW_YORK"
+    else:
+        active_s = target_session
+
+    positions = list(engine.active_positions.values())
+    summary = compile_session_summary(
+        session_name=active_s,
+        open_positions=positions,
+    )
+    msg = format_session_telegram_message(summary)
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def slippage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View real-time execution analytics & broker slippage: /slippage or /analytics"""
+    from execution_analytics import get_execution_tracker
+    tracker = get_execution_tracker()
+    report = tracker.generate_report()
+
+    lines = [
+        f"⚡ **Broker Execution Quality & Slippage Analytics**",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"• **Execution Grade:** `{report.execution_rating}`",
+        f"• **Total Executions:** `{report.total_executions}`",
+        f"• **Avg Latency:** `{report.avg_latency_ms:.1f}ms` (P95: `{report.p95_latency_ms:.1f}ms`)",
+        f"• **Avg Slippage:** `{report.avg_slippage_pts:+.2f} pts`",
+        f"• **Realized Slippage USD:** `${report.total_slippage_usd:+.2f}`",
+        f"• **Adverse Fills:** `{report.adverse_fills_pct:.1f}%` | **Favorable:** `{report.favorable_fills_pct:.1f}%`",
+        f"",
+        f"📌 **Audit Verdict:**",
+        f"_{report.recommendation}_",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+analytics_command = slippage_command
+
+
+async def kelly_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Calculates Fractional Kelly sizing & portfolio VaR 99%: /kelly [symbol]"""
+    args = ctx.args or []
+    sym = args[0].upper() if args else "XAUUSD"
+    eq = float(risk_mgr.state.equity or 10000.0)
+
+    feed = MarketDataFeed(symbol=sym, source=config.DEFAULT_DATA_SOURCE)
+    data = await _to_thread(feed.multi_tf, limit_1m=10)
+    df1 = data.get("1m") if data else None
+    px = float(df1["close"].iloc[-1]) if df1 is not None and not df1.empty else (2650.0 if "XAU" in sym else 65000.0)
+    stop = px * 0.995
+
+    kelly_res = risk_mgr.kelly_position_size(entry=px, stop=stop, symbol=sym, fraction_mult=0.25)
+    var_res = risk_mgr.portfolio_var(confidence_level=0.99)
+
+    lines = [
+        f"🎲 **Fractional Kelly Criterion & Portfolio Risk**",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"• **Portfolio Equity:** `${eq:,.2f}` (Leverage: {risk_mgr.get_leverage():.0f}x)",
+        f"• **Symbol:** `{sym}` @ `${px:,.2f}`",
+        f"• **Kelly Mode:** `{kelly_res.fraction_mode}`",
+        f"• **Raw Kelly f*:** `{kelly_res.raw_kelly_fraction:.2%}`",
+        f"• **Applied Sizing:** `{kelly_res.applied_kelly_fraction:.2%}` (`${kelly_res.dollar_risk:,.2f}` risk)",
+        f"• **Recommended Lots:** `{kelly_res.recommended_lots}` lots",
+        f"• **Model Win Rate:** `{kelly_res.win_rate:.1%}` | Payoff: `{kelly_res.payoff_ratio:.2f}:1`",
+        f"",
+        f"🛡️ **Portfolio Value at Risk (VaR 99% / 1-Day):**",
+        f"• **Parametric VaR (99%):** `${var_res.parametric_var_usd:,.2f}` (`{var_res.parametric_var_pct:.2f}%`)",
+        f"• **Historical Simulation VaR:** `${var_res.historical_var_usd:,.2f}` (`{var_res.historical_var_pct:.2f}%`)",
+        f"• **Expected Shortfall (CVaR):** `${var_res.expected_shortfall_cvar_usd:,.2f}`",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def vstops_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View and manage client-side hidden virtual stops: /vstops [clear]"""
+    from virtual_stops import get_virtual_stop_manager
+    v_mgr = get_virtual_stop_manager()
+    args = ctx.args or []
+    sub = args[0].lower() if args else ""
+
+    if sub in ("clear", "reset", "flush"):
+        cleared = len(v_mgr.records)
+        v_mgr.records.clear()
+        v_mgr._save()
+        await update.message.reply_text(f"🧹 Cleared `{cleared}` virtual stops records.")
+        return
+
+    active = v_mgr.active_stops()
+    lines = [
+        f"🛡️ **Client-Side Virtual Hidden Stops (Anti-Stop-Hunting)**",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"Hides exact stop loss orders from broker book; triggers market exits locally.",
+        f"• **Active Hidden Stops:** `{len(active)}`",
+    ]
+    if active:
+        for r in active:
+            tp_str = f" | TP1: ${r.virtual_tp1:,.2f}" if r.virtual_tp1 else ""
+            lines.append(
+                f"• `{r.symbol}` **{r.direction}** [#{r.ticket}]\n"
+                f"  Entry: `${r.entry_price:,.2f}` | **Virtual SL:** `${r.virtual_stop:,.2f}`{tp_str}"
+            )
+    else:
+        lines.append("• No active virtual stops currently pending.")
+
+    lines.extend([
+        f"",
+        f"Usage: `/vstops` (view active) | `/vstops clear` (clear state)",
+    ])
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def switch_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -4111,6 +4375,8 @@ def main():
     app.add_handler(CommandHandler("oanda", oanda_command))
     app.add_handler(CommandHandler("alpaca", alpaca_command))
     app.add_handler(CommandHandler("ccxt", ccxt_command))
+    app.add_handler(CommandHandler(["slippage", "analytics"], slippage_command))
+    app.add_handler(CommandHandler(["vstops", "vstop"], vstops_command))
 
     # Risk & Safety
     app.add_handler(CommandHandler("status", status_command))
@@ -4120,6 +4386,9 @@ def main():
     app.add_handler(CommandHandler(["resetrisk", "riskreset"], resetrisk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
     app.add_handler(CommandHandler(["lot", "lots", "lotsize"], lot_command))
+    app.add_handler(CommandHandler(["kelly", "var"], kelly_command))
+    app.add_handler(CommandHandler(["regime", "switchregime"], regime_command))
+    app.add_handler(CommandHandler(["session", "sessions"], session_command))
     try:
         from telegram_advanced import kill_command
         app.add_handler(CommandHandler("kill", kill_command))

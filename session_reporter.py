@@ -126,16 +126,18 @@ def filter_trades_by_session(
 
 
 def compile_session_summary(
-    session_key: str,
+    session_key: str = "LONDON",
     trades: Optional[List[Dict[str, Any]]] = None,
     open_positions: Optional[List[Any]] = None,
     current_utc: Optional[datetime] = None,
+    session_name: Optional[str] = None,
 ) -> SessionSummary:
     """Calculates quantitative performance metrics for the specified session."""
     if current_utc is None:
         current_utc = datetime.now(timezone.utc)
 
-    key = session_key.upper().replace(" ", "_")
+    target_k = session_name or session_key
+    key = target_k.upper().replace(" ", "_")
     cfg = SESSION_WINDOWS.get(key, SESSION_WINDOWS["LONDON"])
 
     if trades is None:

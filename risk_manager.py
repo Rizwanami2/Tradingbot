@@ -1030,6 +1030,47 @@ class RiskManager:
             f"DayPnL:{s.daily_pnl:.2f} | CanTrade:{ok} ({why}) | Symbol:{self.symbol}"
         )
 
+    def kelly_position_size(
+        self,
+        entry: float,
+        stop: float,
+        equity: Optional[float] = None,
+        symbol: Optional[str] = None,
+        fraction_mult: float = 0.25,
+    ) -> Any:
+        """Calculates dynamic lot size using the Fractional Kelly Criterion."""
+        from kelly_criterion import calculate_kelly_lot_size
+        eq = float(equity if equity is not None else self.state.equity)
+        win_rate = float(getattr(self.state, "recent_winrate", 0.55) or 0.55)
+        if hasattr(self, "win_rate"):
+            try:
+                wr = self.win_rate()
+                if wr and wr > 0:
+                    win_rate = float(wr)
+            except Exception:
+                pass
+        payoff = float(getattr(self.config, "tp1_r", 1.80) or 1.80)
+        return calculate_kelly_lot_size(
+            equity=eq,
+            entry_price=entry,
+            stop_loss_price=stop,
+            win_rate=win_rate,
+            payoff_ratio=payoff,
+            fraction_mult=fraction_mult,
+            max_leverage=self.get_leverage(),
+        )
+
+    def portfolio_var(self, returns: Optional[Any] = None, confidence_level: float = 0.99, horizon_days: int = 1) -> Any:
+        """Calculates 95% or 99% portfolio Value at Risk (VaR) and CVaR."""
+        from kelly_criterion import compute_value_at_risk
+        if returns is None:
+            returns = [t.get("pnl", 0.0) / max(self.state.equity, 1.0) for t in getattr(self, "trades", [])]
+        return compute_value_at_risk(
+            returns=returns,
+            portfolio_equity=self.state.equity,
+            confidence_level=confidence_level,
+            horizon_days=horizon_days,
+        )
 
 
 def lots_for_risk(equity: float, risk_pct: float, entry: float, stop: float, symbol: str = "XAUUSD") -> float:

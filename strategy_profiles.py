@@ -20,7 +20,7 @@ class StrategyProfile:
     weights: Dict[str, float] = field(default_factory=lambda: {
         "TREND": 1.25, "LIQUIDITY": 1.40, "INDICATORS": 1.00,
         "AI-LEARNER": 0.90, "NEWS": 0.70, "GAUTAM-JHA": 1.30, "MEAN-REVERSION": 1.20,
-        "FAKE-BREAKOUT": 1.35,
+        "FAKE-BREAKOUT": 1.35, "MTF-CONFLUENCE": 1.40, "ASIAN-BREAKOUT": 1.25,
     })
     min_agreement: int = 2
     min_score: float = 1.2
@@ -71,6 +71,8 @@ DEFAULT_PROFILES = {
             "GAUTAM-JHA": 1.3,
             "MEAN-REVERSION": 1.5,
             "FAKE-BREAKOUT": 1.35,
+            "MTF-CONFLUENCE": 1.35,
+            "ASIAN-BREAKOUT": 1.30,
         },
         min_agreement=2,
         min_score=1.0,
@@ -104,7 +106,7 @@ DEFAULT_PROFILES = {
     "swing": StrategyProfile(
         name="swing",
         description="Higher TF focus, wider targets",
-        weights={"TREND": 1.5, "LIQUIDITY": 1.3, "INDICATORS": 0.9, "AI-LEARNER": 1.0, "NEWS": 0.8, "FAKE-BREAKOUT": 1.25},
+        weights={"TREND": 1.5, "LIQUIDITY": 1.3, "INDICATORS": 0.9, "AI-LEARNER": 1.0, "NEWS": 0.8, "FAKE-BREAKOUT": 1.25, "MTF-CONFLUENCE": 1.50, "ASIAN-BREAKOUT": 1.20},
         min_agreement=3,
         min_score=1.6,
         min_rr=2.5,
@@ -116,7 +118,7 @@ DEFAULT_PROFILES = {
     "gold_only": StrategyProfile(
         name="gold_only",
         description="Optimized for XAU / Gold",
-        weights={"TREND": 1.2, "LIQUIDITY": 1.6, "INDICATORS": 1.0, "AI-LEARNER": 0.85, "NEWS": 1.0, "FAKE-BREAKOUT": 1.45},
+        weights={"TREND": 1.2, "LIQUIDITY": 1.6, "INDICATORS": 1.0, "AI-LEARNER": 0.85, "NEWS": 1.0, "FAKE-BREAKOUT": 1.45, "MTF-CONFLUENCE": 1.45, "ASIAN-BREAKOUT": 1.35},
         min_score=1.9,
         min_rr=2.0,
         base_risk_pct=0.22,
@@ -125,7 +127,7 @@ DEFAULT_PROFILES = {
     "crypto": StrategyProfile(
         name="crypto",
         description="Crypto-focused, lower leverage",
-        weights={"TREND": 1.3, "LIQUIDITY": 1.2, "INDICATORS": 1.1, "AI-LEARNER": 1.0, "NEWS": 1.1, "FAKE-BREAKOUT": 1.30},
+        weights={"TREND": 1.3, "LIQUIDITY": 1.2, "INDICATORS": 1.1, "AI-LEARNER": 1.0, "NEWS": 1.1, "FAKE-BREAKOUT": 1.30, "MTF-CONFLUENCE": 1.35, "ASIAN-BREAKOUT": 1.25},
         min_agreement=2,
         min_score=1.2,
         min_rr=2.0,

@@ -537,6 +537,15 @@ class ExecutionEngine:
         except Exception:
             pass
 
+        # 4. Remove from Virtual Stop Manager
+        try:
+            from virtual_stops import get_virtual_stop_manager
+            key = getattr(pos, "ticket", None) or getattr(pos, "id", None)
+            if key:
+                get_virtual_stop_manager().remove(key)
+        except Exception:
+            pass
+
     _notify_brain_close = _notify_trade_closed
 
 
@@ -788,6 +797,38 @@ class ExecutionEngine:
                     setup._just_executed = True
                     self.active_positions[setup.id] = setup
                     self.pending_setups.pop(setup.id, None)
+
+                    # 1. Realized slippage & execution latency analytics
+                    try:
+                        from execution_analytics import get_execution_tracker
+                        get_execution_tracker().record_fill(
+                            ticket=setup.ticket,
+                            symbol=setup.symbol,
+                            action="BUY" if setup.direction == "LONG" else "SELL",
+                            requested_price=setup.entry_level,
+                            executed_price=exec_price,
+                            volume=setup.lots,
+                            latency_ms=12.5,
+                            broker="Delta" if is_delta else "MT5",
+                        )
+                    except Exception as _e_an:
+                        logger.debug("Failed recording execution analytics: %s", _e_an)
+
+                    # 2. Client-side anti-stop-hunt virtual stops
+                    try:
+                        from virtual_stops import get_virtual_stop_manager
+                        get_virtual_stop_manager().register(
+                            symbol=setup.symbol,
+                            ticket=setup.ticket,
+                            direction=setup.direction,
+                            entry_price=exec_price,
+                            virtual_stop=setup.stop_loss,
+                            virtual_tp1=setup.tp1,
+                            virtual_tp2=setup.tp2,
+                        )
+                    except Exception as _e_vs:
+                        logger.debug("Failed registering virtual stop: %s", _e_vs)
+
                     is_delta = "delta" in type(self.broker).__name__.lower()
                     status_title = "DELTA LIVE TRADE CONFIRMED" if is_delta else "MT5 LIVE TRADE CONFIRMED"
                     footer_text = "🟢 _Delta Exchange India Live Execution_" if is_delta else "🟢 _MT5 Live Execution_"
@@ -1252,9 +1293,25 @@ class ExecutionEngine:
                 if (is_long and trail_stop > pos.stop_loss) or (not is_long and trail_stop < pos.stop_loss):
                     pos.stop_loss = trail_stop
 
-            # (F) Stop Loss / Break-Even / Exit Hit
+            # (F) Stop Loss / Break-Even / Exit Hit / Virtual Stop Hit
+            v_hit = False
+            v_reason = None
+            try:
+                from virtual_stops import get_virtual_stop_manager
+                v_triggers = get_virtual_stop_manager().check_ticks(pos.symbol, curr_price)
+                for rec, trig_reason in v_triggers:
+                    pos_ticket = str(getattr(pos, "ticket", None) or pos.id)
+                    if (str(rec.ticket) == pos_ticket or str(rec.ticket) == str(pos.id)) and "Stop Loss" in str(trig_reason):
+                        v_hit = True
+                        v_reason = trig_reason
+                        break
+            except Exception:
+                pass
+
             stop_tightened_in_candle = (pos.stop_loss != old_stop)
-            if just_executed:
+            if v_hit:
+                stop_hit = True
+            elif just_executed:
                 stop_hit = (curr_price <= pos.stop_loss) if is_long else (curr_price >= pos.stop_loss)
             elif tp1_just_hit or stop_tightened_in_candle:
                 if is_long:
@@ -1265,7 +1322,7 @@ class ExecutionEngine:
                 stop_hit = (low <= pos.stop_loss) if is_long else (high >= pos.stop_loss)
 
             if stop_hit:
-                exit_price = pos.stop_loss
+                exit_price = curr_price if v_hit else pos.stop_loss
                 broker_ok = True
                 try:
                     res = self._broker_close(pos.symbol, price=exit_price, ticket=getattr(pos, "ticket", None) or pos.id)
@@ -1285,7 +1342,7 @@ class ExecutionEngine:
                 pos.exit_price = exit_price
                 pos.status = OrderStatus.CLOSED
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
-                pos.close_reason = "Stop Loss / Break-Even Exit"
+                pos.close_reason = v_reason if v_hit else "Stop Loss / Break-Even Exit"
 
                 r_mult = pos.realized_pnl / (initial_risk * pos.size) if (initial_risk * pos.size) > 0 else 0.0
                 try:

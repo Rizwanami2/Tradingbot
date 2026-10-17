@@ -34,3 +34,5 @@ attachments/
 
 # Local runtime status (may contain account metrics)
 .runtime/
+virtual_stops_state.json
+execution_analytics.json

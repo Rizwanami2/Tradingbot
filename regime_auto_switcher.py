@@ -183,13 +183,22 @@ class RegimeAutoSwitcher:
 
 
 def calibrate_rolling_sharpe_weights(
-    agent_stats_file: str = "agent_stats.json",
+    agent_stats_file: Any = "agent_stats.json",
     base_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     """
     Recalibrates multi-agent consensus weights based on rolling win-rate and Sharpe ratio.
     Boosts consistent top performers and softly reduces underperforming agents.
     """
+    stats_file = "agent_stats.json"
+    arbiter_inst = None
+    if isinstance(agent_stats_file, (str, Path)):
+        stats_file = str(agent_stats_file)
+    else:
+        arbiter_inst = agent_stats_file
+        if base_weights is None and hasattr(arbiter_inst, "WEIGHTS"):
+            base_weights = dict(arbiter_inst.WEIGHTS)
+
     weights = dict(base_weights or {
         "TREND": 1.25,
         "LIQUIDITY": 1.40,
@@ -199,13 +208,17 @@ def calibrate_rolling_sharpe_weights(
         "GAUTAM-JHA": 1.55,
         "MEAN-REVERSION": 1.35,
         "FAKE-BREAKOUT": 1.35,
+        "MTF-CONFLUENCE": 1.40,
+        "ASIAN-BREAKOUT": 1.25,
     })
 
-    if not os.path.exists(agent_stats_file):
+    if not os.path.exists(stats_file):
+        if arbiter_inst is not None and hasattr(arbiter_inst, "WEIGHTS"):
+            arbiter_inst.WEIGHTS.update(weights)
         return weights
 
     try:
-        with open(agent_stats_file, "r", encoding="utf-8") as f:
+        with open(stats_file, "r", encoding="utf-8") as f:
             stats = json.load(f)
 
         for agent, w in list(weights.items()):

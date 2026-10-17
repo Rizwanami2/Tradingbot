@@ -146,6 +146,25 @@ async def live_monitoring_worker(
                     if not autotrade_active and symbol in engine.pending_setups:
                         engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
+                    # Real-time Regime Auto-Switcher
+                    try:
+                        from regime_auto_switcher import RegimeAutoSwitcher
+                        if not hasattr(arbiter, "_regime_switcher") or arbiter._regime_switcher is None:
+                            arbiter._regime_switcher = RegimeAutoSwitcher(cooldown_seconds=300.0)
+                        switch_res = arbiter._regime_switcher.evaluate_and_switch(
+                            df1, symbol=symbol, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config
+                        )
+                        if switch_res.switched:
+                            logger.info("Regime auto-switched: %s -> %s (%s)", switch_res.previous_profile, switch_res.current_profile, switch_res.reason)
+                            await _send_alert(
+                                f"🔄 **REGIME AUTO-SWITCH ACTIVATED**\n"
+                                f"• **Symbol:** `{symbol}` | **Regime:** `{switch_res.regime_detected}`\n"
+                                f"• **Profile:** `{switch_res.previous_profile}` ➔ `{switch_res.current_profile}`\n"
+                                f"• **Reason:** _{switch_res.reason}_"
+                            )
+                    except Exception as _reg_err:
+                        logger.debug("Regime auto-switcher error: %s", _reg_err)
+
                     from anti_spam import get_anti_spam_limiter
                     limiter = get_anti_spam_limiter()
 
