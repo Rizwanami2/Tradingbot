@@ -6,12 +6,14 @@ Modern Telegram bot and algorithmic trading engine for **Gold (XAUUSD)** and **B
 
 | Area | Capability |
 |------|------------|
-| **Signals** | **7 Autonomous Agents**: Trend, Liquidity/SMC, Technical Indicators, AI-Learner, Macro News, Gautam Jha Price Action, and Mean-Reversion VWAP |
-| **Entry Planning** | Dynamic best-entry *zones* synthesized from PDH/PDL, EMAs, market swings, ATR volatility, and 2-year macro S/R levels |
+| **Signals** | **10 Autonomous Agents**: Trend, Liquidity/SMC, Technical Indicators, AI-Learner, Macro News, Gautam Jha Price Action, Mean-Reversion VWAP, Fake Breakout & Liquidity Sweeps, MTF FVG/OB Confluence, and Asian Session Range Breakout |
+| **Entry Planning** | Dynamic best-entry *zones* synthesized from PDH/PDL, EMAs, market swings, ATR volatility, 2-year macro S/R levels, and Fair Value Gaps |
 | **2Y History** | ~730 daily bars caching — 52-week ranges, EMA50/200, historical swing structures |
 | **Autotrade** | Automated multi-symbol execution up to **5 concurrent active trade slots** |
-| **Brokers** | **MetaTrader 5 Live (`mt5_live`) & Delta Exchange India (`delta_live`)** — High-performance real execution engines with broker-side SL/TP. |
-| **Safety & Risk** | Fail-closed security, 0.20% base risk per trade, 3.0% daily loss limit, 6.0% weekly loss limit, dynamic leverage ceilings, and emergency kill switch |
+| **Brokers** | **MetaTrader 5 Live (`mt5_live`), Delta Exchange India (`delta_live`), and EA File Bridge** — High-performance real execution engines with broker-side SL/TP. |
+| **Stealth & Execution** | **Virtual Hidden Stops (Anti-Stop-Hunting)**: Keeps stops off broker books, executing locally on tick breaches; Real-time **Execution Analytics & Slippage Tracking** |
+| **Safety & Risk** | Fail-closed security, 0.20% base risk per trade, **Fractional Kelly Criterion & 99% VaR sizing**, 3.0% daily loss limit, 6.0% weekly loss limit, dynamic leverage ceilings, and emergency kill switch |
+| **Regimes & Sessions** | Real-time **Regime Auto-Switcher** (Trend/Range/Expansion) and automated **End-of-Session Performance Reports** |
 | **Scalping** | Optional instant profit harvesting on USD profit target or percentage moves |
 
 ## Environment Configuration
@@ -72,17 +74,23 @@ BOT_NEWS=true
 
 ### 🏦 Execution Brokers (MT5 Live & Delta Exchange)
 - `/mt5 [status|live|accounts|add|remove|balance]` — MetaTrader 5 live account dashboard & management ([Guide](docs/MT5_INTEGRATION.md))
+- `/bridge [status|ping|on|off|dir]` — MetaTrader 5 Expert Advisor file bridge ([Guide](docs/EA_BRIDGE.md))
 - `/delta [status|balance|positions|leverage|help]` — Delta Exchange India live broker controls
 - `/live [on|off]` — Connect, inspect, or toggle automated live execution
 - `/balance [amount]` — View or update live account equity
 - `/switch <alias|login|delta>` — Switch active broker execution mode
 - `/broker [mode]` — Display live broker telemetry or change mode
 
-### 🛡️ Risk & Safety Management
+### 🛡️ Risk, Execution & Stealth Management
+- `/vstops [clear]` — Client-side virtual hidden stops (anti-stop-hunting protection)
+- `/slippage` / `/analytics` — Real-time broker execution quality, latency & fill slippage
+- `/kelly [SYM]` — Fractional Kelly Criterion sizing & 99% portfolio Value at Risk (VaR)
+- `/regime [SYM]` — Volatility/trend regime evaluation & auto-profile switching
+- `/session` — Session performance review (Asian, London, New York)
 - `/status` — Portfolio equity, drawdown, active slot capacity & strategy profile
 - `/health` — Real-time telemetry & background worker heartbeat
 - `/risk` — Risk tier report, margin capacity & lot sizing
-- `/leverage [1-20]` — Set maximum account leverage ceiling
+- `/leverage [1-200]` — Set maximum account leverage ceiling
 - `/kill [on|off]` — Emergency execution stop circuit breaker
 
 ### 📈 Backtesting & Research
@@ -108,7 +116,13 @@ pip install -r requirements.txt
 # 2. Configure environment
 cp .env.example .env
 
-# 3. Start trading bot (applies self-healing wire patches on boot)
+# 3. Test EA Bridge connectivity (simulation or live)
+python scripts/test_ea_bridge.py --simulate
+
+# 4. Deploy EA_Bridge.mq5 to MT5 terminals
+python scripts/deploy_ea.py --dry-run
+
+# 5. Start trading bot (applies self-healing wire patches on boot)
 python run_bot.py
 
 # Or launch directly in interactive CLI mode:
