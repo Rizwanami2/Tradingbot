@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Advanced Suite — modular filters, risk, exits, explainability. See docs/AI_ADVANCED_SUITE.md"""
+"""AI Advanced Suite — modular filters, risk, exits, explainability."""
 from __future__ import annotations
 import json, logging, os, time
 from dataclasses import dataclass, field
@@ -77,6 +77,8 @@ class AIAdvancedSuite:
         self.learn_freeze = _env_bool("AI_LEARN_FREEZE", False)
         self.require_schema = _env_bool("AI_REQUIRE_JSON_SCHEMA", True)
         self.state = self._load_state()
+        if "suite_enabled" in self.state:
+            self.enabled = bool(self.state["suite_enabled"])
 
     def _load_state(self) -> Dict[str, Any]:
         default = {"daily": {"date": "", "trades": 0, "realized_r": 0.0, "wins": 0, "losses": 0}, "consec_losses": 0, "last_loss_ts": 0.0, "narratives": [], "mistakes": {}, "agent_trust": {}, "fill_rejects": 0, "equity_peak": 0.0, "equity": 0.0, "milestones_hit": [], "shadow_log": [], "learn_frozen": False, "risk_persona": "med", "bias_day": "", "audit": [], "version": 1}
@@ -152,7 +154,7 @@ class AIAdvancedSuite:
         if ctx.news_risk >= 0.75: return res.veto(f"news risk {ctx.news_risk:.2f}")
         if ctx.news_risk >= 0.5:
             res.size_mult *= 0.5
-            res.reasons.append("news risk sizex0.5")
+            res.reasons.append("news risk size cut")
         if ctx.atr > 0 and ctx.spread > 0 and ctx.spread > 0.35 * ctx.atr: return res.veto("spread too wide vs ATR")
         if ctx.atr > 0 and ctx.entry_price > 0 and ctx.daily_open > 0:
             move = abs(ctx.entry_price - ctx.daily_open) / ctx.atr
@@ -162,18 +164,14 @@ class AIAdvancedSuite:
             hb = ctx.htf_bias.upper()
             if hb in ("LONG", "BULL") and direction == "SHORT":
                 res.size_mult *= 0.6
-                res.reasons.append("against HTF bias")
             if hb in ("SHORT", "BEAR") and direction == "LONG":
                 res.size_mult *= 0.6
-                res.reasons.append("against HTF bias")
         sym = ctx.symbol.upper()
         hour = ctx.hour_utc if ctx.hour_utc is not None else datetime.now(timezone.utc).hour
         if ("XAU" in sym or "GOLD" in sym) and 0 <= hour < 6:
             res.size_mult *= 0.7
-            res.reasons.append("gold Asia hours")
         if "BTC" in sym and datetime.now(timezone.utc).weekday() >= 5:
             res.size_mult *= 0.75
-            res.reasons.append("BTC weekend")
         eq = float(self.state.get("equity") or 0.0)
         peak = float(self.state.get("equity_peak") or eq or 1.0)
         if peak > 0 and eq > 0:
@@ -181,10 +179,6 @@ class AIAdvancedSuite:
             if dd >= 0.10: return res.veto("recovery mode: DD>=10%")
             if dd >= 0.06: res.size_mult *= 0.5
             if dd >= 0.03: res.size_mult *= 0.75
-        if peak > 0 and eq >= peak * 1.05 and "p5" not in self.state.get("milestones_hit", []):
-            self.state.setdefault("milestones_hit", []).append("p5")
-            res.size_mult *= 0.85
-        if ctx.features: res.metadata["entry_features"] = list(ctx.features)[:20]
         res.size_mult = float(max(0.0, min(res.size_mult, 1.5)))
         if res.size_mult <= 0.05: return res.veto("size mult near zero")
         res.reasons.append(f"scorecard={scorecard:.0f}")
@@ -212,21 +206,12 @@ class AIAdvancedSuite:
                 m[mistake_tag] = int(m.get(mistake_tag, 0)) + 1
         self.state.setdefault("narratives", []).append({"ts": datetime.now(timezone.utc).isoformat(), "symbol": symbol, "won": won, "r": r_multiple, "setup": setup, "regime": regime, "agents": agents or [], "conf": conf, "narrative": narrative[:500], "features": (features or [])[:20]})
         self.state["narratives"] = self.state["narratives"][-200:]
-        for a in agents or []:
-            key = str(a).upper()
-            t = float(self.state.setdefault("agent_trust", {}).get(key, 1.0))
-            t = min(2.0, t * 1.02 + 0.01) if won else max(0.35, t * 0.97 - 0.01)
-            self.state["agent_trust"][key] = round(t, 3)
         if not self.state.get("learn_frozen") and not self.learn_freeze:
             try:
                 from ai_learner import AILearnerAgent
                 feats = np.array(features, dtype=float) if features else None
                 AILearnerAgent().learn(direction_correct=bool(won), conf=float(conf), won=bool(won), pnl=float(r_multiple), features=feats, r_multiple=float(r_multiple), regime=regime or None)
             except Exception as e: logger.debug("learner feed: %s", e)
-            try:
-                from autonomous_learner import get_brain
-                get_brain(auto_bootstrap=False).on_trade_closed(r_multiple=float(r_multiple), won=bool(won), setup=setup or f"live|{regime}", regime=regime, agents=agents or [], conf=float(conf))
-            except Exception as e: logger.debug("brain feed: %s", e)
         self._audit("closed", {"symbol": symbol, "won": won, "r": r_multiple, "mistake": mistake_tag})
         self._save()
 
@@ -252,7 +237,25 @@ class AIAdvancedSuite:
     def status_text(self) -> str:
         self._roll_day()
         d = self.state.get("daily", {})
-        return (f"AI Advanced Suite | enabled={self.enabled} persona={self.state.get('risk_persona')} bias={self.state.get('bias_day') or 'none'} trades={d.get('trades',0)}/{self.max_daily_trades} R={float(d.get('realized_r',0)):.2f} consec_loss={self.state.get('consec_losses',0)}")
+        lines = [
+            "AI Advanced Suite",
+            f"- Enabled: {self.enabled}",
+            f"- Persona: {self.state.get('risk_persona')} | Bias: {self.state.get('bias_day') or 'none'}",
+            f"- Today trades: {d.get('trades', 0)}/{self.max_daily_trades} | R: {float(d.get('realized_r', 0)):.2f}",
+            f"- Consec losses: {self.state.get('consec_losses', 0)}/{self.max_consec_losses}",
+            f"- Learn frozen: {self.state.get('learn_frozen') or self.learn_freeze}",
+            f"- Fill rejects: {self.state.get('fill_rejects', 0)}",
+            f"- Equity: {float(self.state.get('equity') or 0):.2f} peak {float(self.state.get('equity_peak') or 0):.2f}",
+            f"- Scorecard min: {self.min_scorecard} (balance-only={self.balance_mode_only_scorecard})",
+            f"- Health live: {self.live_health}",
+        ]
+        return "\n".join(lines)
+
+    def set_enabled(self, on: bool) -> str:
+        self.enabled = bool(on)
+        self.state["suite_enabled"] = bool(on)
+        self._save()
+        return f"AI suite {'ON' if on else 'OFF'}"
 
     def set_persona(self, persona: str) -> str:
         p = persona.strip().lower()
@@ -275,6 +278,15 @@ class AIAdvancedSuite:
         if not ticks_ok: problems.append("no ticks")
         if int(self.state.get("fill_rejects", 0)) >= 8: problems.append("fill rejects elevated")
         return (False, "; ".join(problems)) if problems else (True, "ok")
+
+    def weekly_critique_prompt(self) -> str:
+        narr = self.state.get("narratives", [])[-20:]
+        mistakes = self.state.get("mistakes", {})
+        return (
+            "You are a trading coach. Given recent trades JSON and mistake counts, "
+            "return 3 concrete rule changes. Be brief.\n"
+            f"TRADES={json.dumps(narr)[:3000]}\nMISTAKES={json.dumps(mistakes)}"
+        )
 
     def apply_lot_ceiling(self, lots: float) -> float:
         return float(min(max(lots, 0.0), self.lot_ceiling))
