@@ -12,6 +12,8 @@ from ops_dashboard import (
     StatusStore,
     create_server,
     health_from_snapshot,
+    start_dashboard_background,
+    stop_dashboard_background,
 )
 
 
@@ -82,6 +84,93 @@ class TestOpsDashboard(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=3)
+
+    def test_web_dashboard_html_and_companion_endpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            StatusStore(path).write({
+                "symbol": "XAUUSD",
+                "equity": 5000.0,
+                "balance": 5000.0,
+                "slots_mode": "auto",
+                "max_open_trades": 6,
+                "last_success_at": datetime.now(timezone.utc).isoformat(),
+                "consecutive_errors": 0,
+            })
+            server = create_server("127.0.0.1", 0, status_file=path)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                # 1. HTML index
+                conn = HTTPConnection(host, port, timeout=10)
+                conn.request("GET", "/")
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+                html = res.read().decode("utf-8")
+                self.assertIn("Nimble-Darwin", html)
+                self.assertIn("Active Positions", html)
+                conn.close()
+
+                # 2. GET /api/positions
+                conn = HTTPConnection(host, port, timeout=10)
+                conn.request("GET", "/api/positions")
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+                data = json.loads(res.read())
+                self.assertIn("active_positions", data)
+                self.assertIn("pending_setups", data)
+                conn.close()
+
+                # 3. GET /api/matrix
+                conn = HTTPConnection(host, port, timeout=10)
+                conn.request("GET", "/api/matrix?symbol=XAUUSD")
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+                m_data = json.loads(res.read())
+                self.assertTrue(m_data["ok"])
+                self.assertIn("snapshot", m_data)
+                conn.close()
+
+                # 4. POST /api/slots
+                conn = HTTPConnection(host, port, timeout=10)
+                conn.request("POST", "/api/slots", body=json.dumps({"mode": "manual", "count": 4}), headers={"Content-Type": "application/json"})
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+                s_data = json.loads(res.read())
+                self.assertTrue(s_data["ok"])
+                conn.close()
+
+                # 5. POST /api/autotrade
+                conn = HTTPConnection(host, port, timeout=10)
+                conn.request("POST", "/api/autotrade", body=json.dumps({"enabled": False}), headers={"Content-Type": "application/json"})
+                res = conn.getresponse()
+                self.assertEqual(res.status, 200)
+                at_data = json.loads(res.read())
+                self.assertTrue(at_data["ok"])
+                conn.close()
+
+                # 6. POST /api/close and /api/cancel and /api/halt
+                for ep, pl in [("/api/close", {"symbol": "XAUUSD"}), ("/api/cancel", {"id": "SET1"}), ("/api/halt", {"halt": True})]:
+                    conn = HTTPConnection(host, port, timeout=10)
+                    conn.request("POST", ep, body=json.dumps(pl), headers={"Content-Type": "application/json"})
+                    res = conn.getresponse()
+                    self.assertEqual(res.status, 200)
+                    resp_data = json.loads(res.read())
+                    self.assertTrue(resp_data["ok"])
+                    conn.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
+    def test_start_and_stop_dashboard_background(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            StatusStore(path).write({"last_success_at": datetime.now(timezone.utc).isoformat()})
+            srv, url = start_dashboard_background("127.0.0.1", 0, status_file=path)
+            self.assertTrue(url.startswith("http://127.0.0.1:"))
+            stop_dashboard_background()
 
 
 if __name__ == "__main__":

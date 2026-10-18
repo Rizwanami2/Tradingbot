@@ -234,7 +234,6 @@ DELTA_EXCHANGE_MAX_LEVERAGE = _safe_float(os.getenv("DELTA_EXCHANGE_MAX_LEVERAGE
 
 MAX_OPEN_TRADES = _safe_int(os.getenv("BOT_MAX_OPEN_TRADES"), 6)
 SLOTS_MODE = os.getenv("BOT_SLOTS_MODE", "auto").strip().lower()
-MIN_TRADE_PROFIT_USD = _safe_float(os.getenv("MIN_TRADE_PROFIT_USD"), 0.50)
 
 
 def get_slots_mode() -> str:
@@ -245,16 +244,6 @@ def get_slots_mode() -> str:
 def set_slots_mode(mode: str) -> None:
     global SLOTS_MODE
     SLOTS_MODE = str(mode or "auto").strip().lower()
-
-
-def get_min_trade_profit() -> float:
-    global MIN_TRADE_PROFIT_USD
-    return float(MIN_TRADE_PROFIT_USD or 0.50)
-
-
-def set_min_trade_profit(val: float) -> None:
-    global MIN_TRADE_PROFIT_USD
-    MIN_TRADE_PROFIT_USD = max(0.10, float(val))
 
 
 MAX_POSITIONS_PER_SYMBOL = _safe_int(os.getenv("BOT_MAX_POSITIONS_PER_SYMBOL") or os.getenv("SCALP_MAX_POSITIONS_PER_SYMBOL"), 3)

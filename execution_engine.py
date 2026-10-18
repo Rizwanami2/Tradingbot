@@ -253,7 +253,6 @@ class ExecutionEngine:
         import config as _cfg_slots
         self.slots_mode: str = getattr(_cfg_slots, "get_slots_mode", lambda: "auto")() or "auto"
         self.manual_slots: int = min(6, max(1, int(getattr(_cfg_slots, "MAX_OPEN_TRADES", 6) or 6)))
-        self.min_profit_usd: float = getattr(_cfg_slots, "get_min_trade_profit", lambda: 0.50)() or 0.50
         if max_open_trades is not None:
             self.max_open_trades = int(max_open_trades)
         else:
@@ -761,23 +760,6 @@ class ExecutionEngine:
         tp2 = float(sig["tp2"])
         tp3 = sig.get("tp3")
 
-        # Minimum guaranteed profit check ($0.50 floor per trade)
-        min_p = float(getattr(self, "min_profit_usd", 0.50) or 0.50)
-        close_frac = 1.0 if is_scalp_req else float(getattr(getattr(self, "risk_manager", None), "config", None) and getattr(self.risk_manager.config, "tp1_close_pct", 0.50) or 0.50)
-        eff_size = size * close_frac
-        if eff_size > 0:
-            min_tp_dist = min_p / eff_size
-            if direction == "LONG":
-                if (tp1 - entry) < min_tp_dist:
-                    tp1 = round(entry + min_tp_dist, 4)
-                if tp2 < tp1:
-                    tp2 = round(max(tp2, tp1 * 1.002), 4)
-            elif direction == "SHORT":
-                if (entry - tp1) < min_tp_dist:
-                    tp1 = round(entry - min_tp_dist, 4)
-                if tp2 > tp1:
-                    tp2 = round(min(tp2, tp1 * 0.998), 4)
-
         numeric_values = [entry, stop, tp1, tp2, lots, size, leverage, margin_required, risk_amt, rr]
         if not all(math.isfinite(value) for value in numeric_values):
             raise ValueError("Setup contains a non-finite numeric value.")
@@ -1073,14 +1055,12 @@ class ExecutionEngine:
                 pos_ticket = getattr(pos, "ticket", None) or pos.id
 
                 # (1) Scalp Progressive Break-Even Lock
-                min_p_floor = float(getattr(self, "min_profit_usd", 0.50) or 0.50)
                 be_act_usd = float(getattr(self, "scalp_be_lock_usd", 0.50))
                 be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.04))
                 move_gain_pct = ((pos.highest_price - entry) / entry * 100.0) if is_long else ((entry - pos.lowest_price) / entry * 100.0)
                 if pos.be_stage < 1 and (pos.highest_profit_usd >= be_act_usd or move_gain_pct >= be_act_pct):
                     pos.be_stage = 1
-                    p_delta = (min_p_floor / pos.remaining_size) if pos.remaining_size > 0 else 0.0
-                    be_level = max(round(entry * 1.0002, 4), round(entry + p_delta, 4)) if is_long else min(round(entry * 0.9998, 4), round(entry - p_delta, 4))
+                    be_level = round(entry * 1.0002, 4) if is_long else round(entry * 0.9998, 4)
                     if (is_long and be_level > pos.stop_loss) or (not is_long and be_level < pos.stop_loss):
                         old_sl = pos.stop_loss
                         pos.stop_loss = be_level
@@ -1107,12 +1087,11 @@ class ExecutionEngine:
 
                 if trail_on and (pos.highest_profit_usd >= trail_act_usd or move_gain_pct >= trail_act_pct):
                     pos.trailing_sl_active = True
-                    min_floor_delta = (min_p_floor / pos.remaining_size) if pos.remaining_size > 0 else 0.0
                     if is_long:
                         pct_trail = pos.highest_price * (1.0 - trail_dist_pct / 100.0)
                         usd_trail = (pos.highest_price - (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
                         new_sl = round(max(pct_trail, usd_trail), 4)
-                        new_sl = max(new_sl, round(entry * 1.0002, 4), round(entry + min_floor_delta, 4))
+                        new_sl = max(new_sl, round(entry * 1.0002, 4))
                         if new_sl > pos.stop_loss:
                             old_sl = pos.stop_loss
                             pos.stop_loss = new_sl
@@ -1131,7 +1110,7 @@ class ExecutionEngine:
                         pct_trail = pos.lowest_price * (1.0 + trail_dist_pct / 100.0)
                         usd_trail = (pos.lowest_price + (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
                         new_sl = round(min(pct_trail, usd_trail), 4)
-                        new_sl = min(new_sl, round(entry * 0.9998, 4), round(entry - min_floor_delta, 4))
+                        new_sl = min(new_sl, round(entry * 0.9998, 4))
                         if new_sl < pos.stop_loss:
                             old_sl = pos.stop_loss
                             pos.stop_loss = new_sl
@@ -1148,12 +1127,12 @@ class ExecutionEngine:
                             self._dispatch_event("SCALP_TRAIL_UPDATED", pos, tr_msg)
 
                 # (3) Micro Scalp Hard Take Profit (Safety Ceiling)
-                if pos.unrealized_pnl >= min_p_floor:
+                if pos.unrealized_pnl > 0:
                     hit_pct = False
                     if scalp_pct > 0 and entry > 0:
                         move_pct = abs(curr_price - entry) / entry * 100.0
                         hit_pct = move_pct >= scalp_pct
-                    hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= max(scalp_usd, min_p_floor)
+                    hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= scalp_usd
                     if hit_usd or hit_pct:
                         broker_ok = True
                         try:
@@ -1323,17 +1302,6 @@ class ExecutionEngine:
             be_stop, be_reason = self.risk_manager.auto_breakeven_stop(
                 pos.direction.lower(), entry, pos.stop_loss, pos.highest_price, pos.lowest_price, initial_risk
             )
-            min_p_floor = float(getattr(self, "min_profit_usd", 0.50) or 0.50)
-            if pos.be_stage >= 1 and pos.remaining_size > 0:
-                cur_peak_pnl = (pos.highest_price - entry) * pos.remaining_size if is_long else (entry - pos.lowest_price) * pos.remaining_size
-                if cur_peak_pnl >= min_p_floor:
-                    floor_sl = round(entry + (min_p_floor / pos.remaining_size), 4) if is_long else round(entry - (min_p_floor / pos.remaining_size), 4)
-                    if is_long and floor_sl > be_stop:
-                        be_stop = floor_sl
-                        be_reason = f"Profit Floor Lock (+${min_p_floor:.2f})"
-                    elif not is_long and floor_sl < be_stop:
-                        be_stop = floor_sl
-                        be_reason = f"Profit Floor Lock (+${min_p_floor:.2f})"
             if be_stop != pos.stop_loss:
                 pos.stop_loss = be_stop
                 stage = 2 if "full" in be_reason.lower() else 1
@@ -1372,9 +1340,8 @@ class ExecutionEngine:
                 partial_pnl = (pos.tp1 - entry) * closed_size if is_long else (entry - pos.tp1) * closed_size
                 pos.realized_pnl += partial_pnl
 
-                # Move stop to BE with buffer and min profit floor
-                floor_dist = (min_p_floor / pos.remaining_size) if pos.remaining_size > 0 else 0.0
-                buf = max(initial_risk * self.risk_manager.config.be_buffer_r, floor_dist)
+                # Move stop to BE with buffer
+                buf = initial_risk * self.risk_manager.config.be_buffer_r
                 pos.stop_loss = (entry + buf) if is_long else (entry - buf)
                 pos.be_stage = 2
 
@@ -1729,10 +1696,9 @@ class ExecutionEngine:
         max_trades = int(getattr(self, "max_open_trades", 6) or 6)
         slots = self.slots_available()
         mode_str = f"Auto ({max_trades}/6)" if getattr(self, "slots_mode", "auto") == "auto" else f"Manual ({max_trades}/6)"
-        min_p = float(getattr(self, "min_profit_usd", 0.50) or 0.50)
         lines = [
             f"📋 **Active Positions ({len(self.active_positions)}/{max_trades} active | {slots} slots free)**",
-            f"⚙️ **Slots Mode:** `{mode_str}` (Max 6) | **Min Profit Floor:** `+${min_p:,.2f} USD` guaranteed",
+            f"⚙️ **Slots Mode:** `{mode_str}` (Max 6 concurrent positions)",
             f"🏛️ **MT5 Live Account:** `{b_name}{acc_str}{srv_str}` ({conn_tag})",
             f"💵 **Balance:** `${bal:,.2f} {curr}` | **Live Equity:** `${eq:,.2f} {curr}`",
             f"📈 **Floating PnL:** {pnl_icon} `{pnl_sign_str} {curr}` | **Free Margin:** `${free_m:,.2f} {curr}`{lvl_str}",

@@ -136,6 +136,11 @@ except Exception as _broker_err:
         raise SystemExit(1) from _broker_err
 engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)
 try:
+    from ops_dashboard import set_dashboard_engine
+    set_dashboard_engine(engine)
+except Exception:
+    pass
+try:
     from strategy_profiles import apply_profile
     apply_profile(getattr(config, "CURRENT_PROFILE", "scalp"), arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
 except Exception as _p_boot_err:
@@ -194,8 +199,15 @@ def _write_runtime_status() -> None:
             "risk_mode": str(state.mode),
             "slots_mode": getattr(engine, "slots_mode", "auto"),
             "max_open_trades": int(getattr(engine, "max_open_trades", 6) or 6),
-            "min_profit_usd": float(getattr(engine, "min_profit_usd", 0.50) or 0.50),
+            "free_margin": float(summary.get("free_margin", summary.get("balance", 0.0))),
+            "unrealized_pnl": float(summary.get("unrealized_pnl", 0.0)),
+            "margin_level_pct": float(summary.get("margin_level_pct", 0.0)),
         }
+        try:
+            from ops_dashboard import set_dashboard_engine
+            set_dashboard_engine(engine)
+        except Exception:
+            pass
         StatusStore(config.STATUS_FILE).write(snapshot)
     except Exception as exc:
         logger.warning("Could not publish operations status: %s", exc)
@@ -306,9 +318,10 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cat = (ctx.args[0].lower() if ctx.args else "").strip()
-    if cat in ("market", "price", "quotes", "levels", "chart", "charts"):
+    if cat in ("market", "price", "quotes", "levels", "chart", "charts", "matrix", "heatmap"):
         text = (
             "📊 **Market Data & Live Quotes:**\n"
+            "• `/matrix [SYM]` or `/heatmap` — Multi-Timeframe Trend & Volatility Heatmap Matrix (M1..D1)\n"
             "• `/chart [btc|gold]` — MT5 Live Candlestick Chart with pivots & trend\n"
             "• `/price [SYM]` — Live mark price, 24h change & stats\n"
             "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
@@ -319,14 +332,16 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🎯 **Signals & Strategy Confluence:**\n"
             "• `/signal [SYM]` — 7-Agent consensus & optimal entry zone\n"
             "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
-            "• `/quality [SYM]` — Comprehensive signal quality score & breakdown"
+            "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n"
+            "• `/matrix [SYM]` — Multi-Timeframe Trend & Volatility Confluence Matrix"
         )
-    elif cat in ("execution", "orders", "trades", "pos", "positions", "slots", "slot"):
+    elif cat in ("execution", "orders", "trades", "pos", "positions", "slots", "slot", "dashboard", "dash", "web"):
         text = (
             "⚡ **Execution & Positions (Active Limit: Max 6):**\n"
+            "• `/dashboard [start|stop]` — Local Web Companion Dashboard & Real-Time Terminal\n"
             "• `/positions [auto|manual <1-6>]` — Open active trades, pending setups & real-time PnL\n"
-            "• `/slots [auto|manual <1-6>|<1-6>|minprofit]` — Set manual / auto slots (1-6) & $0.50 min profit floor\n"
-            "• `/autotrade on|off` — Multi-symbol autotrading (min $0.50 profit guaranteed per trade)\n"
+            "• `/slots [auto|manual <1-6>|<1-6>]` — Set manual / auto position slots (1-6 positions max)\n"
+            "• `/autotrade on|off` — Multi-symbol autonomous trade execution\n"
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL\n"
@@ -1174,24 +1189,21 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def slots_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Manage active position slots: /slots, /slots auto, /slots manual <1-6>, /slots <1-6>, /slots minprofit <usd>"""
+    """Manage active position slots: /slots, /slots auto, /slots manual <1-6>, /slots <1-6>"""
     try:
         args = [a.lower() for a in (ctx.args or [])]
         if not args:
             mode = getattr(engine, "slots_mode", "auto")
             cur_slots = int(getattr(engine, "max_open_trades", 6))
             free = engine.slots_available()
-            min_p = float(getattr(engine, "min_profit_usd", 0.50))
             msg = (
                 f"🎰 **Active Positions Slots Telemetry**\n"
                 f"• **Current Limit:** `{cur_slots}/6 positions max`\n"
                 f"• **Mode:** `{mode.upper()}` (Manual / Automatic)\n"
-                f"• **Open Now:** `{len(engine.active_positions)} active | {free} slots free`\n"
-                f"• **Guaranteed Profit Floor:** `+${min_p:.2f} USD` minimum on every trade\n\n"
+                f"• **Open Now:** `{len(engine.active_positions)} active | {free} slots free`\n\n"
                 f"**Commands:**\n"
                 f"• `/slots auto` — dynamic allocation (1..6) based on equity & margin\n"
-                f"• `/slots manual <1-6>` — set fixed slot count (e.g. `/slots 3` or `/slots manual 4`)\n"
-                f"• `/slots minprofit <0.50>` — set minimum guaranteed profit floor per trade"
+                f"• `/slots manual <1-6>` — set fixed slot count (e.g. `/slots 3` or `/slots manual 4`)"
             )
             await update.message.reply_text(msg, parse_mode="Markdown")
             return
@@ -1208,22 +1220,59 @@ async def slots_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cnt = int(sub)
             ok, msg = engine.set_slots_mode("manual", cnt)
             await update.message.reply_text(f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
-        elif sub in ("minprofit", "profit", "min"):
-            if len(args) > 1:
-                try:
-                    val = float(args[1])
-                    engine.min_profit_usd = max(0.10, val)
-                    if hasattr(config, "set_min_trade_profit"):
-                        config.set_min_trade_profit(val)
-                    await update.message.reply_text(f"✅ Minimum profit floor set to `+${val:.2f} USD` per trade.", parse_mode="Markdown")
-                except Exception as ex:
-                    await update.message.reply_text(f"⚠️ Invalid amount: {ex}")
-            else:
-                await update.message.reply_text(f"Minimum profit guarantee is currently `+${getattr(engine, 'min_profit_usd', 0.50):.2f} USD`.")
         else:
-            await update.message.reply_text("Usage: `/slots [auto | manual <1-6> | <1-6> | minprofit <usd>]`", parse_mode="Markdown")
+            await update.message.reply_text("Usage: `/slots [auto | manual <1-6> | <1-6>]`", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"Slots error: {e}")
+
+
+async def matrix_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Multi-Timeframe Trend & Volatility Heatmap Matrix (/matrix [SYM] or /heatmap [SYM])."""
+    try:
+        from mtf_matrix import render_telegram_heatmap, render_telegram_multi_matrix
+        arg = (ctx.args[0] if ctx.args else "").strip().upper()
+        if not arg or arg in ("ALL", "BOTH", "MULTI"):
+            msg = render_telegram_multi_matrix(["XAUUSD", "BTCUSDT"])
+        else:
+            sym = "BTCUSDT" if arg in ("BTC", "BTCUSD", "BITCOIN") else ("XAUUSD" if arg in ("XAU", "GOLD") else arg)
+            msg = render_telegram_heatmap(sym)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Heatmap matrix error: {e}")
+
+
+async def dashboard_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Lightweight Real-Time Web Dashboard / Local UI Companion (/dashboard [start|stop])."""
+    try:
+        from ops_dashboard import start_dashboard_background, stop_dashboard_background
+        args = [a.lower() for a in (ctx.args or [])]
+        sub = args[0] if args else "status"
+
+        host = getattr(config, "DASHBOARD_HOST", "127.0.0.1")
+        port = getattr(config, "DASHBOARD_PORT", 8765)
+        status_file = getattr(config, "STATUS_FILE", ".runtime/bot_status.json")
+        token = getattr(config, "DASHBOARD_TOKEN", "")
+
+        if sub in ("stop", "kill"):
+            stop_dashboard_background()
+            await update.message.reply_text("🛑 Web companion dashboard stopped.")
+            return
+
+        srv, url = start_dashboard_background(
+            host=host, port=port, status_file=status_file, token=token, engine=engine
+        )
+        msg = (
+            f"🌐 **Nimble-Darwin Web Companion Dashboard**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Live URL:** `{url}`\n"
+            f"• **Host / Port:** `{host}:{port}`\n"
+            f"• **Status:** 🟢 Active & Serving\n"
+            f"• **Features:** Live telemetry, interactive slots control (1..6), active positions, pending setups, MTF matrix visualizer\n\n"
+            f"Open `{url}` in your local browser to access real-time companion controls."
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Dashboard error: {e}")
 
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3698,18 +3747,6 @@ def run_cli_interactive():
                         print(engine.format_positions_detail())
                     else:
                         print(engine.get_portfolio_summary())
-                elif arg1 in ("minprofit", "profit", "min"):
-                    if len(parts) > 2:
-                        try:
-                            val = float(parts[2])
-                            engine.min_profit_usd = max(0.10, val)
-                            if hasattr(config, "set_min_trade_profit"):
-                                config.set_min_trade_profit(val)
-                            print(f"Minimum profit guarantee set to +${val:.2f} USD per trade.")
-                        except Exception as e:
-                            print(f"Error: {e}")
-                    else:
-                        print(f"Current minimum profit guarantee: +${getattr(engine, 'min_profit_usd', 0.50):.2f} USD per trade.")
                 else:
                     if hasattr(engine, "format_positions_detail"):
                         print(engine.format_positions_detail())
@@ -3720,6 +3757,35 @@ def run_cli_interactive():
                     print(engine.format_positions_detail())
                 else:
                     print(engine.get_portfolio_summary())
+        elif name in ("matrix", "heatmap", "mtf"):
+            arg = parts[1].upper() if len(parts) > 1 else ""
+            try:
+                from mtf_matrix import render_ascii_matrix, render_telegram_multi_matrix
+                if not arg or arg in ("ALL", "BOTH", "MULTI"):
+                    print(render_telegram_multi_matrix(["XAUUSD", "BTCUSDT"]))
+                else:
+                    sym = "BTCUSDT" if arg in ("BTC", "BITCOIN", "BTCUSD") else ("XAUUSD" if arg in ("XAU", "GOLD") else arg)
+                    print(render_ascii_matrix(sym))
+            except Exception as e:
+                print(f"Matrix error: {e}")
+        elif name in ("dashboard", "web", "dash"):
+            arg = parts[1].lower() if len(parts) > 1 else "start"
+            try:
+                from ops_dashboard import start_dashboard_background, stop_dashboard_background
+                if arg in ("stop", "kill"):
+                    stop_dashboard_background()
+                    print("Web companion dashboard stopped.")
+                else:
+                    srv, url = start_dashboard_background(
+                        host=getattr(config, "DASHBOARD_HOST", "127.0.0.1"),
+                        port=getattr(config, "DASHBOARD_PORT", 8765),
+                        status_file=getattr(config, "STATUS_FILE", ".runtime/bot_status.json"),
+                        token=getattr(config, "DASHBOARD_TOKEN", ""),
+                        engine=engine,
+                    )
+                    print(f"Web companion dashboard active: {url}")
+            except Exception as e:
+                print(f"Dashboard error: {e}")
         elif name in ("watchlist", "wl", "symbols", "assets"):
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg in ("btc", "bitcoin", "btcusdt"):
@@ -4478,7 +4544,7 @@ def run_cli_interactive():
                 "Commands by category:\n"
                 "📊 Market: price [SYM], chart [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
-                "⚡ Execution: positions, slots [auto|manual <1-6>|minprofit], autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
+                "⚡ Execution: positions, slots [auto|manual <1-6>], autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
                 "🛡️ Risk: status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], replay [ID], export, setups, abooks, heal\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, relearn [SYM]\n"
@@ -4766,6 +4832,9 @@ def main():
                 BotCommand("quality", "Signal quality score & breakdown"),
                 # Execution & Positions
                 BotCommand("positions", "Active trades, live balance, equity & real-time PnL"),
+                BotCommand("slots", "Manage position slots (1-6 positions, Auto / Manual)"),
+                BotCommand("matrix", "Multi-Timeframe Trend & Volatility Heatmap Matrix"),
+                BotCommand("dashboard", "Local Web Companion Dashboard & Real-Time Terminal"),
                 BotCommand("autotrade", "Toggle multi-symbol autotrade (max 6 slots: 3 Gold, 3 BTC)"),
                 BotCommand("watchlist", "View & switch active Gold/BTC autotrade watchlist"),
                 BotCommand("close", "Close position(s) by symbol or all"),
@@ -4857,6 +4926,8 @@ def main():
     # Execution & Trades
     app.add_handler(CommandHandler("positions", positions_command))
     app.add_handler(CommandHandler(["slots", "maxpositions", "slot"], slots_command))
+    app.add_handler(CommandHandler(["matrix", "heatmap", "mtf"], matrix_command))
+    app.add_handler(CommandHandler(["dashboard", "web", "dash"], dashboard_command))
     app.add_handler(CommandHandler("autotrade", autotrade_command))
     app.add_handler(CommandHandler(["watchlist", "wl", "symbols", "assets"], watchlist_command))
     app.add_handler(CommandHandler(["close", "closeall"], close_command))

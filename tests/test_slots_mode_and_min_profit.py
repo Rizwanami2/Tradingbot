@@ -1,6 +1,6 @@
 """
 Tests for Active Positions Slots Control (Manual/Auto Max 6)
-and Minimum $0.50 Profit Guarantee on Every Autotrade.
+and Verification that Trade Setup Levels Remain Unaltered by Unconfirmed Shifts.
 """
 import io
 import unittest
@@ -22,13 +22,11 @@ class TestSlotsModeAndMinProfit(unittest.TestCase):
         self.engine.active_positions.clear()
         self.engine.pending_setups.clear()
         config.set_slots_mode("auto")
-        config.set_min_trade_profit(0.50)
 
     def tearDown(self):
         self.engine.active_positions.clear()
         self.engine.pending_setups.clear()
         config.set_slots_mode("auto")
-        config.set_min_trade_profit(0.50)
 
     def test_slots_mode_manual_and_auto_clamping(self):
         """Verify setting manual mode (clamped between 1 and 6) and switching back to auto."""
@@ -118,18 +116,16 @@ class TestSlotsModeAndMinProfit(unittest.TestCase):
         apply_profile("scalp", engine=self.engine)
         self.assertEqual(self.engine.max_open_trades, 6)
 
-    def test_min_trade_profit_guarantee_tp1_adjustment(self):
-        """Verify setup registration adjusts TP1 to guarantee minimum $0.50 profit."""
-        self.engine.min_profit_usd = 0.50
-
-        # LONG setup with insufficient TP1 distance (0.10 pt distance = $0.05 profit at 50% partial)
+    def test_trade_setup_levels_remain_unaltered_by_unconfirmed_profit_shift(self):
+        """Verify setup registration leaves TP1 and TP2 exactly as calculated by signal."""
+        # LONG setup with tight TP1 distance
         sig_long = {
             "symbol": "XAUUSD",
             "direction": "LONG",
             "entry": 2700.0,
             "stop": 2690.0,
-            "tp1": 2700.10,  # too close
-            "tp2": 2700.20,
+            "tp1": 2700.25,
+            "tp2": 2700.80,
             "lots": 0.01,
             "size": 1.0,
             "leverage": 20.0,
@@ -138,19 +134,18 @@ class TestSlotsModeAndMinProfit(unittest.TestCase):
             "rr": 1.5,
         }
         order_long = self.engine.register_setup(sig_long)
-        # 50% close on 1.0 size = 0.5 size. To get $0.50 profit: min delta = 0.50 / 0.5 = 1.0 pt.
-        # So TP1 must be at least 2701.0
-        self.assertGreaterEqual(order_long.tp1, 2701.0)
-        self.assertGreaterEqual(order_long.tp2, order_long.tp1)
+        # Original consensus levels are strictly preserved without synthetic floor shifting
+        self.assertEqual(order_long.tp1, 2700.25)
+        self.assertEqual(order_long.tp2, 2700.80)
 
-        # SHORT setup with insufficient TP1 distance
+        # SHORT setup with tight TP1 distance
         sig_short = {
             "symbol": "XAUUSD",
             "direction": "SHORT",
             "entry": 2700.0,
             "stop": 2710.0,
-            "tp1": 2699.90,  # too close
-            "tp2": 2699.80,
+            "tp1": 2699.75,
+            "tp2": 2699.20,
             "lots": 0.01,
             "size": 1.0,
             "leverage": 20.0,
@@ -159,13 +154,12 @@ class TestSlotsModeAndMinProfit(unittest.TestCase):
             "rr": 1.5,
         }
         order_short = self.engine.register_setup(sig_short)
-        self.assertLessEqual(order_short.tp1, 2699.0)
-        self.assertLessEqual(order_short.tp2, order_short.tp1)
+        self.assertEqual(order_short.tp1, 2699.75)
+        self.assertEqual(order_short.tp2, 2699.20)
 
-    def test_scalp_break_even_and_trailing_locks_min_profit(self):
-        """Verify scalp progressive break-even locks in at least +$0.50 profit once activated."""
+    def test_scalp_break_even_and_trailing(self):
+        """Verify scalp progressive break-even locks standard break-even without synthetic floor distortion."""
         self.engine.scalp_mode = True
-        self.engine.min_profit_usd = 0.50
         self.engine.scalp_tp_usd = 2.50
 
         # Create active scalp position
@@ -193,39 +187,29 @@ class TestSlotsModeAndMinProfit(unittest.TestCase):
         )
         self.engine.active_positions[order.id] = order
 
-        # Market rallies to 2701.0 (unrealized profit = +$1.00 > $0.50)
+        # Market moves to 2701.0 (unrealized profit = +$1.00)
         candle = {"open": 2700.0, "high": 2701.0, "low": 2699.8, "close": 2700.8}
         self.engine.update_market_candle("XAUUSD", candle)
 
-        # Verify stop loss is moved to lock in at least +$0.50 profit (entry + 0.50)
-        self.assertGreaterEqual(order.stop_loss, 2700.50)
+        # Verify stop loss is moved to break-even (+0.02% buffer: 2700 * 1.0002 = 2700.54)
+        self.assertGreater(order.stop_loss, 2700.0)
+        self.assertEqual(order.be_stage, 1)
 
-        # Market pulls back and hits the secured stop loss
-        pullback_candle = {"open": 2700.8, "high": 2700.9, "low": 2700.4, "close": 2700.4}
-        events = self.engine.update_market_candle("XAUUSD", pullback_candle)
-
-        # Verify trade closed with at least +$0.50 realized profit
-        self.assertIn(order.status, (OrderStatus.CLOSED,))
-        self.assertGreaterEqual(order.realized_pnl, 0.50)
-
-    def test_format_positions_detail_includes_slots_and_min_profit(self):
-        """Verify format_positions_detail shows slots mode and guaranteed profit floor."""
+    def test_format_positions_detail_includes_slots(self):
+        """Verify format_positions_detail shows slots mode without min profit floor text."""
         self.engine.set_slots_mode("manual", 4)
-        self.engine.min_profit_usd = 0.50
         detail = self.engine.format_positions_detail()
 
         self.assertIn("0/4 active | 4 slots free", detail)
         self.assertIn("Slots Mode:", detail)
         self.assertIn("Manual (4/6)", detail)
-        self.assertIn("Min Profit", detail)
-        self.assertIn("+$0.50 USD", detail)
+        self.assertNotIn("Min Profit Floor", detail)
 
     def test_cli_slots_and_positions_commands(self):
         """Verify CLI interactive handling for slots mode and positions commands."""
         input_data = io.StringIO(
             "slots 4\n"
             "slots auto\n"
-            "slots minprofit 0.75\n"
             "positions 3\n"
             "positions auto\n"
             "exit\n"
@@ -236,7 +220,6 @@ class TestSlotsModeAndMinProfit(unittest.TestCase):
         out = output_data.getvalue()
         self.assertIn("Active positions limit set to MANUAL mode: 4/6 slots", out)
         self.assertIn("Active positions limit set to AUTOMATIC mode", out)
-        self.assertIn("Minimum profit guarantee set to +$0.75 USD per trade", out)
         self.assertIn("Active positions limit set to MANUAL mode: 3/6 slots", out)
 
 
