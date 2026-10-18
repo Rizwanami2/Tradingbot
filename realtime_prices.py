@@ -76,6 +76,17 @@ def fetch_spot_price(symbol: str = "BTCUSDT") -> Dict[str, Any]:
     sym = _norm_symbol(symbol)
     errors: List[str] = []
 
+    # 0. Live MT5 Broker Quote (Primary live source)
+    try:
+        from mt5_broker import get_active_broker
+        b = get_active_broker()
+        if b is not None and hasattr(b, "get_live_quote"):
+            q = b.get_live_quote(sym)
+            if q.get("ok") and float(q.get("mark") or 0.0) > 0.0:
+                return q
+    except Exception:
+        pass
+
     if _is_gold(sym):
         q = _tv_quote("XAUUSD")
         if q and q.get("ok"):
@@ -218,10 +229,21 @@ def _tv_quote(symbol: str) -> Optional[Dict[str, Any]]:
 
 
 def fetch_ohlcv(symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataFrame:
-    """OHLCV with geo-safe Binance mirrors.
+    """OHLCV prioritizing live MT5 broker candles with geo-safe Binance fallback.
 
-    For gold prefer PAXGUSDT klines (real daily/1h) over TV synthetic 1m bars.
+    For gold prefer PAXGUSDT klines (real daily/1h) over TV synthetic 1m bars if MT5 unavailable.
     """
+    # 0. Live MT5 Broker Candles (Primary source of truth)
+    try:
+        from mt5_broker import get_active_broker
+        b = get_active_broker()
+        if b is not None and hasattr(b, "get_candles"):
+            df_mt5 = b.get_candles(symbol, timeframe=interval, limit=limit)
+            if df_mt5 is not None and not df_mt5.empty and len(df_mt5) >= 3:
+                return df_mt5
+    except Exception:
+        pass
+
     bsym = _binance_symbol(symbol)
     if _is_gold(symbol):
         bsym = "PAXGUSDT"

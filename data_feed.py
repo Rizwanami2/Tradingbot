@@ -91,7 +91,18 @@ class DataFeed:
         return df
 
     def _fetch_real(self, limit: int, tf: str) -> pd.DataFrame:
-        # 0. Geo-safe Binance mirrors / realtime_prices OHLCV
+        # 0. Live MT5 Broker Candles (Primary source of truth)
+        try:
+            from mt5_broker import get_active_broker
+            b = get_active_broker()
+            if b is not None and hasattr(b, "get_candles"):
+                df_mt5 = b.get_candles(self.symbol, timeframe=tf, limit=limit)
+                if df_mt5 is not None and not df_mt5.empty and len(df_mt5) >= 3:
+                    return df_mt5
+        except Exception as e:
+            pass
+
+        # 1. Geo-safe Binance mirrors / realtime_prices OHLCV
         try:
             from realtime_prices import fetch_ohlcv
             iv = tf if tf in ("1m", "5m", "15m", "1h", "4h", "1d") else "1m"
@@ -163,6 +174,15 @@ class DataFeed:
         return out
 
     def get_latest_price(self) -> Dict:
+        try:
+            from mt5_broker import get_active_broker
+            b = get_active_broker()
+            if b is not None and hasattr(b, "get_live_quote"):
+                q = b.get_live_quote(self.symbol)
+                if q.get("ok") and float(q.get("mark") or 0.0) > 0.0:
+                    return q
+        except Exception:
+            pass
         df = self.fetch(limit=5)
         if not df.empty:
             c = df.iloc[-1]

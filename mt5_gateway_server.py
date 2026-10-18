@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
+import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict
 
@@ -187,6 +189,109 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                         "profit": float(p.profit or 0.0),
                     })
             self._send_json(200, {"ok": True, "positions": out})
+        elif path == "/rates":
+            parsed_url = urllib.parse.urlparse(self.path)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            sym = query_params.get("symbol", ["XAUUSD"])[0]
+            tf_str = query_params.get("timeframe", ["1m"])[0].lower()
+            limit = int(query_params.get("limit", [100])[0])
+            if mt5 is None:
+                now_ts = int(time.time())
+                mock_rates = []
+                base = 2700.0 if "XAU" in sym.upper() else 68000.0
+                for i in range(min(limit, 100)):
+                    t = now_ts - (min(limit, 100) - i) * 60
+                    p = base + (i - 50) * 0.2
+                    mock_rates.append({
+                        "time": t,
+                        "open": round(p, 2),
+                        "high": round(p + 1.0, 2),
+                        "low": round(p - 1.0, 2),
+                        "close": round(p + 0.5, 2),
+                        "volume": 100.0,
+                    })
+                self._send_json(200, {"ok": True, "symbol": sym, "rates": mock_rates})
+                return
+
+            tf_map = {
+                "1m": getattr(mt5, "TIMEFRAME_M1", 1),
+                "5m": getattr(mt5, "TIMEFRAME_M5", 5),
+                "15m": getattr(mt5, "TIMEFRAME_M15", 15),
+                "1h": getattr(mt5, "TIMEFRAME_H1", 60),
+                "4h": getattr(mt5, "TIMEFRAME_H4", 240),
+                "1d": getattr(mt5, "TIMEFRAME_D1", 1440),
+            }
+            tf = tf_map.get(tf_str, getattr(mt5, "TIMEFRAME_M1", 1))
+
+            target_sym = sym
+            if not mt5.symbol_select(target_sym, True):
+                for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                    cand = f"{sym}{suf}"
+                    if mt5.symbol_select(cand, True):
+                        target_sym = cand
+                        break
+
+            rates = mt5.copy_rates_from_pos(target_sym, tf, 0, min(limit, 1000))
+            if rates is None or len(rates) == 0:
+                self._send_json(404, {"ok": False, "error": f"Failed to copy rates for {sym}: {mt5.last_error()}"})
+                return
+
+            out_rates = []
+            for r in rates:
+                out_rates.append({
+                    "time": int(r["time"]),
+                    "open": float(r["open"]),
+                    "high": float(r["high"]),
+                    "low": float(r["low"]),
+                    "close": float(r["close"]),
+                    "volume": float(r.get("tick_volume", r.get("real_volume", 0.0))),
+                })
+            self._send_json(200, {"ok": True, "symbol": target_sym, "rates": out_rates})
+
+        elif path == "/tick":
+            parsed_url = urllib.parse.urlparse(self.path)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            sym = query_params.get("symbol", ["XAUUSD"])[0]
+            if mt5 is None:
+                base = 2700.0 if "XAU" in sym.upper() else 68000.0
+                spread = 0.35 if "XAU" in sym.upper() else 3.50
+                self._send_json(200, {
+                    "ok": True,
+                    "symbol": sym,
+                    "bid": round(base - spread / 2.0, 2),
+                    "ask": round(base + spread / 2.0, 2),
+                    "mark": base,
+                    "last": base,
+                    "spread": spread,
+                    "time": int(time.time()),
+                })
+                return
+
+            target_sym = sym
+            if not mt5.symbol_select(target_sym, True):
+                for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                    cand = f"{sym}{suf}"
+                    if mt5.symbol_select(cand, True):
+                        target_sym = cand
+                        break
+
+            tick = mt5.symbol_info_tick(target_sym)
+            if tick is None:
+                self._send_json(404, {"ok": False, "error": f"No tick data for {sym}"})
+                return
+            bid = float(tick.bid)
+            ask = float(tick.ask)
+            last = float(tick.last or ((bid + ask) / 2.0))
+            self._send_json(200, {
+                "ok": True,
+                "symbol": target_sym,
+                "bid": bid,
+                "ask": ask,
+                "mark": last,
+                "last": last,
+                "spread": round(ask - bid, 4),
+                "time": int(getattr(tick, "time", time.time())),
+            })
         else:
             self._send_json(404, {"ok": False, "error": f"Unknown endpoint: {path}"})
 

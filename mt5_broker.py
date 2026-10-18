@@ -19,11 +19,15 @@ Supports:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import logging
 import math
 import os
 import time
+
+import numpy as np
+import pandas as pd
 
 import config
 
@@ -45,6 +49,18 @@ except ImportError:
     native_mt5 = None
 
 HAS_MT5: bool = native_mt5 is not None
+
+_active_broker: Optional[Any] = None
+
+
+def get_active_broker() -> Optional[Any]:
+    global _active_broker
+    return _active_broker
+
+
+def set_active_broker(broker: Optional[Any]) -> None:
+    global _active_broker
+    _active_broker = broker
 
 
 @dataclass
@@ -226,6 +242,7 @@ class MT5Broker(Broker):
 
         # Auto-connect
         self.connect()
+        set_active_broker(self)
 
     def _get_sim_positions_list(self) -> List[Position]:
         seen = set()
@@ -1066,6 +1083,226 @@ class MT5Broker(Broker):
         self.update_mark_price(symbol, price)
         return self.equity
 
+    def get_live_quote(self, symbol: str) -> Dict[str, Any]:
+        """
+        Fetch real-time tick/quote directly from MT5 broker.
+        Returns:
+            {"ok": bool, "symbol": str, "bid": float, "ask": float, "mark": float, "spread": float, "source": str}
+        """
+        norm_sym = resolve_mt5_symbol(symbol)
+
+        # 1. Native MetaTrader5
+        if native_mt5 is not None and self._connected and self.effective_backend != "gateway":
+            try:
+                target_sym = norm_sym
+                if not native_mt5.symbol_select(target_sym, True):
+                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                        cand = f"{norm_sym}{suf}"
+                        if native_mt5.symbol_select(cand, True):
+                            target_sym = cand
+                            break
+                tick = native_mt5.symbol_info_tick(target_sym)
+                if tick is not None:
+                    bid = float(tick.bid)
+                    ask = float(tick.ask)
+                    last = float(tick.last) if tick.last > 0 else (bid + ask) / 2.0
+                    spread = round(ask - bid, 5)
+                    self.update_mark_price(norm_sym, last)
+                    self.update_mark_price(symbol, last)
+                    return {
+                        "ok": True,
+                        "symbol": norm_sym,
+                        "bid": bid,
+                        "ask": ask,
+                        "mark": last,
+                        "close": last,
+                        "open": last,
+                        "high": last,
+                        "low": last,
+                        "spread": spread,
+                        "change_pct": 0.0,
+                        "recommendation": "NEUTRAL",
+                        "source": "MT5 Native Tick",
+                    }
+            except Exception as e:
+                logger.debug("[MT5Broker] Native tick error for %s: %s", norm_sym, e)
+
+        # 2. Gateway backend
+        if self.gateway_url and self._connected:
+            try:
+                url = f"{self.gateway_url.rstrip('/')}/tick?symbol={norm_sym}"
+                res = _gateway_request("GET", url, timeout=4.0)
+                if res.get("ok"):
+                    mark = float(res.get("mark") or res.get("last") or res.get("bid") or 0.0)
+                    if mark > 0:
+                        self.update_mark_price(norm_sym, mark)
+                        self.update_mark_price(symbol, mark)
+                        if "change_pct" not in res:
+                            res["change_pct"] = 0.0
+                        if "recommendation" not in res:
+                            res["recommendation"] = "NEUTRAL"
+                        res["source"] = "MT5 Gateway Tick"
+                        return res
+            except Exception as e:
+                logger.debug("[MT5Broker] Gateway tick error for %s: %s", norm_sym, e)
+
+        # 3. EA Bridge backend
+        if self.effective_backend == "ea_bridge" and hasattr(self, "ea_client"):
+            try:
+                res = self.ea_client.get_live_tick(norm_sym, magic=self.magic, timeout=1.5)
+                if res.get("ok"):
+                    mark = float(res.get("mark") or res.get("bid") or 0.0)
+                    if mark > 0:
+                        self.update_mark_price(norm_sym, mark)
+                        self.update_mark_price(symbol, mark)
+                        if "change_pct" not in res:
+                            res["change_pct"] = 0.0
+                        if "recommendation" not in res:
+                            res["recommendation"] = "NEUTRAL"
+                        res["source"] = "MT5 EA Bridge Tick"
+                        return res
+            except Exception as e:
+                logger.debug("[MT5Broker] EA Bridge tick error for %s: %s", norm_sym, e)
+
+        # 4. Fallback: check cached mark_prices
+        for k in (norm_sym, symbol, symbol.upper()):
+            if k in self.mark_prices and self.mark_prices[k] > 0:
+                p = float(self.mark_prices[k])
+                spread = 3.50 if "BTC" in norm_sym.upper() else 0.35
+                bid = round(p - spread / 2.0, 2)
+                ask = round(p + spread / 2.0, 2)
+                return {
+                    "ok": True,
+                    "symbol": norm_sym,
+                    "bid": bid,
+                    "ask": ask,
+                    "mark": p,
+                    "close": p,
+                    "open": p,
+                    "high": p,
+                    "low": p,
+                    "spread": spread,
+                    "change_pct": 0.0,
+                    "recommendation": "NEUTRAL",
+                    "source": "MT5 Broker Mark",
+                }
+
+        return {"ok": False, "symbol": norm_sym, "mark": 0.0, "source": "unavailable"}
+
+    def _generate_sim_candles(self, symbol: str, base_price: float, limit: int = 300, tf: str = "1m") -> pd.DataFrame:
+        freq_map = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1D"}
+        freq = freq_map.get((tf or "1m").lower(), "1min")
+        dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq=freq)
+        step = max(base_price * 0.0002, 0.3)
+        prices = [base_price + (i - limit) * (step * 0.1) for i in range(limit)]
+        rows = []
+        for i, p in enumerate(prices):
+            o = round(p - step * 0.2, 2)
+            c = round(p, 2) if i == limit - 1 else round(p + step * 0.1, 2)
+            h = round(max(o, c) + step * 0.5, 2)
+            l = round(min(o, c) - step * 0.5, 2)
+            rows.append({"open": o, "high": h, "low": l, "close": c, "volume": 100.0})
+        return pd.DataFrame(rows, index=dates)
+
+    def get_candles(self, symbol: str, timeframe: str = "1m", limit: int = 300) -> pd.DataFrame:
+        """
+        Fetch OHLCV candlestick bars directly from MT5 broker.
+        Returns pd.DataFrame indexed by UTC timestamp with ['open', 'high', 'low', 'close', 'volume'].
+        """
+        norm_sym = resolve_mt5_symbol(symbol)
+        tf_str = (timeframe or "1m").lower().replace("min", "m").replace("hour", "h").replace("day", "d")
+        if tf_str in ("1d", "d", "daily"):
+            tf_str = "1d"
+        elif tf_str in ("1h", "h", "60m"):
+            tf_str = "1h"
+        elif tf_str in ("4h", "h4"):
+            tf_str = "4h"
+        elif tf_str in ("15m", "15min"):
+            tf_str = "15m"
+        elif tf_str in ("5m", "5min"):
+            tf_str = "5m"
+        else:
+            tf_str = "1m"
+
+        # 1. Native MetaTrader5
+        if native_mt5 is not None and self._connected and self.effective_backend != "gateway":
+            try:
+                tf_map = {
+                    "1m": getattr(native_mt5, "TIMEFRAME_M1", 1),
+                    "5m": getattr(native_mt5, "TIMEFRAME_M5", 5),
+                    "15m": getattr(native_mt5, "TIMEFRAME_M15", 15),
+                    "1h": getattr(native_mt5, "TIMEFRAME_H1", 60),
+                    "4h": getattr(native_mt5, "TIMEFRAME_H4", 240),
+                    "1d": getattr(native_mt5, "TIMEFRAME_D1", 1440),
+                }
+                tf = tf_map.get(tf_str, getattr(native_mt5, "TIMEFRAME_M1", 1))
+                target_sym = norm_sym
+                if not native_mt5.symbol_select(target_sym, True):
+                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+                        cand = f"{norm_sym}{suf}"
+                        if native_mt5.symbol_select(cand, True):
+                            target_sym = cand
+                            break
+                rates = native_mt5.copy_rates_from_pos(target_sym, tf, 0, min(limit, 1000))
+                if rates is not None and len(rates) > 0:
+                    df = pd.DataFrame(rates)
+                    df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                    df = df.set_index("timestamp")
+                    vol_col = "tick_volume" if "tick_volume" in df.columns else ("real_volume" if "real_volume" in df.columns else None)
+                    df["volume"] = df[vol_col].astype(float) if vol_col else 100.0
+                    df = df[["open", "high", "low", "close", "volume"]].astype(float)
+                    if not df.empty:
+                        last_c = float(df["close"].iloc[-1])
+                        self.update_mark_price(norm_sym, last_c)
+                        self.update_mark_price(symbol, last_c)
+                        return df.tail(limit)
+            except Exception as e:
+                logger.debug("[MT5Broker] Native copy_rates error: %s", e)
+
+        # 2. Gateway backend
+        if self.gateway_url and self._connected:
+            try:
+                url = f"{self.gateway_url.rstrip('/')}/rates?symbol={norm_sym}&timeframe={tf_str}&limit={limit}"
+                res = _gateway_request("GET", url, timeout=5.0)
+                if res.get("ok") and "rates" in res:
+                    rates = res["rates"]
+                    if rates and len(rates) > 0:
+                        df = pd.DataFrame(rates)
+                        df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                        df = df.set_index("timestamp")[["open", "high", "low", "close", "volume"]].astype(float)
+                        if not df.empty:
+                            last_c = float(df["close"].iloc[-1])
+                            self.update_mark_price(norm_sym, last_c)
+                            self.update_mark_price(symbol, last_c)
+                            return df.tail(limit)
+            except Exception as e:
+                logger.debug("[MT5Broker] Gateway rates error: %s", e)
+
+        # 3. EA Bridge backend
+        if self.effective_backend == "ea_bridge" and hasattr(self, "ea_client"):
+            try:
+                res = self.ea_client.get_rates(norm_sym, count=limit, magic=self.magic, timeout=3.0)
+                if res.get("ok") and "rates" in res:
+                    rates = res["rates"]
+                    if rates and len(rates) > 0:
+                        df = pd.DataFrame(rates)
+                        df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                        df = df.set_index("timestamp")[["open", "high", "low", "close", "volume"]].astype(float)
+                        if not df.empty:
+                            last_c = float(df["close"].iloc[-1])
+                            self.update_mark_price(norm_sym, last_c)
+                            self.update_mark_price(symbol, last_c)
+                            return df.tail(limit)
+            except Exception as e:
+                logger.debug("[MT5Broker] EA Bridge rates error: %s", e)
+
+        # 4. Fallback mock DataFrame if mark_prices has entry (e.g., cloud/offline)
+        base = self.mark_prices.get(norm_sym, self.mark_prices.get(symbol, 0.0))
+        if base > 0:
+            return self._generate_sim_candles(norm_sym, base, limit=limit, tf=tf_str)
+
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
     def get_account_info(self) -> MT5AccountInfo:
         """Return standardized MT5 account telemetry."""
         if self.mode == "live" and self._connected:
@@ -1371,16 +1608,62 @@ class MockMT5Broker(Broker):
         self._positions: Dict[str, Position] = {}
         self._ticket_counter = 100000
         self.mark_prices: Dict[str, float] = {}
+        set_active_broker(self)
 
     def update_mark_price(self, symbol: str, price: float) -> None:
         p = float(price)
         if p > 0:
             self.mark_prices[symbol] = p
             self.mark_prices[symbol.upper()] = p
+            resolved = resolve_mt5_symbol(symbol)
+            self.mark_prices[resolved] = p
 
     def mark_price(self, symbol: str, price: float) -> float:
         self.update_mark_price(symbol, price)
         return self.equity
+
+    def get_live_quote(self, symbol: str) -> Dict[str, Any]:
+        norm_sym = resolve_mt5_symbol(symbol)
+        p = self.mark_prices.get(norm_sym, self.mark_prices.get(symbol, self.mark_prices.get(symbol.upper(), 0.0)))
+        if p <= 0.0:
+            p = 2700.0 if "XAU" in norm_sym.upper() else 68000.0
+        spread = 3.50 if "BTC" in norm_sym.upper() else 0.35
+        bid = round(p - spread / 2.0, 2)
+        ask = round(p + spread / 2.0, 2)
+        return {
+            "ok": True,
+            "symbol": norm_sym,
+            "bid": bid,
+            "ask": ask,
+            "mark": round(p, 2),
+            "close": round(p, 2),
+            "open": round(p, 2),
+            "high": round(p, 2),
+            "low": round(p, 2),
+            "spread": spread,
+            "change_pct": 0.0,
+            "recommendation": "NEUTRAL",
+            "source": "Mock MT5 Live Tick",
+        }
+
+    def get_candles(self, symbol: str, timeframe: str = "1m", limit: int = 300) -> pd.DataFrame:
+        norm_sym = resolve_mt5_symbol(symbol)
+        base = self.mark_prices.get(norm_sym, self.mark_prices.get(symbol, self.mark_prices.get(symbol.upper(), 0.0)))
+        if base <= 0.0:
+            base = 2700.0 if "XAU" in norm_sym.upper() else 68000.0
+        freq_map = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1D"}
+        freq = freq_map.get((timeframe or "1m").lower(), "1min")
+        dates = pd.date_range(end=datetime.now(timezone.utc), periods=limit, freq=freq)
+        step = max(base * 0.0002, 0.3)
+        prices = [base + (i - limit) * (step * 0.1) for i in range(limit)]
+        rows = []
+        for i, p in enumerate(prices):
+            o = round(p - step * 0.2, 2)
+            c = round(p, 2) if i == limit - 1 else round(p + step * 0.1, 2)
+            h = round(max(o, c) + step * 0.5, 2)
+            l = round(min(o, c) - step * 0.5, 2)
+            rows.append({"open": o, "high": h, "low": l, "close": c, "volume": 100.0})
+        return pd.DataFrame(rows, index=dates)
 
     @property
     def is_connected(self) -> bool:

@@ -24,9 +24,16 @@ void OnDeinit(const int reason)
    EventKillTimer();
 }
 
+datetime lastTickWrite = 0;
 void OnTimer()
 {
    ProcessCommands();
+   datetime now = TimeCurrent();
+   if(now - lastTickWrite >= 2)
+   {
+      lastTickWrite = now;
+      WriteTicksFile();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -75,6 +82,10 @@ void ProcessCommands()
       result = ModifyPosition(symbol, ticket, sl, tp, magic);
    else if(action == "STATUS")
       result = StatusJSON(magic);
+   else if(action == "RATES")
+      result = RatesJSON(symbol, (int)volume);
+   else if(action == "TICK")
+      result = TickJSON(symbol);
    else
       result = "{\"ok\":false,\"error\":\"unknown action\"}";
 
@@ -323,6 +334,70 @@ string StatusJSON(long magic)
       "{\"ok\":true,\"positions\":%d,\"volume\":%.2f,\"login\":%d}",
       pos, vol, (int)AccountInfoInteger(ACCOUNT_LOGIN)
    );
+}
+
+string RatesJSON(string symbol, int count)
+{
+   if(symbol == "") symbol = _Symbol;
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   int n = (count > 0 && count <= 500) ? count : 60;
+   int copied = CopyRates(symbol, PERIOD_M1, 0, n, rates);
+   if(copied <= 0)
+      return "{\"ok\":false,\"error\":\"CopyRates failed\"}";
+   string res = "{\"ok\":true,\"symbol\":\"" + symbol + "\",\"rates\":[";
+   for(int i = copied - 1; i >= 0; i--)
+   {
+      res += StringFormat("{\"time\":%I64d,\"open\":%.2f,\"high\":%.2f,\"low\":%.2f,\"close\":%.2f,\"volume\":%I64d}",
+         (long)rates[i].time, rates[i].open, rates[i].high, rates[i].low, rates[i].close, rates[i].tick_volume);
+      if(i > 0) res += ",";
+   }
+   res += "]}";
+   return res;
+}
+
+string TickJSON(string symbol)
+{
+   if(symbol == "") symbol = _Symbol;
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol, tick))
+      return "{\"ok\":false,\"error\":\"SymbolInfoTick failed\"}";
+   double spread = (tick.ask - tick.bid);
+   double mark = (tick.last > 0) ? tick.last : ((tick.bid + tick.ask) / 2.0);
+   return StringFormat("{\"ok\":true,\"symbol\":\"%s\",\"bid\":%.2f,\"ask\":%.2f,\"mark\":%.2f,\"last\":%.2f,\"spread\":%.4f,\"time\":%I64d}",
+      symbol, tick.bid, tick.ask, mark, tick.last, spread, (long)tick.time);
+}
+
+void WriteTicksFile()
+{
+   string syms[3];
+   syms[0] = _Symbol;
+   syms[1] = "XAUUSD";
+   syms[2] = "BTCUSD";
+
+   string json = "{";
+   int added = 0;
+   for(int s = 0; s < 3; s++)
+   {
+      string sym = syms[s];
+      MqlTick tick;
+      if(SymbolInfoTick(sym, tick))
+      {
+         if(added > 0) json += ",";
+         double mark = (tick.last > 0) ? tick.last : ((tick.bid + tick.ask) / 2.0);
+         json += StringFormat("\"%s\":{\"bid\":%.2f,\"ask\":%.2f,\"mark\":%.2f,\"last\":%.2f,\"spread\":%.4f,\"time\":%I64d}",
+            sym, tick.bid, tick.ask, mark, tick.last, (tick.ask - tick.bid), (long)tick.time);
+         added++;
+      }
+   }
+   json += "}";
+
+   int h = FileOpen("ea_ticks.txt", FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h != INVALID_HANDLE)
+   {
+      FileWriteString(h, json);
+      FileClose(h);
+   }
 }
 
 //+------------------------------------------------------------------+

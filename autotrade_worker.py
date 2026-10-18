@@ -137,9 +137,30 @@ async def live_monitoring_worker(
         try:
             for symbol in watchlist:
                 try:
-                    feed = feeds.get(symbol) or MarketDataFeed(symbol=symbol, source=config.DEFAULT_DATA_SOURCE)
-                    feeds[symbol] = feed
-                    data = feed.multi_tf(limit_1m=500)
+                    broker = getattr(engine, "broker", None)
+                    data = None
+                    if broker is not None and hasattr(broker, "get_candles"):
+                        try:
+                            df1 = broker.get_candles(symbol, timeframe="1m", limit=500)
+                            if df1 is not None and not df1.empty and len(df1) >= 3:
+                                data = {"1m": df1}
+                                for tf, rule in [("5m", "5min"), ("15m", "15min"), ("1h", "1h")]:
+                                    try:
+                                        data[tf] = df1.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
+                                    except Exception:
+                                        data[tf] = pd.DataFrame()
+                                try:
+                                    data["daily"] = df1.resample("1D").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
+                                except Exception:
+                                    data["daily"] = pd.DataFrame()
+                        except Exception as _b_err:
+                            logger.debug("Broker direct get_candles error: %s", _b_err)
+
+                    if data is None:
+                        feed = feeds.get(symbol) or MarketDataFeed(symbol=symbol, source=config.DEFAULT_DATA_SOURCE)
+                        feeds[symbol] = feed
+                        data = feed.multi_tf(limit_1m=500)
+
                     if not data or "1m" not in data or data["1m"].empty:
                         continue
                     any_data = True
@@ -155,33 +176,18 @@ async def live_monitoring_worker(
                         "close": float(candle["close"]),
                     }
 
-                    # Synchronize trade chart candles & mark prices with actual MT5 chart
+                    # Synchronize trade chart candles & mark prices with live MT5 quote
                     try:
                         from mt5_chart import fetch_mt5_live_quote
-                        mt5_q = fetch_mt5_live_quote(symbol, broker=getattr(engine, "broker", None))
+                        mt5_q = fetch_mt5_live_quote(symbol, broker=broker)
                         if mt5_q.get("ok") and float(mt5_q.get("mark") or 0.0) > 0.0:
                             mt5_mark = float(mt5_q["mark"])
-                            feed_close = float(df1["close"].iloc[-1])
-                            if feed_close > 0.0:
-                                scale = mt5_mark / feed_close
-                                # If divergence between feed (e.g. PAXG proxy) and actual MT5 spot price (>0.05%), scale candles to MT5 price levels
-                                if abs(scale - 1.0) > 0.0005:
-                                    for col in ("open", "high", "low", "close"):
-                                        if col in df1.columns:
-                                            df1[col] = df1[col] * scale
-                                    for tf_key, tf_df in data.items():
-                                        if tf_key != "1m" and tf_df is not None and not getattr(tf_df, "empty", True):
-                                            for col in ("open", "high", "low", "close"):
-                                                if col in tf_df.columns:
-                                                    tf_df[col] = tf_df[col] * scale
-                                else:
-                                    df1.loc[df1.index[-1], "close"] = mt5_mark
-                                    df1.loc[df1.index[-1], "high"] = max(df1.loc[df1.index[-1], "high"], mt5_mark)
-                                    df1.loc[df1.index[-1], "low"] = min(df1.loc[df1.index[-1], "low"], mt5_mark)
+                            df1.loc[df1.index[-1], "close"] = mt5_mark
+                            df1.loc[df1.index[-1], "high"] = max(float(df1.loc[df1.index[-1], "high"]), mt5_mark)
+                            df1.loc[df1.index[-1], "low"] = min(float(df1.loc[df1.index[-1], "low"]), mt5_mark)
                             candle_dict["close"] = mt5_mark
-                            candle_dict["high"] = max(float(df1["high"].iloc[-1]), mt5_mark)
-                            candle_dict["low"] = min(float(df1["low"].iloc[-1]), mt5_mark)
-                            candle_dict["open"] = float(df1["open"].iloc[-1])
+                            candle_dict["high"] = max(candle_dict["high"], mt5_mark)
+                            candle_dict["low"] = min(candle_dict["low"], mt5_mark)
                     except Exception as _mt5_sync_err:
                         logger.debug("MT5 chart sync error for %s: %s", symbol, _mt5_sync_err)
 

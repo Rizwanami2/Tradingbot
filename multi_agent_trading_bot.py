@@ -124,6 +124,15 @@ class MarketDataFeed:
 
     def get_latest_price(self) -> dict:
         try:
+            from mt5_broker import get_active_broker
+            b = get_active_broker()
+            if b is not None and hasattr(b, "get_live_quote"):
+                q = b.get_live_quote(self.symbol)
+                if q.get("ok") and float(q.get("mark") or 0.0) > 0.0:
+                    return q
+        except Exception:
+            pass
+        try:
             from realtime_prices import fetch_spot_price
             rt = fetch_spot_price(self.symbol)
             if rt.get("ok") and float(rt.get("mark") or 0) > 0:
@@ -171,6 +180,15 @@ class MarketDataFeed:
             return {"ok": False, "mark": 0.0, "error": "no price"}
 
     def fetch(self, limit: int = 1500, timeframe: Optional[str] = None) -> pd.DataFrame:
+        try:
+            from mt5_broker import get_active_broker
+            b = get_active_broker()
+            if b is not None and hasattr(b, "get_candles"):
+                df_mt5 = b.get_candles(self.symbol, timeframe=timeframe or "1m", limit=limit)
+                if df_mt5 is not None and not df_mt5.empty and len(df_mt5) >= 3:
+                    return df_mt5
+        except Exception:
+            pass
         if self._improved is not None:
             try:
                 df = self._improved.fetch(limit=limit, timeframe=timeframe or "1m")

@@ -53,16 +53,45 @@ def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None) -> Dict[str,
     spread = 0.0
     source = "MT5 Live"
 
-    # 1. Broker live mark price
-    if broker is not None and hasattr(broker, "mark_prices"):
+    if broker is None:
+        try:
+            from mt5_broker import get_active_broker
+            broker = get_active_broker()
+        except Exception:
+            pass
+
+    # 1. Broker live mark price (if explicitly provided in dict)
+    if broker is not None and hasattr(broker, "mark_prices") and isinstance(broker.mark_prices, dict):
         try:
             for k in (norm_sym, f"{norm_sym}.m", f"{norm_sym}m", symbol.upper()):
-                if k in broker.mark_prices and broker.mark_prices[k] > 0:
-                    mark_price = float(broker.mark_prices[k])
+                val = broker.mark_prices.get(k)
+                if isinstance(val, (int, float)) and val > 0:
+                    mark_price = float(val)
                     source = "MT5 Broker"
                     break
         except Exception:
             pass
+
+    # 2. Broker live tick / quote endpoint
+    if mark_price <= 0 and broker is not None and hasattr(broker, "get_live_quote"):
+        try:
+            q = broker.get_live_quote(norm_sym)
+            if isinstance(q, dict) and q.get("ok"):
+                raw_m = q.get("mark")
+                if isinstance(raw_m, (int, float)) and raw_m > 0:
+                    mark_price = float(raw_m)
+                    raw_bid = q.get("bid")
+                    raw_ask = q.get("ask")
+                    raw_spread = q.get("spread")
+                    if isinstance(raw_bid, (int, float)):
+                        bid = float(raw_bid)
+                    if isinstance(raw_ask, (int, float)):
+                        ask = float(raw_ask)
+                    if isinstance(raw_spread, (int, float)):
+                        spread = float(raw_spread)
+                    source = str(q.get("source", "MT5 Broker"))
+        except Exception as e:
+            logger.debug("broker.get_live_quote error: %s", e)
 
     # 2. Realtime prices spot quote
     rt_data: Dict[str, Any] = {}
@@ -119,15 +148,33 @@ def fetch_mt5_candles(symbol: str, timeframe: str = "1m", limit: int = 15, broke
     Returns list of dicts: [{"open": float, "high": float, "low": float, "close": float, "volume": float}]
     """
     norm_sym = normalize_mt5_symbol(symbol)
-    feed_sym = "BTCUSDT" if norm_sym == "BTCUSD" else "XAUUSD"
     df: Optional[pd.DataFrame] = None
 
-    try:
-        from multi_agent_trading_bot import MarketDataFeed
-        feed = MarketDataFeed(symbol=feed_sym, source="ccxt")
-        df = feed.fetch(limit=max(30, limit + 5), timeframe=timeframe)
-    except Exception as e:
-        logger.debug("MarketDataFeed fetch failed: %s", e)
+    if broker is None:
+        try:
+            from mt5_broker import get_active_broker
+            broker = get_active_broker()
+        except Exception:
+            pass
+
+    # 1. Primary: Query connected MT5 broker directly
+    if broker is not None and hasattr(broker, "get_candles"):
+        try:
+            res_df = broker.get_candles(norm_sym, timeframe=timeframe, limit=max(30, limit + 5))
+            if isinstance(res_df, pd.DataFrame) and not res_df.empty and len(res_df) >= 3:
+                df = res_df
+        except Exception as e:
+            logger.debug("broker.get_candles failed: %s", e)
+
+    # 2. Fallback to MarketDataFeed
+    if df is None or df.empty or len(df) < 3:
+        feed_sym = "BTCUSDT" if norm_sym == "BTCUSD" else "XAUUSD"
+        try:
+            from multi_agent_trading_bot import MarketDataFeed
+            feed = MarketDataFeed(symbol=feed_sym, source="ccxt")
+            df = feed.fetch(limit=max(30, limit + 5), timeframe=timeframe)
+        except Exception as e:
+            logger.debug("MarketDataFeed fetch failed: %s", e)
 
     candles: List[Dict[str, float]] = []
     if df is not None and not df.empty and len(df) >= 3:

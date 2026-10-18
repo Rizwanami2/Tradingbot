@@ -122,6 +122,33 @@ def status(magic: int = DEFAULT_MAGIC, timeout: Optional[float] = None) -> Dict[
     return send_command("STATUS", magic=magic, timeout=timeout)
 
 
+def get_rates(symbol: str, count: int = 100, magic: int = DEFAULT_MAGIC, timeout: Optional[float] = 3.0) -> Dict[str, Any]:
+    return send_command("RATES", symbol=symbol, volume=float(count), magic=magic, timeout=timeout)
+
+
+def get_live_tick(symbol: str, magic: int = DEFAULT_MAGIC, timeout: Optional[float] = 2.0) -> Dict[str, Any]:
+    # 1. Fast path: check ea_ticks.txt written periodically by EA
+    try:
+        ticks_file = BRIDGE_DIR / "ea_ticks.txt"
+        if ticks_file.exists():
+            raw = ticks_file.read_text(encoding="utf-8").strip()
+            if raw:
+                data = json.loads(raw)
+                sym_key = symbol.upper()
+                if sym_key in data:
+                    res = data[sym_key]
+                    res["ok"] = True
+                    return res
+                for k, v in data.items():
+                    if sym_key in k or k in sym_key:
+                        v["ok"] = True
+                        return v
+    except Exception:
+        pass
+    # 2. Command fallback
+    return send_command("TICK", symbol=symbol, magic=magic, timeout=timeout)
+
+
 if __name__ == "__main__":
     print("Bridge dir:", BRIDGE_DIR)
     print(status())
