@@ -31,26 +31,25 @@ async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sub = args[0].lower() if args else "summary"
         if sub in ("help", "commands"):
             msg = (
-                "📊 *Performance Commands:*\n"
-                "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
-                "• `/performance agents` — Agent contribution rankings\n"
-                "• `/performance trades` — Recent closed trades log\n"
-                "• `/performance reset` — Clear performance history"
+                "Performance Commands:\n"
+                "• /performance — Detailed trade metrics, win rate & Sharpe ratio\n"
+                "• /performance agents — Agent contribution rankings\n"
+                "• /performance trades — Recent closed trades log\n"
+                "• /performance reset — Clear performance history"
             )
-            await safe_reply(update, msg, parse_mode="Markdown")
+            await safe_reply(update, msg, parse_mode=None)
         elif sub in ("agents", "ranking", "rankings"):
             await safe_reply(update, perf.agent_report(), parse_mode="Markdown")
         elif sub in ("trades", "history", "recent", "closed"):
             await safe_reply(update, perf.recent_trades_report(), parse_mode="Markdown")
         elif sub in ("reset", "clear"):
             perf.reset()
-            await safe_reply(update, "🧹 *Performance Stats Reset*\nAll closed trade history has been cleared.", parse_mode="Markdown")
+            await safe_reply(update, "Performance Stats Reset. All closed trade history cleared.", parse_mode=None)
         else:
             await safe_reply(update, perf.telegram_report(), parse_mode="Markdown")
     except Exception as e:
         logger.exception("Error in /performance command: %s", e)
         await safe_reply(update, f"Performance error: {e}", parse_mode=None)
-
 
 
 async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -60,13 +59,13 @@ async def kill_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         arg = (ctx.args[0].lower() if ctx.args else "status")
         if arg in ("on", "1", "true", "activate"):
             ks.activate_manual("Manual kill via Telegram")
-            await safe_reply(update, "🛑 *KILL SWITCH ON* — no new entries.", parse_mode="Markdown")
+            await safe_reply(update, "KILL SWITCH ON — no new entries.", parse_mode=None)
         elif arg in ("off", "0", "false", "deactivate"):
             ks.deactivate()
-            await safe_reply(update, "🟢 *Kill switch OFF.*", parse_mode="Markdown")
+            await safe_reply(update, "Kill switch OFF.", parse_mode=None)
         else:
             _, msg = ks.is_active()
-            await safe_reply(update, f"Status: `{msg}`", parse_mode="Markdown")
+            await safe_reply(update, f"Status: {msg}", parse_mode=None)
     except Exception as e:
         logger.exception("Error in /kill command: %s", e)
         await safe_reply(update, f"Kill error: {e}", parse_mode=None)
@@ -79,16 +78,15 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not ctx.args:
             await safe_reply(
                 update,
-                f"📋 *Strategy Profiles* (Active: `{CURRENT_PROFILE}`)\n"
-                f"• Available: `{', '.join(profiles.keys())}`\n"
-                f"• Usage: `/profile scalp` or `/profile balanced`\n"
-                f"💡 _Tip: Use `/profile scalp` for rapid micro-scalping with small SL/TP & fast capital gains._",
-                parse_mode="Markdown",
+                f"Strategy Profiles (Active: {CURRENT_PROFILE})\n"
+                f"• Available: {', '.join(profiles.keys())}\n"
+                f"• Usage: /profile scalp or /profile balanced",
+                parse_mode=None,
             )
             return
         name = ctx.args[0].lower()
         if name not in profiles:
-            await safe_reply(update, f"Unknown `{name}`. Available: {', '.join(profiles.keys())}", parse_mode="Markdown")
+            await safe_reply(update, f"Unknown {name}. Available: {', '.join(profiles.keys())}", parse_mode=None)
             return
         try:
             from main import arbiter, risk_mgr, engine
@@ -105,12 +103,11 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     profile = ctx.args[1].lower() if len(ctx.args) > 1 else "balanced"
-    await safe_reply(update, f"⏳ Advanced eval *{sym}* (`{profile}`)...", parse_mode="Markdown")
+    await safe_reply(update, f"Advanced eval {sym} ({profile})...", parse_mode=None)
     try:
         from advanced_integration import AdvancedEngine
         eng = AdvancedEngine(symbol=sym, profile=profile)
         res = eng.evaluate(sym)
-        # Autonomous learned filter (automatic)
         try:
             from autonomous_learner import get_brain
             brain = get_brain(auto_bootstrap=False)
@@ -150,38 +147,37 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines = []
     for v in votes:
         d = v.get("direction", "FLAT")
-        icon = "🟢" if d == "LONG" else ("🔴" if d == "SHORT" else "⚪")
-        lines.append(f"{icon} *{v.get('agent')}:* {d} — {v.get('reason', '')}")
+        lines.append(f"{v.get('agent')}: {d} — {v.get('reason', '')}")
 
     meta = []
     if res.get("session"):
-        meta.append(f"Session `{res['session']}`")
+        meta.append(f"Session {res['session']}")
     if res.get("htf_bias"):
-        meta.append(f"HTF `{res['htf_bias']}`")
+        meta.append(f"HTF {res['htf_bias']}")
     if res.get("vol_reason"):
-        meta.append(f"Vol `{res['vol_reason']}`")
+        meta.append(f"Vol {res['vol_reason']}")
 
     sig = res.get("signal")
     if sig and not res.get("blocked"):
         direction = sig.get("direction")
         dname = direction.name if hasattr(direction, "name") else str(direction)
         box = (
-            f"\n🎯 *SETUP {dname}*\n"
-            f"• Entry `${sig.get('entry', 0):,.2f}` | SL `${sig.get('stop', 0):,.2f}`\n"
-            f"• TP1 `${sig.get('tp1', 0):,.2f}` | TP2 `${sig.get('tp2', 0):,.2f}`\n"
-            f"• Lots `{sig.get('lots')}` | Lev `{sig.get('leverage', 1):.0f}x`\n"
-            f"• R:R `1:{sig.get('rr', 0):.1f}` | `{sig.get('profile')}` / `{sig.get('regime')}`\n"
+            f"\nSETUP {dname}\n"
+            f"• Entry {sig.get('entry', 0):,.2f} | SL {sig.get('stop', 0):,.2f}\n"
+            f"• TP1 {sig.get('tp1', 0):,.2f} | TP2 {sig.get('tp2', 0):,.2f}\n"
+            f"• Lots {sig.get('lots')} | Lev {sig.get('leverage', 1):.0f}x\n"
+            f"• R:R 1:{sig.get('rr', 0):.1f} | {sig.get('profile')} / {sig.get('regime')}\n"
         )
     else:
-        box = "\n🛡️ *No trade* — blocked or no consensus.\n"
+        box = "\nNo trade — blocked or no consensus.\n"
 
     msg = (
-        f"📊 *Advanced Signal — {sym}*\nMark `${price:,.2f}`\n"
+        f"Advanced Signal — {sym}\nMark {price:,.2f}\n"
         + (" | ".join(meta) + "\n" if meta else "")
-        + "\n*Votes:*\n" + "\n".join(lines)
-        + f"\n\n⚡ `{res.get('status')}`\n" + box
+        + "\nVotes:\n" + "\n".join(lines)
+        + f"\n\n{res.get('status')}\n" + box
     )
-    await safe_reply(update, msg, parse_mode="Markdown")
+    await safe_reply(update, msg, parse_mode=None)
 
 
 async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -206,9 +202,9 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if mode == "auto":
         await safe_reply(
             update,
-            f"⏳ *Auto backtest suite* — `{symbol}` — {bars} bars\n"
+            f"Auto backtest suite — {symbol} — {bars} bars\n"
             f"Running: single + multiagent + walk-forward + Monte Carlo + sweep…",
-            parse_mode="Markdown",
+            parse_mode=None,
         )
         try:
             from auto_backtest import run_auto_backtest
@@ -223,15 +219,13 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 do_sweep=True,
             )
             text = report.text(max_len=3800)
-            await safe_reply(update, f"```\n{text}\n```", parse_mode="Markdown")
+            await safe_reply(update, text, parse_mode=None)
         except Exception as e:
             logger.exception("auto backtest failed")
             await safe_reply(update, f"Auto backtest error: {type(e).__name__}: {e}", parse_mode=None)
         return
 
-    await safe_reply(
-        update,
-        f"⏳ Backtest `{mode}` — {symbol} — {bars} bars…", parse_mode="Markdown")
+    await safe_reply(update, f"Backtest {mode} — {symbol} — {bars} bars…", parse_mode=None)
     try:
         from advanced_backtest import (
             load_data, SimConfig, AdvancedSimulator, ema_cross_signal,
@@ -246,13 +240,13 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if mode == "walkforward":
             if len(df) < 300:
-                text = f"Walk-forward requires at least 300 bars (got {len(df)}). Try `/abacktest 500 wf {symbol}`."
+                text = f"Walk-forward requires at least 300 bars (got {len(df)}). Try /abacktest 500 wf {symbol}."
             else:
                 text = walk_forward(df, ema_cross_signal, n_windows=4, cfg=cfg, symbol=symbol).summary()
         elif mode == "montecarlo":
             m, trades, _ = sim.run(df, ema_cross_signal, symbol)
             if len(trades) < 5:
-                text = m.summary() + f"\n\n⚠️ Monte Carlo requires at least 5 simulated trades (got {len(trades)}). Try running with more bars: `/abacktest 500 mc {symbol}`."
+                text = m.summary() + f"\n\nMonte Carlo requires at least 5 simulated trades (got {len(trades)})."
             else:
                 mc = monte_carlo_from_trades(trades, initial_equity=cfg.initial_equity, n_runs=400)
                 text = m.summary() + mc.summary()
@@ -267,14 +261,13 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if len(text) > 4000:
             text = text[:3900] + "\n…(truncated)"
-        await safe_reply(update, f"```\n{text}\n```", parse_mode="Markdown")
+        await safe_reply(update, text, parse_mode=None)
     except Exception as e:
         logger.exception("abacktest failed")
         await safe_reply(update, f"Backtest error: {type(e).__name__}: {e}", parse_mode=None)
 
 
 def register_all_advanced(application) -> None:
-    # Start autonomous brain (5y learn + auto-correct) — no user command needed
     try:
         from autonomous_learner import auto_start
         auto_start()
@@ -314,6 +307,11 @@ def register_all_advanced(application) -> None:
         register_brain(application)
     except Exception as e:
         logger.debug("Brain commands not registered: %s", e)
+    try:
+        from telegram_ai import register_ai_commands
+        register_ai_commands(application)
+    except Exception as e:
+        logger.debug("AI commands not registered: %s", e)
     logger.info(
-        "Registered advanced + FP3 + FP4 + /brain /relearn; autonomous learner active"
+        "Registered advanced + FP3 + FP4 + /brain /relearn + /ai; autonomous learner active"
     )
