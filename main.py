@@ -72,6 +72,7 @@ from multi_agent_trading_bot import (
 )
 from risk_manager import RiskManager
 from ops_dashboard import StatusStore
+from telegram_brain import safe_reply
 
 
 async def _to_thread(func, *args, **kwargs):
@@ -415,9 +416,12 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🎯 **Signals & Strategy Confluence:**\n"
             "• `/signal [SYM]` — 9-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP, MTF-FVG, Asian)\n"
             "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
-            "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n\n"
+            "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n"
+            "• `/matrix [SYM]` or `/heatmap` — Multi-Timeframe Trend & Volatility Confluence Matrix\n\n"
             "⚡ **Execution & Positions (Active Limit: 6):**\n"
             "• `/positions` — Open active trades, pending setups & real-time PnL\n"
+            "• `/slots [auto|manual <1-6>]` — Active positions slot telemetry (1-6 positions max)\n"
+            "• `/dashboard [start|stop]` — Real-Time Web Companion Dashboard\n"
             "• `/autotrade [on|off|scalp|btc|gold|both]` — Multi-symbol autotrading (Gold/BTC)\n"
             "• `/watchlist [btc|gold|both]` — View & switch active Gold/BTC autotrade watchlist\n"
             "• `/vstops [clear]` — Client-side hidden virtual stop loss manager\n"
@@ -1156,17 +1160,17 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if args:
             if args[0] in ("auto", "dynamic", "adaptive"):
                 ok, msg = engine.set_slots_mode("auto")
-                await update.message.reply_text(f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+                await safe_reply(update, f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
                 return
             elif args[0] in ("manual", "man", "fixed"):
                 cnt = int(args[1]) if len(args) > 1 and args[1].isdigit() else int(getattr(engine, "manual_slots", 6))
                 ok, msg = engine.set_slots_mode("manual", cnt)
-                await update.message.reply_text(f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+                await safe_reply(update, f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
                 return
             elif args[0].isdigit():
                 cnt = int(args[0])
                 ok, msg = engine.set_slots_mode("manual", cnt)
-                await update.message.reply_text(f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+                await safe_reply(update, f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
                 return
             elif args[0] in ("sync", "refresh", "reconcile", "wallet", "reload"):
                 if hasattr(engine, "reconcile_positions"):
@@ -1180,12 +1184,9 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             summary = engine.get_portfolio_summary()
             msg = f"📋 Positions open={summary.get('active_positions_count', 0)}"
-        try:
-            await update.message.reply_text(msg, parse_mode="Markdown")
-        except Exception:
-            await update.message.reply_text(msg.replace("*", "").replace("`", ""))
+        await safe_reply(update, msg, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Positions error: {e}")
+        await safe_reply(update, f"Positions error: {e}", parse_mode=None)
 
 
 async def slots_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1197,33 +1198,33 @@ async def slots_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cur_slots = int(getattr(engine, "max_open_trades", 6))
             free = engine.slots_available()
             msg = (
-                f"🎰 **Active Positions Slots Telemetry**\n"
-                f"• **Current Limit:** `{cur_slots}/6 positions max`\n"
-                f"• **Mode:** `{mode.upper()}` (Manual / Automatic)\n"
-                f"• **Open Now:** `{len(engine.active_positions)} active | {free} slots free`\n\n"
-                f"**Commands:**\n"
+                f"🎰 *Active Positions Slots Telemetry*\n"
+                f"• *Current Limit:* `{cur_slots}/6 positions max`\n"
+                f"• *Mode:* `{mode.upper()}` (Manual / Automatic)\n"
+                f"• *Open Now:* `{len(engine.active_positions)} active | {free} slots free`\n\n"
+                f"*Commands:*\n"
                 f"• `/slots auto` — dynamic allocation (1..6) based on equity & margin\n"
                 f"• `/slots manual <1-6>` — set fixed slot count (e.g. `/slots 3` or `/slots manual 4`)"
             )
-            await update.message.reply_text(msg, parse_mode="Markdown")
+            await safe_reply(update, msg, parse_mode="Markdown")
             return
 
         sub = args[0]
         if sub in ("auto", "dynamic", "adaptive"):
             ok, msg = engine.set_slots_mode("auto")
-            await update.message.reply_text(f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+            await safe_reply(update, f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
         elif sub in ("manual", "man", "fixed"):
             cnt = int(args[1]) if len(args) > 1 and args[1].isdigit() else int(getattr(engine, "manual_slots", 6))
             ok, msg = engine.set_slots_mode("manual", cnt)
-            await update.message.reply_text(f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+            await safe_reply(update, f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
         elif sub.isdigit():
             cnt = int(sub)
             ok, msg = engine.set_slots_mode("manual", cnt)
-            await update.message.reply_text(f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+            await safe_reply(update, f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
         else:
-            await update.message.reply_text("Usage: `/slots [auto | manual <1-6> | <1-6>]`", parse_mode="Markdown")
+            await safe_reply(update, "Usage: `/slots [auto | manual <1-6> | <1-6>]`", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Slots error: {e}")
+        await safe_reply(update, f"Slots error: {e}", parse_mode=None)
 
 
 async def matrix_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1236,9 +1237,9 @@ async def matrix_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             sym = "BTCUSDT" if arg in ("BTC", "BTCUSD", "BITCOIN") else ("XAUUSD" if arg in ("XAU", "GOLD") else arg)
             msg = render_telegram_heatmap(sym)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await safe_reply(update, msg, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Heatmap matrix error: {e}")
+        await safe_reply(update, f"⚠️ Heatmap matrix error: {e}", parse_mode=None)
 
 
 async def dashboard_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1255,31 +1256,31 @@ async def dashboard_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if sub in ("stop", "kill"):
             stop_dashboard_background()
-            await update.message.reply_text("🛑 Web companion dashboard stopped.")
+            await safe_reply(update, "🛑 Web companion dashboard stopped.", parse_mode=None)
             return
 
         srv, url = start_dashboard_background(
             host=host, port=port, status_file=status_file, token=token, engine=engine
         )
         msg = (
-            f"🌐 **Nimble-Darwin Web Companion Dashboard**\n"
+            f"🌐 *Nimble-Darwin Web Companion Dashboard*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• **Live URL:** `{url}`\n"
-            f"• **Host / Port:** `{host}:{port}`\n"
-            f"• **Status:** 🟢 Active & Serving\n"
-            f"• **Features:** Live telemetry, interactive slots control (1..6), active positions, pending setups, MTF matrix visualizer\n\n"
+            f"• *Live URL:* `{url}`\n"
+            f"• *Host / Port:* `{host}:{port}`\n"
+            f"• *Status:* 🟢 Active & Serving\n"
+            f"• *Features:* Live telemetry, interactive slots control (1..6), active positions, pending setups, MTF matrix visualizer\n\n"
             f"Open `{url}` in your local browser to access real-time companion controls."
         )
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await safe_reply(update, msg, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Dashboard error: {e}")
+        await safe_reply(update, f"⚠️ Dashboard error: {e}", parse_mode=None)
 
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     arg = (ctx.args[0] if ctx.args else "").strip().upper()
     if not arg or arg in ("ALL", "*"):
         if not engine.active_positions:
-            await update.message.reply_text("ℹ️ No open positions to close.")
+            await safe_reply(update, "ℹ️ No open positions to close.", parse_mode=None)
             return
         closed = []
         if hasattr(engine, "close_all_positions"):
@@ -1289,21 +1290,21 @@ async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 p = engine.close_position(sym, reason="Manual close all")
                 if p:
                     closed.append(p)
-        lines = [f"✅ **Closed {len(closed)} position(s):**"]
+        lines = [f"✅ *Closed {len(closed)} position(s):*"]
         for p in closed:
             pnl = float(getattr(p, 'realized_pnl', 0) or 0)
             pnl_icon = "📈" if pnl >= 0 else "📉"
             lines.append(f"• `{p.symbol}` PnL: {pnl_icon} `${pnl:+,.2f}`")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
         return
     sym = arg if arg not in ("BTC", "BTCUSD") else "BTCUSDT"
     closed = engine.close_position(sym, reason="Manual close")
     if closed:
         pnl = float(getattr(closed, 'realized_pnl', 0) or 0)
         pnl_icon = "📈" if pnl >= 0 else "📉"
-        await update.message.reply_text(f"✅ Closed `{sym}` — Realized PnL: {pnl_icon} `${pnl:+,.2f}`", parse_mode="Markdown")
+        await safe_reply(update, f"✅ Closed `{sym}` — Realized PnL: {pnl_icon} `${pnl:+,.2f}`", parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"⚠️ No active position found for `{sym}`. Use `/close all`", parse_mode="Markdown")
+        await safe_reply(update, f"⚠️ No active position found for `{sym}`. Use `/close all`", parse_mode="Markdown")
 
 
 async def closed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1315,7 +1316,7 @@ async def closed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         closes = []
 
-    lines = ["📜 **Recently Closed Trades History**"]
+    lines = ["📜 *Recently Closed Trades History*"]
     if closes:
         total_pnl = 0.0
         for r in reversed(closes):
@@ -1327,7 +1328,7 @@ async def closed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sym = r.get("symbol", "")
             d = r.get("direction", "")
             lines.append(f"• {icon} `{sym}` {d} — PnL: `${pnl:+,.2f}` (R: `{r_mult:+.2f}`)")
-        lines.append(f"\n💰 **Total Realized PnL:** `${total_pnl:+,.2f}`")
+        lines.append(f"\n💰 *Total Realized PnL:* `${total_pnl:+,.2f}`")
     elif getattr(engine, "trade_history", None):
         history = list(reversed(engine.trade_history))[:8]
         total_pnl = 0.0
@@ -1338,14 +1339,11 @@ async def closed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sym = getattr(t, "symbol", "")
             d = getattr(t, "direction", "")
             lines.append(f"• {icon} `{sym}` {d} — PnL: `${pnl:+,.2f}`")
-        lines.append(f"\n💰 **Total Realized PnL:** `${total_pnl:+,.2f}`")
+        lines.append(f"\n💰 *Total Realized PnL:* `${total_pnl:+,.2f}`")
     else:
         lines.append("ℹ️ No closed trades on record yet. Completed trades will appear here.")
 
-    try:
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-    except Exception:
-        await update.message.reply_text("\n".join(lines).replace("*", "").replace("`", ""))
+    await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
 
 
 async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1405,8 +1403,10 @@ async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Friendly fallback when an unrecognized command is typed."""
-    cmd = update.message.text.split()[0] if (update.message and update.message.text) else "/command"
-    await update.message.reply_text(
+    text = getattr(update.message, "text", "") if (getattr(update, "message", None) and update.message.text) else "/command"
+    cmd = text.split()[0] if text else "/command"
+    await safe_reply(
+        update,
         f"❓ Unknown command: `{cmd}`\n\n"
         "Use `/commands` or `/help` to view all available commands.",
         parse_mode="Markdown",
@@ -1418,11 +1418,11 @@ async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         cancelled = engine.cancel_setup(sym, reason="Manual cancel")
         if cancelled:
-            await update.message.reply_text(f"✅ Cancelled pending setup for `{sym}`", parse_mode="Markdown")
+            await safe_reply(update, f"✅ Cancelled pending setup for `{sym}`", parse_mode="Markdown")
         else:
-            await update.message.reply_text(f"ℹ️ No pending setup for `{sym}`", parse_mode="Markdown")
+            await safe_reply(update, f"ℹ️ No pending setup for `{sym}`", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Cancel failed: `{e}`", parse_mode="Markdown")
+        await safe_reply(update, f"⚠️ Cancel failed: `{e}`", parse_mode="Markdown")
 
 
 async def news_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -4792,7 +4792,7 @@ def run_cli_interactive():
             except Exception as e:
                 print(f"Anti-spam error: {e}")
         else:
-            print("Commands: signal, price, levels, chart, news, quality, positions, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, cooldown, spam, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, relearn, ask, reset, exit")
+            print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, cooldown, spam, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, relearn, ask, reset, exit")
 
 
 def main():
@@ -4890,13 +4890,13 @@ def main():
         except Exception as cmd_err:
             logger.warning("Failed to sync Bot Commands with Telegram API: %s", cmd_err)
 
-        # Advanced commands and autonomous learner
+        # Autonomous brain auto-start in background
         try:
-            from telegram_advanced import register_all_advanced
-            register_all_advanced(application)
-            print("Advanced commands registered")
-        except Exception as adv_err:
-            print(f"Advanced commands not loaded: {adv_err}")
+            from autonomous_learner import auto_start
+            auto_start()
+            logger.info("Autonomous learner auto-started in background")
+        except Exception as e:
+            logger.debug("Autonomous learner start skip: %s", e)
 
     app = ApplicationBuilder().token(token).post_init(on_post_init).build()
 
@@ -5012,7 +5012,14 @@ def main():
     app.add_handler(CommandHandler(["ask", "chat"], ask_command))
     app.add_handler(CommandHandler("reset", reset_command))
 
-    # Fallback for unrecognized commands
+    # Safely register any additional advanced commands before unknown_command fallback
+    try:
+        from telegram_advanced import register_all_advanced
+        register_all_advanced(app)
+    except Exception as adv_err:
+        logger.warning("Advanced commands register note: %s", adv_err)
+
+    # Fallback for unrecognized commands (MUST BE REGISTERED LAST)
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     # Conversational chat handler for non-commands
@@ -5028,6 +5035,13 @@ def main():
             logger.warning("Telegram conflict: another bot instance is polling with this token. Pausing briefly...")
         elif "NetworkError" in err_str or "TimedOut" in err_str or "httpx" in err_str:
             logger.warning("Telegram network glitch (non-fatal): %s", err)
+        elif "Can't parse entities" in err_str or "can't find end of" in err_str or "entity" in err_str.lower():
+            logger.warning("Telegram markdown entity parse error caught: %s", err)
+            if update and isinstance(update, Update):
+                try:
+                    await safe_reply(update, "⚠️ Message formatting error from Telegram parser. Raw response delivered.", parse_mode=None)
+                except Exception:
+                    pass
         else:
             logger.error("Telegram error caught: %s", err)
 

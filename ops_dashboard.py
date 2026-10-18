@@ -19,6 +19,7 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import threading
 import time
@@ -27,6 +28,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import parse_qs, urlparse
+
+logger = logging.getLogger("OpsDashboard")
 
 import config
 
@@ -987,14 +990,21 @@ def start_dashboard_background(
     status_file: str | Path = ".runtime/bot_status.json",
     token: str = "",
     engine: Optional[Any] = None,
-) -> tuple[ThreadingHTTPServer, str]:
+) -> tuple[Optional[ThreadingHTTPServer], str]:
     """Start dashboard in a daemon thread and return (server, url)."""
     global _BACKGROUND_SERVER, _BACKGROUND_THREAD
     if _BACKGROUND_SERVER is not None:
         addr = _BACKGROUND_SERVER.server_address
         return _BACKGROUND_SERVER, f"http://{addr[0]}:{addr[1]}"
 
-    server = create_server(host=host, port=port, status_file=status_file, token=token, engine=engine)
+    try:
+        server = create_server(host=host, port=port, status_file=status_file, token=token, engine=engine)
+    except OSError as e:
+        if getattr(e, "errno", None) in (98, 48) or "already in use" in str(e).lower():
+            logger.warning("Dashboard port %s already in use; returning active server URL: %s", port, e)
+            return None, f"http://{host}:{port}"
+        raise
+
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     _BACKGROUND_SERVER = server

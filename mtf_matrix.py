@@ -361,11 +361,12 @@ def render_telegram_heatmap(snap_or_sym: Union[MatrixSnapshot, str]) -> str:
     score_bar = _render_score_bar(snap.overall_score)
     p_str = f"${snap.current_price:,.2f}" if snap.current_price >= 10.0 else f"${snap.current_price:,.4f}"
 
+    rec_clean = str(snap.recommendation).replace("*", "").replace("_", "").replace("`", "")
     lines = [
-        f"🌡️ **Multi-Timeframe Confluence Matrix: `{snap.symbol}`**",
-        f"💵 **Live Price:** `{p_str}` | **Confluence:** `{snap.confluence_grade}`",
-        f"📊 **Score:** `{snap.overall_score:+.1f}/100` | **Structure:** `{snap.ltf_htf_alignment}`",
-        f"[{score_bar}]",
+        f"🌡️ *Multi-Timeframe Confluence Matrix: `{snap.symbol}`*",
+        f"💵 *Live Price:* `{p_str}` | *Confluence:* `{snap.confluence_grade}`",
+        f"📊 *Score:* `{snap.overall_score:+.1f}/100` | *Structure:* `{snap.ltf_htf_alignment}`",
+        f"`{score_bar}`",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "`TF   | TREND |  RSI  | VOLATILITY | BIAS`",
         "──────────────────────────",
@@ -391,7 +392,7 @@ def render_telegram_heatmap(snap_or_sym: Union[MatrixSnapshot, str]) -> str:
         lines.append(f"`{short_lbl}  |` {tr_str} `| {rsi_str} | {vol_str:<6} |` {score_icon} `{tf.score:+4.0f}`")
 
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"💡 **Recommendation:** _{snap.recommendation}_")
+    lines.append(f"💡 *Recommendation:* _{rec_clean}_")
     lines.append(f"🕒 _Updated: {snap.timestamp}_")
 
     return "\n".join(lines)
@@ -406,15 +407,15 @@ def render_telegram_multi_matrix(symbols: Optional[List[str]] = None) -> str:
         p_str = f"${snap.current_price:,.2f}" if snap.current_price >= 10.0 else f"${snap.current_price:,.4f}"
         score_bar = _render_score_bar(snap.overall_score)
         b_lines = [
-            f"⚡ **{snap.symbol}** (`{p_str}`) — `{snap.confluence_grade}`",
-            f"Score: `{snap.overall_score:+.1f}` [{score_bar}] | `{snap.ltf_htf_alignment}`",
+            f"⚡ *{snap.symbol}* (`{p_str}`) — `{snap.confluence_grade}`",
+            f"Score: `{snap.overall_score:+.1f}` | `{score_bar}` | `{snap.ltf_htf_alignment}`",
         ]
         # Summary row of timeframes
         icons = " ".join(f"`{k.upper()}:`{snap.timeframes[k].trend_icon}" for k in ["1m", "5m", "15m", "1h", "4h", "daily"] if k in snap.timeframes)
         b_lines.append(icons)
         blocks.append("\n".join(b_lines))
 
-    header = "🌡️ **Multi-Asset MTF Confluence Heatmap**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    header = "🌡️ *Multi-Asset MTF Confluence Heatmap*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     footer = f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 Use `/matrix <SYM>` for full deep-dive indicators."
     return header + "\n\n".join(blocks) + footer
 

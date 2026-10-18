@@ -1688,8 +1688,8 @@ class ExecutionEngine:
         pnl_icon = "📈" if u_pnl >= 0 else "📉"
         conn_tag = "🟢 Connected" if wallet.get("connected", True) else "🟡 Ready"
         b_name = wallet.get("broker_name", "MetaTrader 5 Live")
-        acc_str = f" #{wallet.get('account_id')}" if wallet.get("account_id") else ""
-        srv_str = f" [{wallet.get('server')}]" if wallet.get("server") else ""
+        acc_str = f" #{wallet.get('account_id')}" if wallet.get('account_id') else ""
+        srv_str = f" ({wallet.get('server')})" if wallet.get('server') else ""
         lvl_str = f" | **Margin Level:** `{m_lvl:,.1f}%`" if used_m > 0 and m_lvl > 0 else ""
         pnl_sign_str = f"+${u_pnl:,.2f}" if u_pnl > 0 else (f"-${abs(u_pnl):,.2f}" if u_pnl < 0 else f"${u_pnl:,.2f}")
 
@@ -1731,7 +1731,7 @@ class ExecutionEngine:
 
                 entry_fmt = f"${entry:,.2f}" if entry >= 1.0 else f"${entry:,.4f}"
                 curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"
-                oid_str = f" [#{pos.id}]" if getattr(pos, "id", None) else ""
+                oid_str = f" (#{pos.id})" if getattr(pos, "id", None) else ""
                 tkt_str = f" | **Ticket:** `{pos.ticket}`" if getattr(pos, "ticket", None) else ""
                 trail_str = ""
                 if getattr(pos, "trailing_sl_active", False):
@@ -1755,7 +1755,7 @@ class ExecutionEngine:
                     pcurr_fmt = f"${pcurr_p:,.2f}" if pcurr_p >= 1.0 else f"${pcurr_p:,.4f}"
                     dist_pct = ((pord.entry_level - pcurr_p) / pcurr_p * 100.0)
                     market_str = f" | **Current Market:** `{pcurr_fmt}` ({dist_pct:+.2f}% to fill)"
-                poid_str = f" [#{pord.id}]" if getattr(pord, "id", None) else ""
+                poid_str = f" (#{pord.id})" if getattr(pord, "id", None) else ""
                 lines.append(
                     f"• {pdir_icon} `{sym_to_check}` **{pord.direction}**{poid_str} @ Entry `${pord.entry_level:,.2f}`{market_str} | SL `${pord.stop_loss:,.2f}` (Lots `{pord.lots}`)"
                 )

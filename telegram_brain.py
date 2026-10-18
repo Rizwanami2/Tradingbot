@@ -9,7 +9,13 @@ from telegram.ext import ContextTypes, CommandHandler
 logger = logging.getLogger("TelegramBrain")
 
 
-async def safe_reply(update: Update, text: str, parse_mode: str | None = "Markdown", bot: Any = None):
+async def safe_reply(
+    update: Update,
+    text: str,
+    parse_mode: str | None = "Markdown",
+    bot: Any = None,
+    reply_markup: Any = None,
+):
     """Send reply, falling back cleanly to plain text if Telegram fails to parse entities."""
     if not update:
         return None
@@ -23,21 +29,33 @@ async def safe_reply(update: Update, text: str, parse_mode: str | None = "Markdo
         msg = update.effective_message
     elif getattr(update, "edited_message", None) is not None:
         msg = update.edited_message
+    elif getattr(update, "callback_query", None) is not None and getattr(update.callback_query, "message", None) is not None:
+        msg = update.callback_query.message
 
-    clean_text = text.replace("**", "*").replace("```", "").replace("`", "")
+    clean_text = (
+        text.replace("**", "*")
+        .replace("```", "")
+        .replace("`", "")
+        .replace("[", "(")
+        .replace("]", ")")
+    )
+
+    kwargs = {}
+    if reply_markup is not None:
+        kwargs["reply_markup"] = reply_markup
 
     if msg and hasattr(msg, "reply_text"):
         if parse_mode:
             try:
-                return await msg.reply_text(text, parse_mode=parse_mode)
+                return await msg.reply_text(text, parse_mode=parse_mode, **kwargs)
             except Exception as e:
                 logger.warning("Markdown reply failed (%s), falling back to plain text", e)
         try:
-            return await msg.reply_text(text, parse_mode=None)
+            return await msg.reply_text(text, parse_mode=None, **kwargs)
         except Exception as e:
             logger.warning("Plain reply failed (%s), falling back to clean text", e)
             try:
-                return await msg.reply_text(clean_text, parse_mode=None)
+                return await msg.reply_text(clean_text, parse_mode=None, **kwargs)
             except Exception as e2:
                 logger.warning("Clean text reply failed (%s)", e2)
 
@@ -53,15 +71,15 @@ async def safe_reply(update: Update, text: str, parse_mode: str | None = "Markdo
     if chat_id and _bot and hasattr(_bot, "send_message"):
         if parse_mode:
             try:
-                return await _bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+                return await _bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
             except Exception as e:
                 logger.warning("Markdown send_message failed (%s), falling back to plain text", e)
         try:
-            return await _bot.send_message(chat_id=chat_id, text=text, parse_mode=None)
+            return await _bot.send_message(chat_id=chat_id, text=text, parse_mode=None, **kwargs)
         except Exception as e:
             logger.warning("send_message failed (%s), trying clean text", e)
             try:
-                return await _bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None)
+                return await _bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None, **kwargs)
             except Exception as e2:
                 logger.error("All reply and send_message attempts failed: %s", e2)
                 return None
