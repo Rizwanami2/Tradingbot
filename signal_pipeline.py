@@ -69,6 +69,13 @@ def run_signal(
     sig = res.get("signal")
     if sig:
         try:
+            from strategy_profiles import get_current_profile
+            cur_prof = get_current_profile()
+            if getattr(cur_prof, "is_scalp", False):
+                sig["is_scalp"] = True
+        except Exception:
+            pass
+        try:
             if not sig.get("leverage"):
                 sig["leverage"] = risk.get_leverage()
             lots = float(sig.get("lots") or 0)
@@ -207,7 +214,11 @@ def run_signal(
                 except Exception:
                     conv_val = 0.6
             setup_tag = f"{dname.lower()}|{regime or 'unknown'}"
-            is_scalp_sig = bool(sig.get("is_scalp", False))
+            from strategy_profiles import get_current_profile
+            cur_prof = get_current_profile()
+            prof_name = getattr(cur_prof, "name", "scalp")
+            is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(cur_prof, "is_scalp", False)
+            sig["is_scalp"] = is_scalp_sig
             ok, reason, size_mult = brain.advise_signal(
                 direction=dname,
                 score=score,
@@ -217,6 +228,7 @@ def run_signal(
                 regime=regime,
                 setup=setup_tag,
                 is_scalp=is_scalp_sig,
+                profile=prof_name,
             )
             res["brain_allowed"] = ok
             res["brain_reason"] = reason

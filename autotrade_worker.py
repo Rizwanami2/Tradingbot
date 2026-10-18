@@ -82,7 +82,7 @@ async def live_monitoring_worker(
 
     watchlist: List[str] = resolve_watchlist()
 
-    max_open = int(getattr(config, "MAX_OPEN_TRADES", 2) or 2)
+    max_open = int(getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6)) or 6)
     if getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False):
         max_open = int(getattr(engine, "max_open_trades", max_open) or max_open)
     try:
@@ -98,6 +98,18 @@ async def live_monitoring_worker(
         monitoring_health["last_poll_at"] = now_iso()
         any_data = False
         autotrade_active = bool(autotrade_active_getter())
+
+        max_open = int(getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6)) or 6)
+        current_profile_name = getattr(config, "CURRENT_PROFILE", "scalp")
+        try:
+            from strategy_profiles import get_profile
+            _active_prof = get_profile(current_profile_name)
+            arbiter.MIN_SCORE = _active_prof.min_score
+            arbiter.MIN_AGREEMENT = _active_prof.min_agreement
+            arbiter.min_rr = getattr(_active_prof, "min_rr", 1.9)
+            arbiter.strict_htf = getattr(_active_prof, "strict_htf", False)
+        except Exception:
+            pass
 
         # Dynamically refresh watchlist selection from config / runtime state
         current_watchlist = resolve_watchlist()
@@ -143,6 +155,36 @@ async def live_monitoring_worker(
                         "close": float(candle["close"]),
                     }
 
+                    # Synchronize trade chart candles & mark prices with actual MT5 chart
+                    try:
+                        from mt5_chart import fetch_mt5_live_quote
+                        mt5_q = fetch_mt5_live_quote(symbol, broker=getattr(engine, "broker", None))
+                        if mt5_q.get("ok") and float(mt5_q.get("mark") or 0.0) > 0.0:
+                            mt5_mark = float(mt5_q["mark"])
+                            feed_close = float(df1["close"].iloc[-1])
+                            if feed_close > 0.0:
+                                scale = mt5_mark / feed_close
+                                # If divergence between feed (e.g. PAXG proxy) and actual MT5 spot price (>0.05%), scale candles to MT5 price levels
+                                if abs(scale - 1.0) > 0.0005:
+                                    for col in ("open", "high", "low", "close"):
+                                        if col in df1.columns:
+                                            df1[col] = df1[col] * scale
+                                    for tf_key, tf_df in data.items():
+                                        if tf_key != "1m" and tf_df is not None and not getattr(tf_df, "empty", True):
+                                            for col in ("open", "high", "low", "close"):
+                                                if col in tf_df.columns:
+                                                    tf_df[col] = tf_df[col] * scale
+                                else:
+                                    df1.loc[df1.index[-1], "close"] = mt5_mark
+                                    df1.loc[df1.index[-1], "high"] = max(df1.loc[df1.index[-1], "high"], mt5_mark)
+                                    df1.loc[df1.index[-1], "low"] = min(df1.loc[df1.index[-1], "low"], mt5_mark)
+                            candle_dict["close"] = mt5_mark
+                            candle_dict["high"] = max(float(df1["high"].iloc[-1]), mt5_mark)
+                            candle_dict["low"] = min(float(df1["low"].iloc[-1]), mt5_mark)
+                            candle_dict["open"] = float(df1["open"].iloc[-1])
+                    except Exception as _mt5_sync_err:
+                        logger.debug("MT5 chart sync error for %s: %s", symbol, _mt5_sync_err)
+
                     if not autotrade_active and symbol in engine.pending_setups:
                         engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
@@ -187,8 +229,18 @@ async def live_monitoring_worker(
 
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
+                    eff_max_open = max(max_open, getattr(limiter, "spam_trade_max_trades", 6)) if getattr(limiter, "spam_trade_enabled", False) else max_open
                     if not autotrade_active:
                         can_open = False
+                    elif getattr(limiter, "spam_trade_enabled", False):
+                        can_open, spam_reason = limiter.check_can_enter(
+                            symbol=symbol,
+                            current_price=candle_dict["close"],
+                            engine=engine,
+                            max_open=eff_max_open,
+                        )
+                        if not can_open:
+                            logger.debug("Autotrade %s: entry blocked by spam trade limit — %s", symbol, spam_reason)
                     elif is_scalping:
                         can_open, spam_reason = limiter.check_can_enter(
                             symbol=symbol,
@@ -235,7 +287,7 @@ async def live_monitoring_worker(
                                         conv_val = float(sig["conviction"])
                                     except Exception:
                                         conv_val = 0.6
-                                is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False)
+                                is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                                 ok, reason, size_mult = brain.advise_signal(
                                     direction=dname,
                                     score=float(sig.get("score") or 0.0),
@@ -245,6 +297,7 @@ async def live_monitoring_worker(
                                     regime=str(sig.get("regime") or ""),
                                     setup=f"{dname.lower()}|{sig.get('regime') or 'unknown'}",
                                     is_scalp=is_scalp_sig,
+                                    profile=current_profile_name,
                                 )
                                 if not ok:
                                     logger.info("Autotrade %s: vetoed by Autonomous Learner — %s", symbol, reason)

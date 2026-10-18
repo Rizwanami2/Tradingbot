@@ -206,6 +206,36 @@ class RiskManager:
         else:
             self.config.leverage = self.state.leverage
 
+    @property
+    def equity(self) -> float:
+        return float(getattr(self.state, "equity", 10000.0) or 10000.0)
+
+    @equity.setter
+    def equity(self, val: float) -> None:
+        v = float(val)
+        self.state.equity = v
+        if v > getattr(self.state, "peak_equity", 0.0):
+            self.state.peak_equity = v
+
+    @property
+    def initial_equity(self) -> float:
+        return float(getattr(self.state, "initial_equity", self.state.equity) or self.state.equity)
+
+    @initial_equity.setter
+    def initial_equity(self, val: float) -> None:
+        self.state.initial_equity = float(val)
+
+    def sync_equity(self, new_equity: float, new_balance: Optional[float] = None) -> None:
+        """Synchronize live broker wallet equity and balance with risk state."""
+        eq = float(new_equity)
+        self.state.equity = eq
+        if eq > getattr(self.state, "peak_equity", 0.0):
+            self.state.peak_equity = eq
+        try:
+            self._save_state()
+        except Exception:
+            pass
+
     def set_symbol(self, symbol: str):
         s = (symbol or "").upper().replace("/", "").replace("-", "").strip()
         if s in ("BTC", "BTCUSD", "XBT", "XBTUSD"):

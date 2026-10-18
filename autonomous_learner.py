@@ -125,7 +125,7 @@ class AutonomousLearner:
                     agent_weights=k.get("agent_weights", dict(self.DEFAULT_WEIGHTS)),
                     min_score=float(k.get("min_score", 1.8)),
                     min_rr=float(k.get("min_rr", 1.8)),
-                    min_agreement=int(k.get("min_agreement", 3)),
+                    min_agreement=min(3, int(k.get("min_agreement", 3))),
                     conviction_floor=float(k.get("conviction_floor", 0.55)),
                     size_mult_by_regime=k.get("size_mult_by_regime", {}),
                     total_history_trades=int(k.get("total_history_trades", 0)),
@@ -398,7 +398,7 @@ class AutonomousLearner:
                 k.min_score = min(3.2, k.min_score + 0.15)
                 k.min_rr = min(2.8, k.min_rr + 0.1)
                 k.conviction_floor = min(0.75, k.conviction_floor + 0.03)
-                k.min_agreement = min(4, k.min_agreement + 1)
+                k.min_agreement = min(3, k.min_agreement + 1)
                 self._log_improve(
                     f"Tighten filters: score≥{k.min_score:.2f} RR≥{k.min_rr:.2f} "
                     f"conv≥{k.conviction_floor:.0%} agree≥{k.min_agreement} "
@@ -563,6 +563,7 @@ class AutonomousLearner:
         hour: Optional[int] = None,
         weekday: Optional[int] = None,
         is_scalp: bool = False,
+        profile: Optional[str] = None,
     ) -> Tuple[bool, str, float]:
         """
         Returns (allow, reason, size_multiplier).
@@ -583,11 +584,33 @@ class AutonomousLearner:
         if setup and setup in k.banned_setups:
             return False, f"AUTO: banned setup ({k.banned_setups[setup]})", 0.0
 
-        # Adjust minimum thresholds for micro-scalps if scalp mode is active
-        min_score = min(1.0, k.min_score) if is_scalp else k.min_score
-        min_rr = 0.95 if is_scalp else k.min_rr
-        min_agreement = min(2, k.min_agreement) if is_scalp else k.min_agreement
-        conv_floor = min(0.45, k.conviction_floor) if is_scalp else k.conviction_floor
+        # Adjust minimum thresholds based on profile (scalp concession vs balanced vs swing tight)
+        prof_name = str(profile or "").lower().strip()
+        if prof_name == "scalp":
+            is_scalp = True
+            # Explicit scalp profile concession: lowered score, R:R, and conviction floor for micro execution
+            min_score = min(0.85, k.min_score)
+            min_rr = 0.90
+            min_agreement = min(2, k.min_agreement)
+            conv_floor = min(0.40, k.conviction_floor)
+        elif is_scalp:
+            # Scalp mode active without explicit scalp profile override
+            min_score = min(1.0, k.min_score)
+            min_rr = 0.95
+            min_agreement = min(2, k.min_agreement)
+            conv_floor = min(0.45, k.conviction_floor)
+        elif prof_name == "swing":
+            # Swing: tight strategy, high score and agreement required
+            min_score = max(1.70, k.min_score)
+            min_rr = max(2.5, k.min_rr)
+            min_agreement = min(3, max(3, k.min_agreement))
+            conv_floor = max(0.65, k.conviction_floor)
+        else:
+            # Standard learned / balanced - agreement capped at 3 so 3-agent confluence never gets blocked
+            min_score = min(2.2, k.min_score)
+            min_rr = min(2.2, k.min_rr)
+            min_agreement = min(3, k.min_agreement)
+            conv_floor = min(0.60, k.conviction_floor)
 
         if score and score < min_score:
             tag = "scalp score" if is_scalp else "score"

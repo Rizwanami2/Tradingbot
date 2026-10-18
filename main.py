@@ -289,11 +289,11 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Welcome! Institutional crypto & gold algorithmic trading assistant powered by 7 autonomous strategy agents, dynamic entry planning, and safe paper/MT5 execution.\n\n"
         "⚡ **Quick Start:**\n"
         "• `/signal btc` — Multi-agent consensus & best entry zone\n"
-        "• `/autotrade on` — Automated trading (up to 5 active trades)\n"
+        "• `/autotrade on` — Automated trading (up to 6 active trades)\n"
         "• `/positions` — Monitor open trades, PnL & dynamic trailing stops\n"
         "• `/status` — Portfolio equity & system health\n"
         "• `/commands` or `/help` — Full categorized command catalog\n\n"
-        "🛡️ _Default paper equity: $1,000 | Max concurrent active trades: 5_"
+        "🛡️ _Default paper equity: $1,000 | Max concurrent active trades: 6_"
     )
     try:
         await update.message.reply_text(welcome, parse_mode="Markdown")
@@ -303,9 +303,10 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cat = (ctx.args[0].lower() if ctx.args else "").strip()
-    if cat in ("market", "price", "quotes", "levels"):
+    if cat in ("market", "price", "quotes", "levels", "chart", "charts"):
         text = (
             "📊 **Market Data & Live Quotes:**\n"
+            "• `/chart [btc|gold]` — MT5 Live Candlestick Chart with pivots & trend\n"
             "• `/price [SYM]` — Live mark price, 24h change & stats\n"
             "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
             "• `/news [SYM]` — Macro calendar & economic sentiment"
@@ -319,9 +320,9 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     elif cat in ("execution", "orders", "trades", "pos", "positions"):
         text = (
-            "⚡ **Execution & Positions (Active Limit: 5):**\n"
+            "⚡ **Execution & Positions (Active Limit: 6):**\n"
             "• `/positions` — Open active trades, pending setups & real-time PnL\n"
-            "• `/autotrade on|off` — Multi-symbol autotrading (up to 5 concurrent active trades)\n"
+            "• `/autotrade on|off` — Multi-symbol autotrading (up to 6 concurrent active trades)\n"
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL\n"
@@ -349,7 +350,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
-            "• `/cooldown [reset]` — Anti-spam limits, cooldown timers & loss streaks\n"
+            "• `/cooldown [active|deactivate|reset]` — Anti-spam cooldown toggle & timer reset\n"
+            "• `/spam [on|off]` — Spam trade mode (max 6 trades without cooldown)\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
@@ -386,14 +388,16 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "📖 **TradingBot Command Center**\n"
             "_Institutional Multi-Agent Paper & MT5 Trading System_\n\n"
             "📊 **Market Data & Live Quotes:**\n"
+            "• `/chart [btc|gold]` — MT5 Live Candlestick Chart with pivots & trend\n"
             "• `/price [SYM]` — Live mark price, 24h change & stats\n"
             "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
-            "• `/news [SYM]` — Macro calendar & economic sentiment\n\n"
+            "• `/news [SYM]` — Macro calendar & economic sentiment\n"
+            "• `/ask [question]` or `/chat [question]` — AI institutional trading assistant (uses MT5 live chart)\n\n"
             "🎯 **Signals & Strategy Confluence:**\n"
             "• `/signal [SYM]` — 9-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP, MTF-FVG, Asian)\n"
             "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
             "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n\n"
-            "⚡ **Execution & Positions (Active Limit: 5):**\n"
+            "⚡ **Execution & Positions (Active Limit: 6):**\n"
             "• `/positions` — Open active trades, pending setups & real-time PnL\n"
             "• `/autotrade [on|off|scalp|btc|gold|both]` — Multi-symbol autotrading (Gold/BTC)\n"
             "• `/watchlist [btc|gold|both]` — View & switch active Gold/BTC autotrade watchlist\n"
@@ -415,6 +419,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
+            "• `/cooldown [active|deactivate|reset]` — Anti-spam cooldown toggle & timer reset\n"
+            "• `/spam [on|off]` — Spam trade mode (max 6 trades without cooldown)\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
             "• `/kelly [SYM]` — Fractional Kelly lot sizing & portfolio VaR 99%\n"
             "• `/session` — End-of-session performance report & killzones\n"
@@ -470,6 +476,35 @@ async def price_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(format_price_string(info), parse_mode="Markdown")
 
 
+async def chart_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Institutional MetaTrader 5 (MT5) Live Candlestick Chart for Bitcoin & Gold."""
+    raw = (ctx.args[0] if ctx.args else "").lower().strip()
+    from mt5_chart import (
+        get_mt5_live_chart,
+        format_mt5_chart_card,
+        format_combined_mt5_chart_dashboard,
+        build_chart_keyboard,
+    )
+    b = getattr(engine, "broker", None)
+
+    if any(x in raw for x in ("btc", "bitcoin", "crypto")):
+        chart_data = get_mt5_live_chart("BTCUSD", broker=b)
+        text = format_mt5_chart_card(chart_data)
+        kb = build_chart_keyboard("btc")
+    elif any(x in raw for x in ("gold", "xau", "xauusd")):
+        chart_data = get_mt5_live_chart("XAUUSD", broker=b)
+        text = format_mt5_chart_card(chart_data)
+        kb = build_chart_keyboard("gold")
+    else:
+        text = format_combined_mt5_chart_dashboard(broker=b)
+        kb = build_chart_keyboard("both")
+
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+    except Exception:
+        await update.message.reply_text(text, reply_markup=kb)
+
+
 async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """High-reliability /signal — leverage + paper micro size safe."""
     raw = (ctx.args[0] if ctx.args else config.DEFAULT_SYMBOL)
@@ -510,7 +545,7 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
     auto_status = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
     summary = engine.get_portfolio_summary()
-    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
     slots = engine.slots_available()
     symbols_str = ", ".join(getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)())
     bname = type(engine.broker).__name__ if engine.broker else "None"
@@ -554,22 +589,124 @@ async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """View or reset anti-spam rate limiting and cooldown status."""
+    """View or configure anti-spam rate limiting and concurrency mode."""
     try:
         from anti_spam import get_anti_spam_limiter
         limiter = get_anti_spam_limiter()
         args = ctx.args or []
-        if args and args[0].lower() in ("reset", "clear"):
-            sym = args[1].upper() if len(args) > 1 else None
-            limiter.reset(sym)
-            target = f"for `{sym}`" if sym else "globally"
-            await update.message.reply_text(f"✅ Anti-spam cooldowns and loss streaks have been reset {target}.", parse_mode="Markdown")
-            return
+        if args:
+            sub = args[0].lower().strip()
+            # 1. Spam Trade Mode (max 6 trades without cooldown, control on/off)
+            if sub in ("spam", "spamtrade", "burst", "burstmode"):
+                action = (args[1].lower().strip() if len(args) > 1 else "toggle")
+                if action in ("on", "enable", "1", "true", "active", "activate"):
+                    limiter.set_spam_mode(True, max_trades=6, engine=engine)
+                    await update.message.reply_text(
+                        "⚡ **Spam Trade Mode ACTIVATED**\n"
+                        "• **Trade Capacity:** Max `6` concurrent trades\n"
+                        "• **Cooldowns:** All entry, loss, and global cooldowns **BYPASSED**\n"
+                        "• Rapid-fire trade executions enabled up to 6 positions.\n"
+                        "• Use `/spam off` or `/cooldown spam off` to revert to protected mode.",
+                        parse_mode="Markdown",
+                    )
+                    return
+                elif action in ("off", "disable", "0", "false", "deactivate", "inactive"):
+                    limiter.set_spam_mode(False, engine=engine)
+                    await update.message.reply_text(
+                        "🔒 **Spam Trade Mode DEACTIVATED**\n"
+                        "• Reverted to standard anti-spam rate limiting.\n"
+                        "• Strict cooldowns active: max 4 positions total, max 2 per currency.",
+                        parse_mode="Markdown",
+                    )
+                    return
+                else:
+                    new_val = not limiter.spam_trade_enabled
+                    limiter.set_spam_mode(new_val, max_trades=6, engine=engine)
+                    state_str = "ACTIVATED (Max 6, No Cooldown) ⚡" if new_val else "DEACTIVATED (Protected) 🔒"
+                    await update.message.reply_text(
+                        f"⚡ **Spam Trade Mode:** `{state_str}`\n"
+                        f"Usage: `/spam on` (enable max 6) or `/spam off` (disable)",
+                        parse_mode="Markdown",
+                    )
+                    return
 
-        report = limiter.get_status_report()
+            if sub in ("auto", "adaptive", "dynamic"):
+                limiter.set_mode("auto")
+                await update.message.reply_text(
+                    "🤖 **Anti-Spam Mode set to AUTO (Adaptive)**\n"
+                    "• Automatically adapts cooldowns to active profile (Scalp concession vs Swing tight).\n"
+                    "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 4 total positions.",
+                    parse_mode="Markdown",
+                )
+                return
+            elif sub in ("on", "enable", "manual", "1", "true", "active", "activate", "activated"):
+                limiter.set_mode("on")
+                await update.message.reply_text(
+                    "🛡️ **Anti-Spam Mode set to MANUAL ON (Cooldown ACTIVATED)**\n"
+                    "• Strict configured cooldowns and price distance enforced.\n"
+                    "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 4 total positions.",
+                    parse_mode="Markdown",
+                )
+                return
+            elif sub in ("off", "disable", "bypass", "0", "false", "deactivate", "deactivated", "inactive"):
+                limiter.set_mode("off")
+                await update.message.reply_text(
+                    "⚠️ **Anti-Spam Mode set to OFF (Cooldown DEACTIVATED)**\n"
+                    "• Cooldowns and price distance checks disabled.\n"
+                    "• Safety limits still active: max 2 trades per currency, max 4 total positions.\n"
+                    "• Tip: Run `/spam on` to also expand capacity to 6 trades.",
+                    parse_mode="Markdown",
+                )
+                return
+            elif sub in ("reset", "clear"):
+                sym = args[1].upper() if len(args) > 1 else None
+                limiter.reset(sym)
+                target = f"for `{sym}`" if sym else "globally"
+                await update.message.reply_text(f"✅ Anti-spam cooldowns and loss streaks have been reset {target}.", parse_mode="Markdown")
+                return
+
+        report = limiter.get_status_report(engine=engine)
         await update.message.reply_text(report, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Cooldown command error: {e}")
+        await update.message.reply_text(f"Anti-spam command error: {e}")
+
+
+async def spam_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Control spamming trade mode (max 6 trades without cooldown)."""
+    from anti_spam import get_anti_spam_limiter
+    limiter = get_anti_spam_limiter()
+    args = ctx.args or []
+    action = args[0].lower().strip() if args else "toggle"
+    if action in ("on", "enable", "1", "true", "active", "activate"):
+        limiter.set_spam_mode(True, max_trades=6, engine=engine)
+        await update.message.reply_text(
+            "⚡ **Spam Trade Mode ACTIVATED**\n"
+            "• **Trade Capacity:** Max `6` concurrent trades\n"
+            "• **Cooldowns:** All entry, loss, and global cooldowns **BYPASSED**\n"
+            "• Rapid-fire trade executions enabled up to 6 positions.\n"
+            "• Use `/spam off` to revert to protected mode.",
+            parse_mode="Markdown",
+        )
+    elif action in ("off", "disable", "0", "false", "deactivate", "inactive"):
+        limiter.set_spam_mode(False, engine=engine)
+        await update.message.reply_text(
+            "🔒 **Spam Trade Mode DEACTIVATED**\n"
+            "• Reverted to standard anti-spam rate limiting.\n"
+            "• Strict cooldowns active: max 4 positions total, max 2 per currency.",
+            parse_mode="Markdown",
+        )
+    elif action in ("status", "info"):
+        st = "⚡ ACTIVATED (Max 6, No Cooldown)" if limiter.spam_trade_enabled else "🔒 DEACTIVATED (Protected)"
+        await update.message.reply_text(f"⚡ **Spam Trade Mode Status:** `{st}`\nUsage: `/spam on` or `/spam off`", parse_mode="Markdown")
+    else:
+        new_val = not limiter.spam_trade_enabled
+        limiter.set_spam_mode(new_val, max_trades=6, engine=engine)
+        state_str = "ACTIVATED (Max 6, No Cooldown) ⚡" if new_val else "DEACTIVATED (Protected) 🔒"
+        await update.message.reply_text(
+            f"⚡ **Spam Trade Mode:** `{state_str}`\n"
+            f"Usage: `/spam on` (enable max 6) or `/spam off` (disable)",
+            parse_mode="Markdown",
+        )
 
 
 def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_equity: Optional[float] = None) -> str:
@@ -747,7 +884,7 @@ async def risk_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Normal risk report when no reset argument is provided
     s = risk_mgr.state
     risk_pct, reason = risk_mgr.current_risk_pct()
-    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
     can, why = risk_mgr.can_trade()
     trade_st = "🟢 Ready" if can else f"⚠️ Blocked ({why})"
@@ -996,6 +1133,14 @@ async def lot_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
+        args = [a.lower() for a in (ctx.args or [])]
+        if args and args[0] in ("sync", "refresh", "reconcile", "wallet", "reload"):
+            if hasattr(engine, "reconcile_positions"):
+                try:
+                    engine.reconcile_positions()
+                except Exception as rx:
+                    logger.debug("[positions_command] reconcile error: %s", rx)
+
         if hasattr(engine, "format_positions_detail"):
             msg = engine.format_positions_detail()
         else:
@@ -1083,20 +1228,58 @@ async def closed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Direct query to Gemini conversational trading assistant."""
+    """Direct query to Gemini conversational trading assistant using MT5 Live Chart data."""
     query = " ".join(ctx.args).strip() if ctx.args else ""
     if not query:
-        await update.message.reply_text("Usage: `/ask <your question>`", parse_mode="Markdown")
+        await update.message.reply_text("Usage: `/ask <your question>` or `/chat <your question>`\nExample: `/chat btc chart` or `/chat gold analysis`", parse_mode="Markdown")
         return
+
+    # Check for direct chart query in chat
+    query_lower = query.lower()
+    if any(w in query_lower for w in ["chart", "charts", "candle", "candles", "graph", "plot"]):
+        try:
+            from mt5_chart import (
+                get_mt5_live_chart,
+                format_mt5_chart_card,
+                format_combined_mt5_chart_dashboard,
+                build_chart_keyboard,
+            )
+            b = getattr(engine, "broker", None)
+            if any(w in query_lower for w in ["btc", "bitcoin", "crypto"]):
+                card = format_mt5_chart_card(get_mt5_live_chart("BTCUSD", broker=b))
+                kb = build_chart_keyboard("btc")
+                await update.message.reply_text(card, parse_mode="Markdown", reply_markup=kb)
+                return
+            elif any(w in query_lower for w in ["gold", "xau", "xauusd"]):
+                card = format_mt5_chart_card(get_mt5_live_chart("XAUUSD", broker=b))
+                kb = build_chart_keyboard("gold")
+                await update.message.reply_text(card, parse_mode="Markdown", reply_markup=kb)
+                return
+            elif "both" in query_lower or query_lower.strip() in ("chart", "charts"):
+                card = format_combined_mt5_chart_dashboard(broker=b)
+                kb = build_chart_keyboard("both")
+                await update.message.reply_text(card, parse_mode="Markdown", reply_markup=kb)
+                return
+        except Exception as _ce:
+            logger.debug("Chat chart shortcut notice: %s", _ce)
+
     market_context = ""
     try:
-        info = get_price_info(config.DEFAULT_SYMBOL)
-        if info.get("ok"):
-            market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+        from mt5_chart import get_mt5_combined_market_context
+        market_context = get_mt5_combined_market_context(broker=getattr(engine, "broker", None))
     except Exception:
-        pass
+        try:
+            info = get_price_info(config.DEFAULT_SYMBOL)
+            if info.get("ok"):
+                market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+        except Exception:
+            pass
+
     reply = gemini.ask(chat_id=update.effective_chat.id, user_text=query, market_context=market_context)
-    await update.message.reply_text(reply)
+    try:
+        await update.message.reply_text(reply, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(reply.replace("*", "").replace("`", ""))
 
 
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1155,7 +1338,7 @@ def build_watchlist_dashboard() -> tuple:
     auto_status = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
     profile = getattr(config, "CURRENT_PROFILE", "scalp").upper()
-    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
     open_count = len(getattr(engine, "active_positions", {}))
     slots = getattr(engine, "slots_available", lambda: max(0, max_trades - open_count))()
 
@@ -1283,7 +1466,7 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = [a.lower() for a in (ctx.args or [])]
     arg = args[0] if args else ""
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
-    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2))
+    max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
 
     sym_choice = None
     for a in args:
@@ -1399,7 +1582,59 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
                 "Run `/autotrade on confirm` or set `BOT_AUTOTRADE_LIVE_OPT_IN=true`.",
                 parse_mode="Markdown"
             )
-            return
+    if data.startswith("chart:"):
+        from mt5_chart import (
+            get_mt5_live_chart,
+            format_mt5_chart_card,
+            format_combined_mt5_chart_dashboard,
+            build_chart_keyboard,
+        )
+        b = getattr(engine, "broker", None)
+        active_view = "both"
+        if data == "chart:btc":
+            text = format_mt5_chart_card(get_mt5_live_chart("BTCUSD", broker=b))
+            active_view = "btc"
+        elif data == "chart:gold":
+            text = format_mt5_chart_card(get_mt5_live_chart("XAUUSD", broker=b))
+            active_view = "gold"
+        elif data.startswith("chart:refresh:"):
+            req_view = data.split(":", 2)[2]
+            if req_view == "btc":
+                text = format_mt5_chart_card(get_mt5_live_chart("BTCUSD", broker=b))
+                active_view = "btc"
+            elif req_view == "gold":
+                text = format_mt5_chart_card(get_mt5_live_chart("XAUUSD", broker=b))
+                active_view = "gold"
+            else:
+                text = format_combined_mt5_chart_dashboard(broker=b)
+                active_view = "both"
+        else:
+            text = format_combined_mt5_chart_dashboard(broker=b)
+            active_view = "both"
+
+        markup = build_chart_keyboard(active_view)
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            try:
+                await query.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+            except Exception:
+                await query.message.reply_text(text, reply_markup=markup)
+        return
+
+    if data.startswith("sig:"):
+        sym = data.split(":", 1)[1]
+        try:
+            from signal_pipeline import run_signal, format_signal_message
+            res = run_signal(sym, equity=float(getattr(risk_mgr.state, "equity", None) or config.INITIAL_EQUITY), leverage=float(risk_mgr.get_leverage()))
+            msg = format_signal_message(res)
+            try:
+                await query.message.reply_text(msg, parse_mode="Markdown")
+            except Exception:
+                await query.message.reply_text(msg.replace("*", "").replace("`", ""))
+        except Exception as _se:
+            await query.message.reply_text(f"Signal failed: {_se}")
+        return
 
     if data.startswith("mt5:"):
         from mt5_accounts import get_account_manager, switch_broker_mode
@@ -2572,8 +2807,13 @@ async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 raise ValueError("Balance must be a positive number.")
             if b and hasattr(b, "balance"):
                 b.balance = new_bal
+                b.equity = new_bal
+                b.free_margin = new_bal
                 if hasattr(b, "_initial_balance"):
                     b._initial_balance = new_bal
+            if hasattr(risk_mgr, "state") and hasattr(risk_mgr.state, "equity"):
+                risk_mgr.state.equity = new_bal
+                risk_mgr.state.peak_equity = max(risk_mgr.state.peak_equity, new_bal)
             if hasattr(risk_mgr, "equity"):
                 risk_mgr.equity = new_bal
             if hasattr(risk_mgr, "initial_equity"):
@@ -3199,7 +3439,7 @@ async def live_monitoring_worker(app):
                             pass
 
                 is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
-                max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2)) or 2
+                max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6)) or 6
                 open_n = len(engine.active_positions) + len(engine.pending_setups)
                 if not autotrade_active:
                     can_open = False
@@ -3320,6 +3560,16 @@ def run_cli_interactive():
         elif name == "price":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             print(get_price_info(sym))
+        elif name in ("chart", "charts"):
+            from mt5_chart import get_mt5_live_chart, format_mt5_chart_card, format_combined_mt5_chart_dashboard
+            b = getattr(engine, "broker", None)
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if any(x in arg for x in ("btc", "bitcoin", "crypto")):
+                print(format_mt5_chart_card(get_mt5_live_chart("BTCUSD", broker=b)))
+            elif any(x in arg for x in ("gold", "xau", "xauusd")):
+                print(format_mt5_chart_card(get_mt5_live_chart("XAUUSD", broker=b)))
+            else:
+                print(format_combined_mt5_chart_dashboard(broker=b))
         elif name == "news":
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             try:
@@ -3551,11 +3801,15 @@ def run_cli_interactive():
             else:
                 market_context = ""
                 try:
-                    info = get_price_info(config.DEFAULT_SYMBOL)
-                    if info.get("ok"):
-                        market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+                    from mt5_chart import get_mt5_combined_market_context
+                    market_context = get_mt5_combined_market_context(broker=getattr(engine, "broker", None))
                 except Exception:
-                    pass
+                    try:
+                        info = get_price_info(config.DEFAULT_SYMBOL)
+                        if info.get("ok"):
+                            market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+                    except Exception:
+                        pass
                 reply = gemini.ask(chat_id=0, user_text=query, market_context=market_context)
                 print(reply)
         elif name == "reset":
@@ -3916,8 +4170,15 @@ def run_cli_interactive():
                     new_bal = float(parts[1])
                     if b and hasattr(b, "balance"):
                         b.balance = new_bal
+                        try:
+                            b.equity = new_bal
+                        except Exception:
+                            pass
                         if hasattr(b, "_initial_balance"):
                             b._initial_balance = new_bal
+                    if hasattr(risk_mgr, "state") and hasattr(risk_mgr.state, "equity"):
+                        risk_mgr.state.equity = new_bal
+                        risk_mgr.state.peak_equity = max(risk_mgr.state.peak_equity, new_bal)
                     if hasattr(risk_mgr, "equity"):
                         risk_mgr.equity = new_bal
                     if hasattr(risk_mgr, "initial_equity"):
@@ -4103,13 +4364,13 @@ def run_cli_interactive():
             print(f"⚠️ Native live broker '{name.upper()}' has been removed. MetaTrader 5 Live is the sole exclusive broker.")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], broker [MODE], status, health, risk, leverage [LEV], lot [CMD], kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
                 "Commands by category:\n"
-                "📊 Market: price [SYM], levels [SYM], news [SYM]\n"
+                "📊 Market: price [SYM], chart [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
-                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], mt5 [CMD]\n"
-                "🛡️ Risk: status, health, risk, leverage [LEV], lot [auto|manual|<size>], kill [on|off]\n"
-                "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME]\n"
+                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
+                "🛡️ Risk: status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
+                "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], replay [ID], export, setups, abooks, heal\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, relearn [SYM]\n"
                 "💬 Assistant: ask [TEXT], reset, exit"
             )
@@ -4314,8 +4575,48 @@ def run_cli_interactive():
                 print(f"Current Session: {summary.session_name} | Net PnL: ${summary.net_pnl_usd:+,.2f} | Open: {summary.open_positions_count}")
             except Exception as e:
                 print(f"Session error: {e}")
+        elif name in ("antispam", "cooldown", "cooldowns", "spam", "spamtrade"):
+            try:
+                from anti_spam import get_anti_spam_limiter
+                limiter = get_anti_spam_limiter()
+                if len(parts) > 1:
+                    sub = parts[1].lower().strip()
+                    if name in ("spam", "spamtrade") or sub in ("spam", "spamtrade"):
+                        action = parts[2].lower().strip() if len(parts) > 2 else (sub if name in ("spam", "spamtrade") else "toggle")
+                        if action in ("on", "enable", "1", "true", "active", "activate"):
+                            limiter.set_spam_mode(True, max_trades=6, engine=engine)
+                            print("Spam Trade Mode ACTIVATED: Max 6 trades concurrent, all cooldowns BYPASSED.")
+                        elif action in ("off", "disable", "0", "false", "deactivate", "inactive"):
+                            limiter.set_spam_mode(False, engine=engine)
+                            print("Spam Trade Mode DEACTIVATED: Reverted to protected mode (max 4 total, strict cooldowns).")
+                        else:
+                            new_v = not limiter.spam_trade_enabled
+                            limiter.set_spam_mode(new_v, max_trades=6, engine=engine)
+                            st = "ACTIVATED (Max 6, No Cooldown)" if new_v else "DEACTIVATED (Protected)"
+                            print(f"Spam Trade Mode: {st}")
+                    elif sub in ("auto", "adaptive", "dynamic"):
+                        limiter.set_mode("auto")
+                        print("Anti-Spam Mode set to AUTO (Adaptive: profile-aware cooldowns, max 2 trades per currency, max 4 total).")
+                    elif sub in ("on", "enable", "manual", "1", "true", "active", "activate", "activated"):
+                        limiter.set_mode("on")
+                        print("Anti-Spam Mode set to MANUAL ON (Cooldown ACTIVATED: strict cooldowns enforced: max 2 trades per currency, max 4 total).")
+                    elif sub in ("off", "disable", "bypass", "0", "false", "deactivate", "deactivated", "inactive"):
+                        limiter.set_mode("off")
+                        print("Anti-Spam Mode set to OFF (Cooldown DEACTIVATED: cooldowns bypassed. Safety limits retained: max 2 per currency, max 4 total).")
+                    elif sub in ("reset", "clear"):
+                        sym = parts[2].upper() if len(parts) > 2 else None
+                        limiter.reset(sym)
+                        target = f"for {sym}" if sym else "globally"
+                        print(f"Anti-spam cooldowns and loss streaks reset {target}.")
+                    else:
+                        print("Usage: cooldown [active|deactivate|auto|reset] or spam [on|off]")
+                else:
+                    rep = limiter.get_status_report(engine=engine).replace("**", "").replace("*", "").replace("`", "").replace("_", "")
+                    print(rep)
+            except Exception as e:
+                print(f"Anti-spam error: {e}")
         else:
-            print("Commands: signal, price, levels, news, quality, positions, autotrade, close, cancel, mt5, broker, status, health, risk, leverage, kill, backtest, performance, profile, vstops, slippage, kelly, regime, session, ask, reset, exit")
+            print("Commands: signal, price, levels, chart, news, quality, positions, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, cooldown, spam, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, relearn, ask, reset, exit")
 
 
 def main():
@@ -4340,44 +4641,69 @@ def main():
         try:
             from telegram import BotCommand
             bot_commands = [
+                # Navigation & Guide
                 BotCommand("start", "Start bot & interactive overview"),
                 BotCommand("help", "Full command center & user guide"),
                 BotCommand("commands", "Interactive catalog of all bot commands"),
+                # Market Data & Charts
+                BotCommand("chart", "Institutional MT5 Live Candlestick Chart (BTC & Gold)"),
                 BotCommand("price", "Live mark price & 24h market stats"),
                 BotCommand("levels", "Key levels (PDH/PDL, pivots, 2Y S/R)"),
-                BotCommand("signal", "7-Agent consensus & optimal entry zone"),
+                BotCommand("news", "Macro calendar & economic news sentiment"),
+                # Signals & Strategy
+                BotCommand("signal", "9-Agent consensus & optimal entry zone"),
                 BotCommand("asignal", "Advanced SMC + CVD orderflow setup"),
                 BotCommand("quality", "Signal quality score & breakdown"),
-                BotCommand("positions", "Active trades & real-time PnL"),
-                BotCommand("autotrade", "Toggle multi-symbol autotrade (max 5 slots)"),
+                # Execution & Positions
+                BotCommand("positions", "Active trades, live balance, equity & real-time PnL"),
+                BotCommand("autotrade", "Toggle multi-symbol autotrade (max 6 slots: 3 Gold, 3 BTC)"),
                 BotCommand("watchlist", "View & switch active Gold/BTC autotrade watchlist"),
                 BotCommand("close", "Close position(s) by symbol or all"),
                 BotCommand("cancel", "Cancel pending setup order"),
                 BotCommand("closed", "Recently closed trades history & PnL"),
-                BotCommand("status", "Portfolio equity & margin capacity"),
-                BotCommand("health", "System health & background worker telemetry"),
-                BotCommand("cooldown", "Anti-spam rate limiting & cooldown status"),
-                BotCommand("risk", "Risk tier report, sizing & reset"),
-                BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
-                BotCommand("leverage", "Set or view leverage (1-200x, manual/auto)"),
-                BotCommand("lot", "Auto / Manual lot size selection"),
-                BotCommand("kill", "Emergency execution circuit breaker switch"),
+                BotCommand("vstops", "Client-side virtual hidden stop loss manager"),
+                BotCommand("slippage", "Broker execution latency & slippage tracker"),
+                # Brokers & MT5
+                BotCommand("balance", "View or update active MT5 balance, equity & margin"),
                 BotCommand("mt5", "MetaTrader 5 live execution engine & dashboard"),
+                BotCommand("bridge", "MT5 EA Bridge diagnostics & auto-deploy"),
                 BotCommand("delta", "Delta Exchange status & controls (Crypto/Derivatives)"),
                 BotCommand("switch", "Switch active broker or MT5 account"),
                 BotCommand("live", "MT5 Live execution controls & account telemetry"),
                 BotCommand("broker", "View active execution broker & status"),
+                # Risk & Safety
+                BotCommand("status", "Portfolio equity & margin capacity"),
+                BotCommand("health", "System health & background worker telemetry"),
+                BotCommand("cooldown", "Anti-spam rate limiting & cooldown status (active/deactivate)"),
+                BotCommand("antispam", "Anti-spam concurrency & cooldown controls (auto/on/off)"),
+                BotCommand("spam", "Spam trade mode (max 6 trades without cooldown, on/off)"),
+                BotCommand("risk", "Risk tier report, sizing & reset"),
+                BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
+                BotCommand("leverage", "Set or view leverage (1-200x, manual/auto)"),
+                BotCommand("lot", "Auto / Manual lot size selection"),
+                BotCommand("kelly", "Fractional Kelly lot sizing & portfolio VaR"),
+                BotCommand("regime", "Market regime detector & auto-switcher"),
+                BotCommand("session", "Session summary & killzones report"),
+                BotCommand("kill", "Emergency execution circuit breaker switch"),
+                # Backtesting & Research
                 BotCommand("backtest", "Fast backtest engine on historical data"),
                 BotCommand("abacktest", "Advanced backtest suite (WF / MC / sweep)"),
                 BotCommand("performance", "Trade metrics, win rate & Sharpe ratio"),
                 BotCommand("profile", "View or switch strategy profile"),
+                # Autonomous AI & Intelligence
                 BotCommand("board", "Strategy board & agent standings"),
                 BotCommand("journal", "Trade journal analytics & history"),
                 BotCommand("agents", "Agent performance rankings & stats"),
                 BotCommand("tiers", "Risk tier status & allocations"),
                 BotCommand("digest", "Daily market performance digest"),
+                BotCommand("replay", "Replay historical trade setup by ID"),
+                BotCommand("export", "Export trade journal to CSV"),
+                BotCommand("setups", "Setup expectancy & bans report"),
+                BotCommand("abooks", "A/B paper books comparison"),
+                BotCommand("heal", "System health counter reset & self-healing"),
                 BotCommand("brain", "Autonomous learner intelligence & state"),
                 BotCommand("relearn", "Retrain autonomous learner on 5Y data"),
+                BotCommand("ask", "AI trading assistant with live MT5 market context"),
                 BotCommand("reset", "Clear conversational chat memory"),
             ]
             await application.bot.set_my_commands(bot_commands)
@@ -4402,6 +4728,7 @@ def main():
     # Market Data
     app.add_handler(CommandHandler("levels", levels_command))
     app.add_handler(CommandHandler("price", price_command))
+    app.add_handler(CommandHandler(["chart", "charts"], chart_command))
     app.add_handler(CommandHandler("news", news_command))
 
     # Signals & Confluence
@@ -4443,7 +4770,8 @@ def main():
     # Risk & Safety
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("health", health_command))
-    app.add_handler(CommandHandler(["cooldown", "cooldowns", "antispam", "spam"], cooldown_command))
+    app.add_handler(CommandHandler(["antispam", "Antyspam", "cooldown", "cooldowns"], cooldown_command))
+    app.add_handler(CommandHandler(["spam", "spamtrade", "burst"], spam_command))
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler(["resetrisk", "riskreset"], resetrisk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))

@@ -12,6 +12,8 @@ import config
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 DEFAULT_SYSTEM_INSTRUCTION = """You are an elite institutional trading assistant on Telegram.
+You are directly connected to MetaTrader 5 (MT5) Live execution and Live Chart feeds for Gold (XAUUSD) and Bitcoin (BTCUSD).
+Always utilize the provided real-time MT5 Live Chart & Market Context (live bid/ask, spread, OHLC candles, pivot levels, and technical structure) when analyzing market conditions.
 Focus on price action, SMC (Smart Money Concepts), liquidity sweeps, market structure (BOS/ChoCH),
 and technical indicator confluence (RSI divergence, EMAs, MACD, ADX, Supertrend).
 Emphasize strict risk management: position sizing, stop loss placement, progressive break-even,
@@ -216,6 +218,20 @@ class GeminiClient:
             try:
                 current_price = float(price_match.group(1).replace(",", ""))
             except ValueError:
+                pass
+
+        if any(w in text_lower for w in ["chart", "charts", "candle", "candles", "graph", "plot"]):
+            try:
+                from mt5_chart import get_mt5_live_chart, format_mt5_chart_card, format_combined_mt5_chart_dashboard
+                if any(w in text_lower for w in ["btc", "bitcoin", "crypto"]):
+                    chart = get_mt5_live_chart("BTCUSD")
+                    return format_mt5_chart_card(chart)
+                elif any(w in text_lower for w in ["gold", "xau", "xauusd"]):
+                    chart = get_mt5_live_chart("XAUUSD")
+                    return format_mt5_chart_card(chart)
+                else:
+                    return format_combined_mt5_chart_dashboard()
+            except Exception:
                 pass
 
         if any(w in text_lower for w in ["buy", "sell", "entry", "setup", "signal", "trade"]):

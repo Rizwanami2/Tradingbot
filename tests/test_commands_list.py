@@ -216,12 +216,12 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
     async def test_ask_command(self):
         self.ctx.args = []
         await ask_command(self.update, self.ctx)
-        self.message.reply_text.assert_called_with("Usage: `/ask <your question>`", parse_mode="Markdown")
+        self.message.reply_text.assert_called_with("Usage: `/ask <your question>` or `/chat <your question>`\nExample: `/chat btc chart` or `/chat gold analysis`", parse_mode="Markdown")
 
         self.ctx.args = ["What", "is", "BTC", "trend?"]
         with patch("main.gemini.ask", return_value="Market is bullish."):
             await ask_command(self.update, self.ctx)
-            self.message.reply_text.assert_called_with("Market is bullish.")
+            self.message.reply_text.assert_called_with("Market is bullish.", parse_mode="Markdown")
 
     def test_cli_commands_and_aliases(self):
         # Test CLI handles 'commands', 'menu', 'all', 'list'

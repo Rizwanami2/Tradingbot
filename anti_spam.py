@@ -23,6 +23,18 @@ class SymbolSpamState:
     total_wins_recorded: int = 0
 
 
+def canonical_currency(symbol: str) -> str:
+    """Canonicalize symbol to underlying asset currency (e.g. XAU for Gold, BTC for Bitcoin)."""
+    s = str(symbol or "").strip().upper().replace("/", "").replace("-", "").replace(":", "").replace("_", "")
+    if any(x in s for x in ("BTC", "BITCOIN", "XBT")):
+        return "BTC"
+    if any(x in s for x in ("XAU", "GOLD", "PAXG", "XAUT")):
+        return "XAU"
+    if any(x in s for x in ("ETH", "ETHEREUM")):
+        return "ETH"
+    return s
+
+
 class AntiSpamRateLimiter:
     """Controls frequency of autotrade executions to prevent trade spamming and SL cascades."""
 
@@ -33,7 +45,12 @@ class AntiSpamRateLimiter:
         global_cooldown_sec: Optional[int] = None,
         max_positions_per_symbol: Optional[int] = None,
         min_price_distance_pct: Optional[float] = None,
+        mode: str = "auto",
     ):
+        self._custom_entry_cd = entry_cooldown_sec is not None
+        self._custom_loss_cd = loss_cooldown_sec is not None
+        self._custom_global_cd = global_cooldown_sec is not None
+
         self.entry_cooldown_sec = (
             entry_cooldown_sec
             if entry_cooldown_sec is not None
@@ -52,15 +69,53 @@ class AntiSpamRateLimiter:
         self.max_positions_per_symbol = (
             max_positions_per_symbol
             if max_positions_per_symbol is not None
-            else int(os.getenv("SCALP_MAX_POSITIONS_PER_SYMBOL", "2"))
+            else int(os.getenv("BOT_MAX_POSITIONS_PER_SYMBOL") or os.getenv("SCALP_MAX_POSITIONS_PER_SYMBOL", "2"))
         )
         self.min_price_distance_pct = (
             min_price_distance_pct
             if min_price_distance_pct is not None
             else float(os.getenv("SCALP_MIN_PRICE_DISTANCE_PCT", "0.08"))
         )
+        self.mode: str = self._normalize_mode(mode or os.getenv("ANTISPAM_MODE", "auto"))
         self.global_last_entry: float = 0.0
         self._states: Dict[str, SymbolSpamState] = {}
+        self.spam_trade_enabled: bool = False
+        self.spam_trade_max_trades: int = 6
+
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        m = str(mode or "").strip().lower()
+        if m in ("auto", "adaptive", "dynamic"):
+            return "auto"
+        if m in ("on", "enable", "enabled", "strict", "manual", "1", "true", "active", "activate", "activated"):
+            return "on"
+        if m in ("off", "disable", "disabled", "bypass", "0", "false", "deactivate", "deactivated", "inactive"):
+            return "off"
+        return "auto"
+
+    def set_mode(self, mode: str) -> str:
+        self.mode = self._normalize_mode(mode)
+        logger.info("AntiSpam mode switched to: %s", self.mode)
+        return self.mode
+
+    def get_mode(self) -> str:
+        return self.mode
+
+    def set_spam_mode(self, enabled: bool, max_trades: int = 6, engine: Optional[Any] = None) -> bool:
+        """Control spamming trade mode (max 6 without cooldown)."""
+        self.spam_trade_enabled = bool(enabled)
+        self.spam_trade_max_trades = max(1, int(max_trades))
+        if engine is not None and hasattr(engine, "max_open_trades"):
+            if self.spam_trade_enabled:
+                engine.max_open_trades = max(int(engine.max_open_trades), self.spam_trade_max_trades)
+            else:
+                try:
+                    import config as _cfg_sp
+                    engine.max_open_trades = int(getattr(_cfg_sp, "MAX_OPEN_TRADES", 6) or 6)
+                except Exception:
+                    engine.max_open_trades = 6
+        logger.info("AntiSpam: Spam trade mode set to %s (max_trades=%s)", self.spam_trade_enabled, self.spam_trade_max_trades)
+        return self.spam_trade_enabled
 
     def _get_state(self, symbol: str) -> SymbolSpamState:
         s = str(symbol).upper()
@@ -97,49 +152,126 @@ class AntiSpamRateLimiter:
         st.total_wins_recorded += 1
         logger.info("AntiSpam: Win recorded for %s. Consecutive loss streak reset to 0.", symbol)
 
+    def count_currency_positions(self, engine: Any, currency: str) -> Tuple[int, List[Any]]:
+        """Count active positions and pending setups matching a canonical currency."""
+        curr = canonical_currency(currency)
+        matching_active = []
+        if hasattr(engine, "active_positions") and engine.active_positions:
+            for p in engine.active_positions.values():
+                sym = getattr(p, "symbol", "")
+                if canonical_currency(sym) == curr:
+                    matching_active.append(p)
+
+        matching_pending = []
+        if hasattr(engine, "pending_setups") and engine.pending_setups:
+            for p in engine.pending_setups.values():
+                sym = getattr(p, "symbol", "")
+                if canonical_currency(sym) == curr:
+                    matching_pending.append(p)
+
+        total = len(matching_active) + len(matching_pending)
+        return total, matching_active
+
+    def get_entry_cooldown_duration(self, symbol: str) -> int:
+        if self._custom_entry_cd:
+            return int(self.entry_cooldown_sec)
+        st = self._get_state(symbol)
+        if self.mode == "auto":
+            try:
+                from strategy_profiles import get_current_profile
+                p = get_current_profile()
+                if getattr(p, "is_scalp", False):
+                    # Scalp concession: faster entry cooldown unless on consecutive losses
+                    if st.consecutive_losses == 0:
+                        return 20
+                    elif st.consecutive_losses == 1:
+                        return 45
+                    else:
+                        return 75
+                elif p.name == "swing":
+                    return 90
+            except Exception:
+                pass
+        return int(self.entry_cooldown_sec)
+
     def get_loss_cooldown_duration(self, symbol: str) -> int:
         st = self._get_state(symbol)
         streak = max(1, st.consecutive_losses)
+        base_cd = self.loss_cooldown_sec
+        if not self._custom_loss_cd and self.mode == "auto":
+            try:
+                from strategy_profiles import get_current_profile
+                p = get_current_profile()
+                if getattr(p, "is_scalp", False):
+                    base_cd = 60
+                elif p.name == "swing":
+                    base_cd = 180
+            except Exception:
+                pass
         # Escalates cooldown with consecutive losses, max 300s (5m)
-        multiplier = min(streak, 3)
-        return int(self.loss_cooldown_sec * multiplier)
+        multiplier = min(streak, 4)
+        return int(base_cd * multiplier)
+
+    def get_global_cooldown_duration(self) -> int:
+        if self._custom_global_cd:
+            return int(self.global_cooldown_sec)
+        if self.mode == "auto":
+            try:
+                from strategy_profiles import get_current_profile
+                p = get_current_profile()
+                if getattr(p, "is_scalp", False):
+                    return 5
+                elif p.name == "swing":
+                    return 15
+            except Exception:
+                pass
+        return int(self.global_cooldown_sec)
 
     def check_can_enter(
         self,
         symbol: str,
         current_price: float,
         engine: Any,
-        max_open: int,
+        max_open: int = 6,
         timestamp: Optional[float] = None,
     ) -> Tuple[bool, str]:
         """
         Evaluate if a new trade can be opened for symbol.
+        Enforces:
+        - Total max concurrent positions (default 6)
+        - Max 2 trades per currency (2 Gold, 2 BTC)
+        - Global, entry, and loss cooldowns (adapted in AUTO mode, bypassed in OFF mode)
+        - Price proximity distance protection
         Returns (can_enter: bool, reason: str).
         """
         now = timestamp if timestamp is not None else time.time()
         sym = str(symbol).upper()
+        curr = canonical_currency(sym)
         st = self._get_state(sym)
 
-        # 1. Total capacity check
+        # Check spam trade mode (max 6 without cooldown)
+        if self.spam_trade_enabled:
+            eff_max_open = max(max_open, self.spam_trade_max_trades)
+            open_n = len(engine.active_positions) + len(engine.pending_setups)
+            if open_n >= eff_max_open:
+                return False, f"Spam trade capacity reached ({open_n}/{eff_max_open})"
+            return True, f"OK (Spam trade mode active: {open_n + 1}/{eff_max_open} without cooldown)"
+
+        # 1. Total capacity check across all symbols (default max 4)
         open_n = len(engine.active_positions) + len(engine.pending_setups)
         if open_n >= max_open:
             return False, f"Total open slots full ({open_n}/{max_open})"
 
-        # 2. Global entry cooldown
-        if self.global_cooldown_sec > 0 and self.global_last_entry > 0:
-            elapsed_global = now - self.global_last_entry
-            if elapsed_global < self.global_cooldown_sec:
-                rem = int(self.global_cooldown_sec - elapsed_global)
-                return False, f"Global cooldown active ({rem}s remaining)"
+        # 2. Per-currency concurrency check (max 2 trades same currency, e.g. 2 Gold, 2 BTC)
+        curr_count, matching_active = self.count_currency_positions(engine, curr)
+        if curr_count >= self.max_positions_per_symbol:
+            return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
 
-        # 3. Symbol entry cooldown
-        if self.entry_cooldown_sec > 0 and st.last_entry_time > 0:
-            elapsed_entry = now - st.last_entry_time
-            if elapsed_entry < self.entry_cooldown_sec:
-                rem = int(self.entry_cooldown_sec - elapsed_entry)
-                return False, f"Entry cooldown for {sym} ({rem}s remaining)"
+        # When mode is OFF: cooldowns and proximity checks are bypassed
+        if self.mode == "off":
+            return True, "OK (anti-spam manual OFF)"
 
-        # 4. Symbol loss cooldown
+        # 3. Symbol / currency loss cooldown (evaluated first so stop-out cooldown takes priority)
         effective_loss_cd = self.get_loss_cooldown_duration(sym)
         if effective_loss_cd > 0 and st.last_loss_time > 0:
             elapsed_loss = now - st.last_loss_time
@@ -147,20 +279,23 @@ class AntiSpamRateLimiter:
                 rem = int(effective_loss_cd - elapsed_loss)
                 return False, f"Loss cooldown for {sym} ({rem}s remaining after {st.consecutive_losses} SL hit)"
 
-        # 5. Max concurrent positions per symbol
-        matching_active = []
-        if hasattr(engine.active_positions, "get_all"):
-            matching_active = engine.active_positions.get_all(sym)
-        else:
-            matching_active = [p for p in engine.active_positions.values() if getattr(p, "symbol", "") == sym]
+        # 4. Global entry cooldown
+        eff_global_cd = self.get_global_cooldown_duration()
+        if eff_global_cd > 0 and self.global_last_entry > 0:
+            elapsed_global = now - self.global_last_entry
+            if elapsed_global < eff_global_cd:
+                rem = int(eff_global_cd - elapsed_global)
+                return False, f"Global cooldown active ({rem}s remaining)"
 
-        matching_pending = [p for p in getattr(engine, "pending_setups", {}).values() if getattr(p, "symbol", "") == sym]
-        sym_count = len(matching_active) + len(matching_pending)
+        # 5. Symbol / currency entry cooldown
+        eff_entry_cd = self.get_entry_cooldown_duration(sym)
+        if eff_entry_cd > 0 and st.last_entry_time > 0:
+            elapsed_entry = now - st.last_entry_time
+            if elapsed_entry < eff_entry_cd:
+                rem = int(eff_entry_cd - elapsed_entry)
+                return False, f"Entry cooldown for {sym} ({rem}s remaining)"
 
-        if sym_count >= self.max_positions_per_symbol:
-            return False, f"Max {self.max_positions_per_symbol} positions reached for {sym} ({sym_count} active/pending)"
-
-        # 6. Minimum price distance from existing active positions on this symbol
+        # 6. Minimum price distance from existing active positions on this currency
         if self.min_price_distance_pct > 0 and matching_active and current_price > 0:
             for pos in matching_active:
                 pos_entry = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or 0.0)
@@ -168,28 +303,43 @@ class AntiSpamRateLimiter:
                     dist_pct = abs(current_price - pos_entry) / pos_entry * 100.0
                     if dist_pct < self.min_price_distance_pct:
                         return False, (
-                            f"Price too close to existing position ({dist_pct:.3f}% < {self.min_price_distance_pct:.2f}% required)"
+                            f"Price too close to existing {curr} position ({dist_pct:.3f}% < {self.min_price_distance_pct:.2f}% required)"
                         )
 
         return True, "OK"
 
-    def get_status_report(self) -> str:
+    def get_status_report(self, engine: Optional[Any] = None) -> str:
         now = time.time()
-        lines = ["🛡️ **Anti-Spam & Cooldown Telemetry**"]
-        if self.global_last_entry > 0:
-            rem_g = max(0, int(self.global_cooldown_sec - (now - self.global_last_entry)))
-            lines.append(f"• **Global Cooldown:** `{self.global_cooldown_sec}s` ({rem_g}s active)" if rem_g > 0 else f"• **Global Cooldown:** `Ready` ({self.global_cooldown_sec}s cfg)")
-        else:
-            lines.append(f"• **Global Cooldown:** `Ready` ({self.global_cooldown_sec}s cfg)")
+        mode_icon = "🤖 AUTO (Adaptive)" if self.mode == "auto" else ("🛡️ MANUAL ON" if self.mode == "on" else "⚠️ OFF (Bypassed)")
+        spam_tag = f"⚡ ENABLED (Max {self.spam_trade_max_trades} Trades, No Cooldown)" if self.spam_trade_enabled else "🔒 DISABLED (Normal Protection)"
+        max_total = self.spam_trade_max_trades if self.spam_trade_enabled else (int(getattr(engine, "max_open_trades", 6)) if engine is not None else 6)
+        lines = [
+            "🛡️ **Anti-Spam & Cooldown Telemetry**",
+            f"• **Operating Mode:** `{mode_icon}`",
+            f"• **Spam Trade Mode:** `{spam_tag}`",
+            f"• **Concurrency Limits:** Max `{max_total}` Total | Max `{'6' if self.spam_trade_enabled else '2'}` per Currency (2 Gold, 2 BTC)",
+            f"• **Base Cooldowns:** Entry `{self.entry_cooldown_sec}s` | Loss `{self.loss_cooldown_sec}s` | Global `{self.global_cooldown_sec}s`",
+            f"• **Min Price Distance:** `{'0.00% (Bypassed)' if self.spam_trade_enabled else f'{self.min_price_distance_pct:.2f}%'}`",
+        ]
 
-        lines.append(f"• **Per-Symbol Limits:** Max `{self.max_positions_per_symbol}` positions | Min Dist: `{self.min_price_distance_pct:.2f}%`")
-        lines.append(f"• **Cooldowns:** Entry `{self.entry_cooldown_sec}s` | Loss `{self.loss_cooldown_sec}s`")
+        if engine is not None:
+            open_n = len(engine.active_positions) + len(engine.pending_setups)
+            gold_n, _ = self.count_currency_positions(engine, "XAU")
+            btc_n, _ = self.count_currency_positions(engine, "BTC")
+            curr_limit = self.spam_trade_max_trades if self.spam_trade_enabled else 2
+            lines.append(f"• **Active Slots:** `{open_n}/{max_total}` (Gold: `{gold_n}/{curr_limit}`, BTC: `{btc_n}/{curr_limit}`)")
+
+        if self.global_last_entry > 0:
+            rem_g = max(0, int(self.get_global_cooldown_duration() - (now - self.global_last_entry)))
+            lines.append(f"• **Global Cooldown:** `{rem_g}s active`" if rem_g > 0 else "• **Global Cooldown:** `Ready`")
+        else:
+            lines.append("• **Global Cooldown:** `Ready`")
 
         if not self._states:
             lines.append("\n_No symbol activity recorded yet._")
         else:
             for sym, st in self._states.items():
-                rem_e = max(0, int(self.entry_cooldown_sec - (now - st.last_entry_time))) if st.last_entry_time > 0 else 0
+                rem_e = max(0, int(self.get_entry_cooldown_duration(sym) - (now - st.last_entry_time))) if st.last_entry_time > 0 else 0
                 loss_cd = self.get_loss_cooldown_duration(sym)
                 rem_l = max(0, int(loss_cd - (now - st.last_loss_time))) if st.last_loss_time > 0 else 0
 
@@ -201,11 +351,14 @@ class AntiSpamRateLimiter:
 
                 last_p = f"  - Last Entry Price: `${st.last_entry_price:,.2f}`\n" if st.last_entry_price > 0 else ""
                 lines.append(
-                    f"\n**{sym}**: {status_tag}\n"
+                    f"\n**{sym}** ({canonical_currency(sym)}): {status_tag}\n"
                     f"{last_p}"
                     f"  - Loss streak: `{st.consecutive_losses}` | Losses: `{st.total_losses_recorded}` | Wins: `{st.total_wins_recorded}`"
                 )
 
+        lines.append(
+            "\n💡 _Commands: /cooldown active | /cooldown deactivate | /spam on | /spam off | /spamtrade [on|off] | /antispam reset_"
+        )
         return "\n".join(lines)
 
     def reset(self, symbol: Optional[str] = None) -> None:

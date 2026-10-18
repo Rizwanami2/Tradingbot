@@ -235,16 +235,17 @@ class ExecutionEngine:
             except Exception:
                 if is_test_env:
                     b_m = str(getattr(config, "BROKER_MODE", "")).lower()
+                    init_bal = float(getattr(self.risk_manager.state, "equity", 10000.0) or 10000.0)
                     if "delta" in b_m:
                         from delta_broker import MockDeltaBroker
                         self.broker = MockDeltaBroker()
                     else:
                         from mt5_broker import MockMT5Broker
-                        self.broker = MockMT5Broker()
+                        self.broker = MockMT5Broker(initial_balance=init_bal)
                 else:
                     self.broker = None
-        self.pending_setups: PositionDict = PositionDict()
-        self.active_positions: PositionDict = PositionDict()
+        self._pending_setups: PositionDict = PositionDict()
+        self._active_positions: PositionDict = PositionDict()
         self.trade_history: List[TradeOrder] = []
         self._order_counter: int = 0
         # Prevent duplicate orders after any ambiguous broker response.
@@ -254,9 +255,10 @@ class ExecutionEngine:
         else:
             try:
                 import config as _cfg_max
-                self.max_open_trades = int(getattr(_cfg_max, "MAX_OPEN_TRADES", 2) or 2)
+                self.max_open_trades = int(getattr(_cfg_max, "MAX_OPEN_TRADES", 6) or 6)
             except Exception:
-                self.max_open_trades = 2
+                self.max_open_trades = 6
+        self.max_positions_per_symbol: Optional[int] = None
         self.scalp_mode: bool = False
         self.fast_market_fill: bool = False
         self.scalp_tp_usd: float = 2.50
@@ -290,6 +292,34 @@ class ExecutionEngine:
 
         if self.state_file and os.path.isfile(self.state_file):
             self.restore_state(self.state_file)
+
+    @property
+    def active_positions(self) -> PositionDict:
+        return self._active_positions
+
+    @active_positions.setter
+    def active_positions(self, val: Any) -> None:
+        if isinstance(val, PositionDict):
+            self._active_positions = val
+        else:
+            p = PositionDict()
+            if isinstance(val, dict):
+                p.update(val)
+            self._active_positions = p
+
+    @property
+    def pending_setups(self) -> PositionDict:
+        return self._pending_setups
+
+    @pending_setups.setter
+    def pending_setups(self, val: Any) -> None:
+        if isinstance(val, PositionDict):
+            self._pending_setups = val
+        else:
+            p = PositionDict()
+            if isinstance(val, dict):
+                p.update(val)
+            self._pending_setups = p
 
     def reset_halt(self) -> None:
         """Clear execution halt state so setups can be registered again."""
@@ -572,7 +602,7 @@ class ExecutionEngine:
         return len(self.active_positions) + len(self.pending_setups)
 
     def slots_available(self) -> int:
-        return max(0, int(getattr(self, "max_open_trades", 2)) - self.open_trade_count())
+        return max(0, int(getattr(self, "max_open_trades", 6)) - self.open_trade_count())
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -594,7 +624,7 @@ class ExecutionEngine:
             raise ValueError(f"Trading {symbol} is disabled. Only Gold (XAUUSD) and Bitcoin (BTCUSDT) are permitted.")
         
         is_scalp_req = bool(sig.get("is_scalp") or getattr(self, "scalp_mode", False))
-        max_trades = int(getattr(self, "max_open_trades", 2) or 2)
+        max_trades = int(getattr(self, "max_open_trades", 6) or 6)
 
         # Check maximum concurrent open trades limit
         if self.open_trade_count() >= max_trades:
@@ -605,6 +635,25 @@ class ExecutionEngine:
                 raise RuntimeError(
                     f"Max concurrent trades reached ({max_trades})."
                 )
+
+        # Check maximum trades on same currency if max_positions_per_symbol is defined
+        max_per_curr = getattr(self, "max_positions_per_symbol", None)
+        if max_per_curr is not None:
+            try:
+                from anti_spam import canonical_currency
+                curr = canonical_currency(symbol)
+                matching_active = [p for p in self.active_positions.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
+                matching_pending = [p for p in self.pending_setups.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
+                curr_count = len(matching_active) + len(matching_pending)
+                if curr_count >= int(max_per_curr):
+                    if not is_scalp_req and symbol in self.pending_setups:
+                        pass
+                    else:
+                        raise RuntimeError(
+                            f"Max positions reached for {curr} ({curr_count}/{max_per_curr})."
+                        )
+            except ImportError:
+                pass
 
         if not is_scalp_req and symbol in self.pending_setups:
             try:
@@ -708,9 +757,7 @@ class ExecutionEngine:
         curr_price = close
 
         # ----------------------------------------------------
-        # 1. Check Pending Setup Execution & Invalidation
-        # ----------------------------------------------------
-        matching_setups = list(self.pending_setups.get_all(sym))
+        matching_setups = list(self.pending_setups.get_all(sym)) if hasattr(self.pending_setups, "get_all") else [s for s in self.pending_setups.values() if getattr(s, "symbol", "").upper() == sym]
         for setup in matching_setups:
             if setup.id not in self.pending_setups and setup not in self.pending_setups.values():
                 continue
@@ -864,9 +911,7 @@ class ExecutionEngine:
                     self._dispatch_event(ev["event"], setup, ev["message"])
 
         # ----------------------------------------------------
-        # 2. Manage Open Positions
-        # ----------------------------------------------------
-        matching_positions = list(self.active_positions.get_all(sym))
+        matching_positions = list(self.active_positions.get_all(sym)) if hasattr(self.active_positions, "get_all") else [p for p in self.active_positions.values() if getattr(p, "symbol", "").upper() == sym]
         for pos in matching_positions:
             if pos.id not in self.active_positions and pos not in self.active_positions.values():
                 continue
@@ -1460,29 +1505,33 @@ class ExecutionEngine:
         return last_closed
 
     def get_current_price(self, symbol: str) -> Optional[float]:
-        """Resolve the latest market/mark price for a symbol."""
+        """Resolve the latest market/mark price for a symbol using MT5 live feed."""
         sym = symbol.upper()
-        # 1. Check broker mark prices if available
+        # 1. Check broker live mark prices if available
         if getattr(self, "broker", None) is not None:
             if hasattr(self.broker, "mark_prices"):
-                bp = self.broker.mark_prices.get(sym)
-                if bp and float(bp) > 0:
-                    return float(bp)
-        # 2. Check active positions or pending setups stored current_price
-        if sym in self.active_positions:
-            try:
-                cp = getattr(self.active_positions[sym], "current_price", None)
-                if cp and float(cp) > 0:
-                    return float(cp)
-            except Exception:
-                pass
-        if sym in self.pending_setups:
-            try:
-                cp = getattr(self.pending_setups[sym], "current_price", None)
-                if cp and float(cp) > 0:
-                    return float(cp)
-            except Exception:
-                pass
+                for k in (sym, f"{sym}.m", f"{sym}m"):
+                    bp = self.broker.mark_prices.get(k)
+                    if bp and float(bp) > 0:
+                        return float(bp)
+        # 2. Check MT5 live quote
+        try:
+            from mt5_chart import fetch_mt5_live_quote
+            q = fetch_mt5_live_quote(sym, broker=getattr(self, "broker", None))
+            if q.get("ok") and float(q.get("mark") or 0) > 0:
+                price = float(q["mark"])
+                if getattr(self, "broker", None) is not None and hasattr(self.broker, "mark_price"):
+                    try:
+                        self.broker.mark_price(sym, price)
+                    except Exception:
+                        pass
+                for p in self.active_positions.get_all(sym):
+                    p.current_price = price
+                for s in self.pending_setups.get_all(sym):
+                    s.current_price = price
+                return price
+        except Exception:
+            pass
         # 3. Fetch live spot price from realtime_prices
         try:
             from realtime_prices import fetch_spot_price
@@ -1501,11 +1550,11 @@ class ExecutionEngine:
                 return price
         except Exception:
             pass
-        # 4. Fallback to executed_price or entry_level
+        # 4. Fallback to active positions or pending setups cached current_price / entry
         if sym in self.active_positions:
             try:
                 pos = self.active_positions[sym]
-                return float(pos.executed_price or pos.entry_level or 0.0)
+                return float(getattr(pos, "current_price", None) or pos.executed_price or pos.entry_level or 0.0)
             except Exception:
                 pass
         if sym in self.pending_setups:
@@ -1542,9 +1591,31 @@ class ExecutionEngine:
         return closed
 
     def format_positions_detail(self) -> str:
-        max_trades = int(getattr(self, "max_open_trades", 2) or 2)
+        wallet = self.get_wallet_telemetry()
+        curr = wallet.get("currency", "USD") or "USD"
+        bal = wallet.get("balance", 0.0)
+        eq = wallet.get("equity", 0.0)
+        u_pnl = wallet.get("unrealized_pnl", 0.0)
+        used_m = wallet.get("used_margin", 0.0)
+        free_m = wallet.get("free_margin", 0.0)
+        m_lvl = wallet.get("margin_level_pct", 0.0)
+        pnl_icon = "📈" if u_pnl >= 0 else "📉"
+        conn_tag = "🟢 Connected" if wallet.get("connected", True) else "🟡 Ready"
+        b_name = wallet.get("broker_name", "MetaTrader 5 Live")
+        acc_str = f" #{wallet.get('account_id')}" if wallet.get("account_id") else ""
+        srv_str = f" [{wallet.get('server')}]" if wallet.get("server") else ""
+        lvl_str = f" | **Margin Level:** `{m_lvl:,.1f}%`" if used_m > 0 and m_lvl > 0 else ""
+        pnl_sign_str = f"+${u_pnl:,.2f}" if u_pnl > 0 else (f"-${abs(u_pnl):,.2f}" if u_pnl < 0 else f"${u_pnl:,.2f}")
+
+        max_trades = int(getattr(self, "max_open_trades", 6) or 6)
         slots = self.slots_available()
-        lines = [f"📋 **Active Positions ({len(self.active_positions)}/{max_trades} active | {slots} slots free)**"]
+        lines = [
+            f"📋 **Active Positions ({len(self.active_positions)}/{max_trades} active | {slots} slots free)**",
+            f"🏛️ **MT5 Live Account:** `{b_name}{acc_str}{srv_str}` ({conn_tag})",
+            f"💵 **Balance:** `${bal:,.2f} {curr}` | **Live Equity:** `${eq:,.2f} {curr}`",
+            f"📈 **Floating PnL:** {pnl_icon} `{pnl_sign_str} {curr}` | **Free Margin:** `${free_m:,.2f} {curr}`{lvl_str}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        ]
         if not self.active_positions:
             lines.append("_No open active positions._")
         else:
@@ -1613,33 +1684,226 @@ class ExecutionEngine:
         if market_quotes:
             lines.append(f"\n📊 **Current Market:** {' | '.join(market_quotes)}")
 
-        summary = self.get_portfolio_summary()
+        # Real-time wallet telemetry
+        wallet = self.get_wallet_telemetry()
+        curr = wallet.get("currency", "USD") or "USD"
+        bal = wallet.get("balance", 0.0)
+        eq = wallet.get("equity", 0.0)
+        u_pnl = wallet.get("unrealized_pnl", 0.0)
+        used_m = wallet.get("used_margin", 0.0)
+        free_m = wallet.get("free_margin", 0.0)
+        m_lvl = wallet.get("margin_level_pct", 0.0)
+        pnl_icon = "📈" if u_pnl >= 0 else "📉"
+        conn_tag = "🟢 Connected" if wallet.get("connected", True) else "🟡 Ready"
+        b_name = wallet.get("broker_name", "MetaTrader 5 Live")
+        acc_str = f" #{wallet.get('account_id')}" if wallet.get("account_id") else ""
+        srv_str = f" [{wallet.get('server')}]" if wallet.get("server") else ""
+        lvl_str = f" | **Margin Level:** `{m_lvl:,.1f}%`" if used_m > 0 and m_lvl > 0 else ""
+
+        pnl_sign_str = f"+${u_pnl:,.2f}" if u_pnl > 0 else (f"-${abs(u_pnl):,.2f}" if u_pnl < 0 else f"${u_pnl:,.2f}")
+
         lines.append(
-            f"\n💰 **Equity:** `${summary.get('equity', 0):,.2f}` | "
-            f"**Unrealized:** `${summary.get('unrealized_pnl', 0):+,.2f}` | "
-            f"**Used Margin:** `${summary.get('used_margin', 0):,.2f}`"
+            f"\n💳 **Real-Time Wallet Telemetry**\n"
+            f"• **Broker Account:** `{b_name}{acc_str}{srv_str}` ({conn_tag})\n"
+            f"• **Wallet Balance:** `${bal:,.2f} {curr}` | **Equity:** `${eq:,.2f} {curr}`\n"
+            f"• **Free Margin:** `${free_m:,.2f} {curr}` | **Used Margin:** `${used_m:,.2f} {curr}`{lvl_str}\n"
+            f"• **Floating PnL:** {pnl_icon} `{pnl_sign_str} {curr}`\n\n"
+            f"💰 **Equity:** `${eq:,.2f}` | **Unrealized:** `{pnl_sign_str}` | **Used Margin:** `${used_m:,.2f}`"
         )
         return "\n".join(lines)
 
 
-    def get_portfolio_summary(self) -> Dict:
-        """Returns account equity, margin utilization, and open positions stats."""
+    def get_wallet_telemetry(self) -> Dict[str, Any]:
+        """
+        Fetch real-time broker wallet telemetry (balance, equity, margins, account id, server).
+        Synchronizes live balance and equity into RiskManager state so calculations reflect actual wallet.
+        """
+        broker = getattr(self, "broker", None)
+        b_name = "MetaTrader 5 Live"
+        server = ""
+        account_id = ""
+        currency = "USD"
+        connected = False
+        mode = "live"
+        live_bal: Optional[float] = None
+        live_eq: Optional[float] = None
+        live_mg: Optional[float] = None
+        live_free: Optional[float] = None
+        live_lvl: Optional[float] = None
+
+        if broker is not None:
+            raw_b_name = type(broker).__name__
+            if raw_b_name == "MockMT5Broker":
+                b_name = "MT5 Live (Simulated)"
+            elif raw_b_name == "MT5Broker":
+                b_name = "MetaTrader 5 Live"
+            elif raw_b_name in ("DeltaBroker", "MockDeltaBroker"):
+                b_name = "Delta Exchange"
+            elif "Oanda" in raw_b_name:
+                b_name = "OANDA Live"
+            elif "Alpaca" in raw_b_name:
+                b_name = "Alpaca Markets"
+            else:
+                b_name = raw_b_name
+
+            if hasattr(broker, "get_account_info"):
+                try:
+                    info = broker.get_account_info()
+                    if info:
+                        live_bal = float(getattr(info, "balance", 0.0) or 0.0)
+                        live_eq = float(getattr(info, "equity", 0.0) or 0.0)
+                        live_mg = float(getattr(info, "margin", 0.0) or 0.0)
+                        live_free = float(getattr(info, "free_margin", 0.0) or 0.0)
+                        live_lvl = float(getattr(info, "margin_level_pct", 0.0) or 0.0)
+                        currency = str(getattr(info, "currency", "USD") or "USD")
+                        server = str(getattr(info, "server", "") or "")
+                        account_id = str(getattr(info, "login", None) or getattr(info, "account_id", None) or "")
+                        connected = bool(getattr(info, "connected", False))
+                        mode = str(getattr(info, "trade_mode", "") or getattr(info, "environment", "") or "live")
+                except Exception as ex:
+                    logger.debug("[ExecutionEngine] get_account_info failed: %s", ex)
+
+            if live_bal is None and hasattr(broker, "balance"):
+                try:
+                    live_bal = float(getattr(broker, "balance", 0.0) or 0.0)
+                    live_eq = float(getattr(broker, "equity", live_bal) or live_bal)
+                    live_mg = float(getattr(broker, "margin", 0.0) or 0.0)
+                    live_free = float(getattr(broker, "free_margin", live_eq) or live_eq)
+                    currency = str(getattr(broker, "currency", "USD") or "USD")
+                    server = str(getattr(broker, "server", "") or "")
+                    account_id = str(getattr(broker, "login", "") or "")
+                    connected = bool(getattr(broker, "is_connected", getattr(broker, "_connected", True)))
+                except Exception as ex:
+                    logger.debug("[ExecutionEngine] broker attribute read failed: %s", ex)
+
+        # Check MT5AccountManager active account / config if broker info is incomplete
+        if not account_id or (live_bal is None or live_bal <= 0.0):
+            try:
+                from mt5_accounts import get_account_manager
+                mgr = get_account_manager()
+                act = mgr.get_active_account()
+                if act:
+                    if not account_id:
+                        account_id = str(act.login)
+                    if not server:
+                        server = act.server
+                    if (live_bal is None or live_bal <= 0.0) and act.balance > 0.0:
+                        live_bal = act.balance
+                        live_eq = act.equity or act.balance
+            except Exception:
+                pass
+
+        # Check config env vars as fallback for account ID / Server / Balance
+        try:
+            import config as _cfg_acc
+            if not account_id:
+                cfg_login = getattr(_cfg_acc, "MT5_LOGIN", 0)
+                if cfg_login:
+                    account_id = str(cfg_login)
+            if not server:
+                server = getattr(_cfg_acc, "MT5_SERVER", "")
+            if live_bal is None or live_bal <= 0.0:
+                cfg_bal = getattr(_cfg_acc, "MT5_BALANCE", None)
+                if cfg_bal and float(cfg_bal) > 0.0:
+                    live_bal = float(cfg_bal)
+                    live_eq = live_bal
+        except Exception:
+            pass
+
+        # Refresh active positions with live MT5 market ticks
+        for p in self.active_positions.values():
+            sym = getattr(p, "symbol", "")
+            curr_p = self.get_current_price(sym)
+            if curr_p and curr_p > 0:
+                p.current_price = curr_p
+                entry = float(p.executed_price or p.entry_level or 0.0)
+                if entry > 0 and p.remaining_size > 0:
+                    if "LONG" in str(p.direction).upper():
+                        p.unrealized_pnl = (curr_p - entry) * p.remaining_size
+                    else:
+                        p.unrealized_pnl = (entry - curr_p) * p.remaining_size
+
+        # Compute unrealized PnL from active positions
         total_used_margin = sum(p.margin_required for p in self.active_positions.values())
         total_unrealized_pnl = sum(p.unrealized_pnl for p in self.active_positions.values())
-        equity = self.risk_manager.state.equity + total_unrealized_pnl
-        free_margin = max(equity - total_used_margin, 0.0)
-        margin_level = (equity / total_used_margin * 100) if total_used_margin > 0 else 999.0
+
+        # Sync with RiskManager
+        is_mock_broker = broker is not None and type(broker).__name__ in ("MockMT5Broker", "MockDeltaBroker")
+        if is_mock_broker and hasattr(self, "risk_manager") and hasattr(self.risk_manager, "state"):
+            if live_bal == 10000.0 and self.risk_manager.state.equity != 10000.0:
+                live_bal = self.risk_manager.state.equity
+                live_eq = live_bal + total_unrealized_pnl
+                try:
+                    broker.balance = live_bal
+                    broker.equity = live_eq
+                except Exception:
+                    pass
+            elif live_bal is not None and live_bal > 0.0:
+                self.risk_manager.state.equity = live_bal
+                self.risk_manager.state.peak_equity = max(self.risk_manager.state.peak_equity, live_bal)
+        elif live_bal is not None and live_bal > 0.0:
+            if hasattr(self, "risk_manager") and hasattr(self.risk_manager, "state"):
+                self.risk_manager.state.equity = live_bal
+                self.risk_manager.state.peak_equity = max(self.risk_manager.state.peak_equity, live_bal)
+
+        # Final resolved values
+        final_balance = live_bal if (live_bal is not None and live_bal > 0.0) else float(getattr(self.risk_manager.state, "equity", 10000.0) or 10000.0)
+        final_equity = round(final_balance + total_unrealized_pnl, 2)
+        if hasattr(self, "risk_manager") and hasattr(self.risk_manager, "state"):
+            self.risk_manager.state.equity = final_equity
+            self.risk_manager.state.peak_equity = max(float(getattr(self.risk_manager.state, "peak_equity", 0.0) or 0.0), final_equity)
+        final_margin = live_mg if (live_mg is not None and live_mg > 0.0) else total_used_margin
+        final_free = live_free if (live_free is not None and live_free > 0.0) else max(final_equity - final_margin, 0.0)
+        if live_lvl is not None and live_lvl > 0.0:
+            final_lvl = live_lvl
+        else:
+            final_lvl = (final_equity / final_margin * 100.0) if final_margin > 0 else 999.0
 
         return {
-            "equity": round(equity, 2),
-            "balance": round(self.risk_manager.state.equity, 2),
-            "used_margin": round(total_used_margin, 2),
-            "free_margin": round(free_margin, 2),
-            "margin_level_pct": round(margin_level, 1),
+            "broker_name": b_name,
+            "account_id": account_id,
+            "server": server,
+            "mode": mode,
+            "connected": connected,
+            "balance": round(final_balance, 2),
+            "equity": round(final_equity, 2),
+            "used_margin": round(final_margin, 2),
+            "free_margin": round(final_free, 2),
+            "margin_level_pct": round(final_lvl, 1),
+            "unrealized_pnl": round(total_unrealized_pnl, 2),
+            "currency": currency,
+        }
+
+    def sync_wallet_from_broker(self) -> Dict[str, Any]:
+        """Explicitly re-query live broker account and sync risk manager state."""
+        return self.get_wallet_telemetry()
+
+    def get_portfolio_summary(self) -> Dict:
+        """Returns account equity, margin utilization, and open positions stats."""
+        wallet = self.get_wallet_telemetry()
+        total_used_margin = sum(p.margin_required for p in self.active_positions.values())
+        total_unrealized_pnl = sum(p.unrealized_pnl for p in self.active_positions.values())
+        used_m = wallet.get("used_margin", 0.0) if wallet.get("used_margin", 0.0) > 0 else total_used_margin
+        eq = wallet.get("equity", 0.0)
+        bal = wallet.get("balance", eq)
+        free_m = wallet.get("free_margin", 0.0) if wallet.get("free_margin", 0.0) > 0 else max(eq - used_m, 0.0)
+        m_lvl = wallet.get("margin_level_pct", 0.0) if wallet.get("margin_level_pct", 0.0) > 0 else ((eq / used_m * 100) if used_m > 0 else 999.0)
+
+        return {
+            "equity": round(eq, 2),
+            "balance": round(bal, 2),
+            "used_margin": round(used_m, 2),
+            "free_margin": round(free_m, 2),
+            "margin_level_pct": round(m_lvl, 1),
             "unrealized_pnl": round(total_unrealized_pnl, 2),
             "leverage": self.risk_manager.get_leverage(),
             "active_positions_count": len(self.active_positions),
             "pending_setups_count": len(self.pending_setups),
+            "currency": wallet.get("currency", "USD"),
+            "broker_name": wallet.get("broker_name", "MT5"),
+            "server": wallet.get("server", ""),
+            "login": wallet.get("account_id", ""),
+            "connected": wallet.get("connected", True),
         }
 
     def _dispatch_event(self, event_name: str, order: TradeOrder, message: str):

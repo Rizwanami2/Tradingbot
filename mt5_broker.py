@@ -256,6 +256,10 @@ class MT5Broker(Broker):
         unrealized = sum(p.unrealized_pnl for p in self._get_sim_positions_list())
         return round(self.balance + unrealized, 2)
 
+    @equity.setter
+    def equity(self, val: float):
+        self._cached_equity = float(val)
+
     @property
     def margin(self) -> float:
         if self.mode == "live":
@@ -1165,7 +1169,22 @@ class MT5Broker(Broker):
                 except Exception as e:
                     logger.error("[MT5Broker] Gateway get_account_info error: %s", e)
 
-        # Paper / Simulated account telemetry
+        # Live Cloud / Active Account Telemetry
+        if self.mode == "live":
+            if not self.login or self.balance <= 0:
+                try:
+                    from mt5_accounts import get_account_manager
+                    _act = get_account_manager().get_active_account()
+                    if _act:
+                        if not self.login and _act.login:
+                            self.login = _act.login
+                        if not self.server and _act.server:
+                            self.server = _act.server
+                        if self.balance <= 0 and _act.balance > 0:
+                            self.balance = _act.balance
+                except Exception:
+                    pass
+
         eq = self.equity
         mg = self.margin
         lvl = (eq / mg * 100.0) if mg > 0 else 0.0
@@ -1351,6 +1370,17 @@ class MockMT5Broker(Broker):
         self.server = "MetaQuotes-Demo"
         self._positions: Dict[str, Position] = {}
         self._ticket_counter = 100000
+        self.mark_prices: Dict[str, float] = {}
+
+    def update_mark_price(self, symbol: str, price: float) -> None:
+        p = float(price)
+        if p > 0:
+            self.mark_prices[symbol] = p
+            self.mark_prices[symbol.upper()] = p
+
+    def mark_price(self, symbol: str, price: float) -> float:
+        self.update_mark_price(symbol, price)
+        return self.equity
 
     @property
     def is_connected(self) -> bool:

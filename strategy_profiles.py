@@ -39,7 +39,7 @@ class StrategyProfile:
     scalp_sl_usd: float = 3.00      # $3.00 tight risk cut in USD
     poll_interval: int = 2          # Fast 2s polling in autotrade
     fast_poll_interval: int = 1     # 1s poll when monitoring positions
-    max_open_trades: int = 2        # Up to 2 slots
+    max_open_trades: int = 6        # Up to 6 slots (3 Gold, 3 BTC)
     # Scalp Trailing Stop Loss & Anti-Spam Controls
     scalp_trail_enabled: bool = True
     scalp_trail_activation_usd: float = 1.00
@@ -50,18 +50,23 @@ class StrategyProfile:
     scalp_entry_cooldown_sec: float = 45.0
     scalp_loss_cooldown_sec: float = 90.0
     scalp_global_cooldown_sec: float = 10.0
-    scalp_max_positions_per_symbol: int = 2
+    scalp_max_positions_per_symbol: int = 3
     scalp_min_price_distance_pct: float = 0.08
 
 
 DEFAULT_PROFILES = {
     "balanced": StrategyProfile(
         name="balanced",
-        description="Default multi-agent balance",
+        description="Default multi-agent balance: tight disciplined strategy",
+        min_agreement=2,
+        min_score=1.25,
+        min_rr=1.9,
+        max_open_trades=6,
+        scalp_max_positions_per_symbol=3,
     ),
     "scalp": StrategyProfile(
         name="scalp",
-        description="High-frequency micro-scalp: micro SL/TP, rapid buying/selling, fast capital accumulation",
+        description="High-frequency micro-scalp: concession score, micro SL/TP, fast capital accumulation",
         weights={
             "TREND": 1.2,
             "LIQUIDITY": 1.4,
@@ -90,7 +95,7 @@ DEFAULT_PROFILES = {
         scalp_sl_usd=3.00,
         poll_interval=2,
         fast_poll_interval=1,
-        max_open_trades=2,
+        max_open_trades=6,
         scalp_trail_enabled=True,
         scalp_trail_activation_usd=1.00,
         scalp_trail_distance_usd=0.80,
@@ -100,40 +105,46 @@ DEFAULT_PROFILES = {
         scalp_entry_cooldown_sec=45.0,
         scalp_loss_cooldown_sec=90.0,
         scalp_global_cooldown_sec=10.0,
-        scalp_max_positions_per_symbol=2,
+        scalp_max_positions_per_symbol=3,
         scalp_min_price_distance_pct=0.08,
     ),
     "swing": StrategyProfile(
         name="swing",
-        description="Higher TF focus, wider targets",
+        description="Higher TF focus, tight high-conviction setup, wider targets",
         weights={"TREND": 1.5, "LIQUIDITY": 1.3, "INDICATORS": 0.9, "AI-LEARNER": 1.0, "NEWS": 0.8, "FAKE-BREAKOUT": 1.25, "MTF-CONFLUENCE": 1.50, "ASIAN-BREAKOUT": 1.20},
         min_agreement=3,
-        min_score=1.6,
+        min_score=1.70,
         min_rr=2.5,
         require_killzone=False,
         base_risk_pct=0.30,
         max_leverage=10.0,
         strict_htf=True,
+        max_open_trades=6,
+        scalp_max_positions_per_symbol=3,
     ),
     "gold_only": StrategyProfile(
         name="gold_only",
         description="Optimized for XAU / Gold",
         weights={"TREND": 1.2, "LIQUIDITY": 1.6, "INDICATORS": 1.0, "AI-LEARNER": 0.85, "NEWS": 1.0, "FAKE-BREAKOUT": 1.45, "MTF-CONFLUENCE": 1.45, "ASIAN-BREAKOUT": 1.35},
-        min_score=1.9,
+        min_score=1.85,
         min_rr=2.0,
         base_risk_pct=0.22,
         max_leverage=40.0,
+        max_open_trades=6,
+        scalp_max_positions_per_symbol=6,
     ),
     "crypto": StrategyProfile(
         name="crypto",
         description="Crypto-focused, lower leverage",
         weights={"TREND": 1.3, "LIQUIDITY": 1.2, "INDICATORS": 1.1, "AI-LEARNER": 1.0, "NEWS": 1.1, "FAKE-BREAKOUT": 1.30, "MTF-CONFLUENCE": 1.35, "ASIAN-BREAKOUT": 1.25},
         min_agreement=2,
-        min_score=1.2,
+        min_score=1.25,
         min_rr=2.0,
         base_risk_pct=0.18,
         max_leverage=15.0,
         allow_asian=True,
+        max_open_trades=6,
+        scalp_max_positions_per_symbol=6,
     ),
 }
 
@@ -216,7 +227,8 @@ def apply_profile(
     if engine is not None:
         engine.scalp_mode = getattr(p, "is_scalp", False)
         engine.fast_market_fill = getattr(p, "fast_market_fill", False)
-        engine.max_open_trades = getattr(p, "max_open_trades", 2)
+        engine.max_open_trades = getattr(p, "max_open_trades", 6)
+        engine.max_positions_per_symbol = getattr(p, "scalp_max_positions_per_symbol", 3)
         if getattr(p, "is_scalp", False):
             engine.scalp_tp_usd = getattr(p, "scalp_tp_usd", 2.50)
             engine.scalp_sl_usd = getattr(p, "scalp_sl_usd", 3.00)
@@ -231,7 +243,8 @@ def apply_profile(
 
     if config is not None:
         config.CURRENT_PROFILE = p.name
-        config.MAX_OPEN_TRADES = getattr(p, "max_open_trades", 2)
+        config.MAX_OPEN_TRADES = getattr(p, "max_open_trades", 6)
+        config.MAX_POSITIONS_PER_SYMBOL = getattr(p, "scalp_max_positions_per_symbol", 3)
         if getattr(p, "is_scalp", False):
             config.SCALP_ENABLED = True
             config.SCALP_TAKE_PROFIT_USD = getattr(p, "scalp_tp_usd", 2.50)
@@ -247,7 +260,7 @@ def apply_profile(
             config.SCALP_ENTRY_COOLDOWN_SEC = getattr(p, "scalp_entry_cooldown_sec", 45.0)
             config.SCALP_LOSS_COOLDOWN_SEC = getattr(p, "scalp_loss_cooldown_sec", 90.0)
             config.SCALP_GLOBAL_COOLDOWN_SEC = getattr(p, "scalp_global_cooldown_sec", 10.0)
-            config.SCALP_MAX_POSITIONS_PER_SYMBOL = getattr(p, "scalp_max_positions_per_symbol", 2)
+            config.SCALP_MAX_POSITIONS_PER_SYMBOL = getattr(p, "scalp_max_positions_per_symbol", 3)
             config.SCALP_MIN_PRICE_DISTANCE_PCT = getattr(p, "scalp_min_price_distance_pct", 0.08)
 
     try:
@@ -256,7 +269,7 @@ def apply_profile(
         limiter.entry_cooldown_sec = int(getattr(p, "scalp_entry_cooldown_sec", 45))
         limiter.loss_cooldown_sec = int(getattr(p, "scalp_loss_cooldown_sec", 90))
         limiter.global_cooldown_sec = int(getattr(p, "scalp_global_cooldown_sec", 10))
-        limiter.max_positions_per_symbol = int(getattr(p, "scalp_max_positions_per_symbol", 2))
+        limiter.max_positions_per_symbol = int(getattr(p, "scalp_max_positions_per_symbol", 3))
         limiter.min_price_distance_pct = float(getattr(p, "scalp_min_price_distance_pct", 0.08))
     except Exception:
         pass
@@ -266,6 +279,7 @@ def apply_profile(
         f"_{p.description}_\n"
         f"• Agreement ≥ `{p.min_agreement}` agents | Min Score ≥ `{p.min_score}` | Min RR `{p.min_rr}:1`\n"
         f"• Risk `{p.base_risk_pct}%` | Max Lev `{p.max_leverage:.0f}x` | Asian Session `{'Allowed' if p.allow_asian else 'Blocked'}`\n"
+        f"• Concurrency: Max `{getattr(p, 'max_open_trades', 6)}` positions (Max {getattr(p, 'scalp_max_positions_per_symbol', 3)} Gold, Max {getattr(p, 'scalp_max_positions_per_symbol', 3)} BTC)\n"
     )
     if getattr(p, "is_scalp", False):
         summary += (
