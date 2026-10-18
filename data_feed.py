@@ -174,17 +174,18 @@ class DataFeed:
         return out
 
     def get_latest_price(self) -> Dict:
-        try:
-            from mt5_broker import get_active_broker
-            b = get_active_broker()
-            if b is not None and hasattr(b, "get_live_quote"):
-                q = b.get_live_quote(self.symbol)
-                if q.get("ok") and float(q.get("mark") or 0.0) > 0.0:
-                    return q
-        except Exception:
-            pass
+        if getattr(self, "source", "") == "mt5":
+            try:
+                from mt5_broker import get_active_broker
+                b = get_active_broker()
+                if b is not None and hasattr(b, "get_live_quote"):
+                    q = b.get_live_quote(self.symbol)
+                    if q.get("ok") and float(q.get("mark") or 0.0) > 0.0:
+                        return q
+            except Exception:
+                pass
         df = self.fetch(limit=5)
-        if not df.empty:
+        if df is not None and not df.empty:
             c = df.iloc[-1]
             prev = df.iloc[-2] if len(df) > 1 else c
             open_p = float(prev["close"]) if float(prev["close"]) > 0 else float(c["open"])
@@ -201,6 +202,16 @@ class DataFeed:
                 "recommendation": "NEUTRAL",
                 "source": self.source,
             }
+        if getattr(self, "source", "") in ("mt5", "auto"):
+            try:
+                from mt5_broker import get_active_broker
+                b = get_active_broker()
+                if b is not None and hasattr(b, "get_live_quote"):
+                    q = b.get_live_quote(self.symbol)
+                    if q.get("ok") and float(q.get("mark") or 0.0) > 0.0:
+                        return q
+            except Exception:
+                pass
         return {
             "ok": False,
             "symbol": self.symbol,

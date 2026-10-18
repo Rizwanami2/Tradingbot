@@ -208,22 +208,31 @@ class MT5Broker(Broker):
         self.effective_backend: str = "auto"
 
         # Balance & Account state
+        self._balance_from_default = False
         if initial_balance is not None and float(initial_balance) > 0:
             resolved_balance = float(initial_balance)
         else:
             try:
-                resolved_balance = float(
-                    getattr(config, "MT5_BALANCE", None)
-                    or getattr(config, "INITIAL_EQUITY", None)
-                    or os.getenv("BOT_EQUITY", 10000.0)
-                    or 10000.0
-                )
+                from mt5_accounts import get_account_manager
+                _act = get_account_manager().get_active_account()
+                if _act and _act.balance > 0:
+                    resolved_balance = float(_act.balance)
+                else:
+                    resolved_balance = float(
+                        getattr(config, "MT5_BALANCE", None)
+                        or getattr(config, "INITIAL_EQUITY", None)
+                        or os.getenv("BOT_EQUITY", 10000.0)
+                        or 10000.0
+                    )
+                    self._balance_from_default = True
             except Exception:
                 resolved_balance = 10000.0
+                self._balance_from_default = True
         self._initial_balance = max(1.0, float(resolved_balance))
         self.balance = self._initial_balance
         self._cached_equity: Optional[float] = None
         self._cached_margin: Optional[float] = None
+        self._cached_free_margin: Optional[float] = None
         self.leverage = 20.0
         self.currency = "USD"
         self.company = "MetaQuotes Software Corp."
@@ -259,6 +268,8 @@ class MT5Broker(Broker):
 
     @property
     def equity(self) -> float:
+        if self._cached_equity is not None:
+            return self._cached_equity
         if self.mode == "live":
             if native_mt5 is not None and self._connected:
                 try:
@@ -279,6 +290,8 @@ class MT5Broker(Broker):
 
     @property
     def margin(self) -> float:
+        if self._cached_margin is not None:
+            return self._cached_margin
         if self.mode == "live":
             if native_mt5 is not None and self._connected:
                 try:
@@ -293,9 +306,19 @@ class MT5Broker(Broker):
         total_margin = sum((p.entry_price * p.qty) / self.leverage for p in self._get_sim_positions_list())
         return round(total_margin, 2)
 
+    @margin.setter
+    def margin(self, val: float):
+        self._cached_margin = float(val)
+
     @property
     def free_margin(self) -> float:
+        if self._cached_free_margin is not None:
+            return self._cached_free_margin
         return max(0.0, round(self.equity - self.margin, 2))
+
+    @free_margin.setter
+    def free_margin(self, val: float):
+        self._cached_free_margin = float(val)
 
     def connect(self) -> bool:
         """Initialize connection to MT5 terminal, EA bridge, or cloud broker engine."""
@@ -1310,10 +1333,38 @@ class MT5Broker(Broker):
                 login_val = self.login
                 try:
                     from bridge import ea_client
-                    st = ea_client.status(magic=self.magic, timeout=2.0)
-                    if st.get("ok") and "login" in st and st["login"]:
-                        login_val = int(st["login"])
-                        self.login = login_val
+                    st = ea_client.status(magic=self.magic, timeout=0.8)
+                    if st.get("ok"):
+                        if "login" in st and st["login"]:
+                            login_val = int(st["login"])
+                            self.login = login_val
+                        if "balance" in st and st["balance"] is not None:
+                            self.balance = float(st["balance"])
+                        if "equity" in st and st["equity"] is not None:
+                            self._cached_equity = float(st["equity"])
+                        if "margin" in st and st["margin"] is not None:
+                            self._cached_margin = float(st["margin"])
+                        if "free_margin" in st and st["free_margin"] is not None:
+                            self._cached_free_margin = float(st["free_margin"])
+                        if "leverage" in st and st["leverage"]:
+                            self.leverage = float(st["leverage"])
+                        if "currency" in st and st["currency"]:
+                            self.currency = str(st["currency"])
+                        if "server" in st and st["server"]:
+                            self.server = str(st["server"])
+                        if "company" in st and st["company"]:
+                            self.company = str(st["company"])
+                            self._ea_company = str(st["company"])
+                        try:
+                            from mt5_accounts import get_account_manager
+                            _mgr = get_account_manager()
+                            _act = _mgr.get_active_account()
+                            if _act and (not _act.login or _act.login == login_val or _act.login == self.login):
+                                _act.balance = self.balance
+                                _act.equity = self.equity
+                                _mgr._save()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 eq = self.equity
@@ -1331,7 +1382,7 @@ class MT5Broker(Broker):
                     margin_level_pct=lvl,
                     leverage=self.leverage,
                     currency=self.currency,
-                    company="EA-Bridge (MetaTrader 5)",
+                    company=getattr(self, "_ea_company", None) or "EA-Bridge (MetaTrader 5)",
                     trade_allowed=True,
                     trade_expert=True,
                     terminal_trade_allowed=True,
@@ -1343,6 +1394,10 @@ class MT5Broker(Broker):
                     if acc:
                         margin = float(acc.margin or 0.0)
                         equity = float(acc.equity or 0.0)
+                        self.balance = float(acc.balance)
+                        self._cached_equity = equity
+                        self._cached_margin = margin
+                        self._cached_free_margin = float(acc.margin_free or 0.0)
                         lvl = (equity / margin * 100.0) if margin > 0 else 0.0
                         term_allowed = bool(getattr(term, "trade_allowed", True)) if term else True
                         acc_allowed = bool(getattr(acc, "trade_allowed", True))
@@ -1350,19 +1405,32 @@ class MT5Broker(Broker):
                         self._term_trade_allowed = term_allowed
                         self._acc_trade_allowed = acc_allowed
                         self._acc_trade_expert = expert_allowed
+                        self.leverage = float(acc.leverage or self.leverage)
+                        self.currency = str(acc.currency or self.currency)
+                        self.company = str(acc.company or self.company)
+                        try:
+                            from mt5_accounts import get_account_manager
+                            _mgr = get_account_manager()
+                            _act = _mgr.get_active_account()
+                            if _act and _act.login == int(acc.login):
+                                _act.balance = self.balance
+                                _act.equity = equity
+                                _mgr._save()
+                        except Exception:
+                            pass
                         return MT5AccountInfo(
                             login=int(acc.login),
                             server=str(acc.server),
                             trade_mode="live",
                             connected=True,
-                            balance=float(acc.balance),
+                            balance=self.balance,
                             equity=equity,
                             margin=margin,
-                            free_margin=float(acc.margin_free or 0.0),
+                            free_margin=self.free_margin,
                             margin_level_pct=lvl,
-                            leverage=float(acc.leverage or 20.0),
-                            currency=str(acc.currency or "USD"),
-                            company=str(acc.company or "MetaQuotes"),
+                            leverage=self.leverage,
+                            currency=self.currency,
+                            company=self.company,
                             trade_allowed=acc_allowed,
                             trade_expert=expert_allowed,
                             terminal_trade_allowed=term_allowed,
@@ -1378,6 +1446,8 @@ class MT5Broker(Broker):
                     self.balance = float(res.get("balance", self.balance))
                     self._cached_equity = equity
                     self._cached_margin = margin
+                    if "free_margin" in res and res["free_margin"] is not None:
+                        self._cached_free_margin = float(res["free_margin"])
                     lvl = (equity / margin * 100.0) if margin > 0 else 0.0
                     lvl_pct = float(res.get("margin_level_pct") or res.get("margin_level") or lvl)
                     trade_allowed = bool(res.get("trade_allowed", self._acc_trade_allowed))
@@ -1386,6 +1456,16 @@ class MT5Broker(Broker):
                     self._acc_trade_allowed = trade_allowed
                     self._acc_trade_expert = trade_expert
                     self._term_trade_allowed = terminal_trade_allowed
+                    try:
+                        from mt5_accounts import get_account_manager
+                        _mgr = get_account_manager()
+                        _act = _mgr.get_active_account()
+                        if _act and _act.login == int(res.get("login", self.login)):
+                            _act.balance = self.balance
+                            _act.equity = equity
+                            _mgr._save()
+                    except Exception:
+                        pass
                     return MT5AccountInfo(
                         login=int(res.get("login", self.login)),
                         server=str(res.get("server", self.server)),
@@ -1394,7 +1474,7 @@ class MT5Broker(Broker):
                         balance=self.balance,
                         equity=equity,
                         margin=margin,
-                        free_margin=float(res.get("free_margin", equity - margin) or 0.0),
+                        free_margin=self.free_margin,
                         margin_level_pct=lvl_pct,
                         leverage=float(res.get("leverage", self.leverage) or self.leverage),
                         currency=str(res.get("currency", self.currency)),
@@ -1408,19 +1488,24 @@ class MT5Broker(Broker):
 
         # Live Cloud / Active Account Telemetry
         if self.mode == "live":
-            if not self.login or self.balance <= 0:
-                try:
-                    from mt5_accounts import get_account_manager
-                    _act = get_account_manager().get_active_account()
-                    if _act:
-                        if not self.login and _act.login:
-                            self.login = _act.login
-                        if not self.server and _act.server:
-                            self.server = _act.server
-                        if self.balance <= 0 and _act.balance > 0:
-                            self.balance = _act.balance
-                except Exception:
-                    pass
+            try:
+                from mt5_accounts import get_account_manager
+                _mgr = get_account_manager()
+                _act = _mgr.get_active_account()
+                if _act:
+                    if not self.login and _act.login:
+                        self.login = _act.login
+                    if not self.server and _act.server:
+                        self.server = _act.server
+                    if _act.balance > 0 and (self.balance <= 0 or getattr(self, "_balance_from_default", False) or self.balance == 10000.0):
+                        self.balance = _act.balance
+                        self.equity = _act.equity or _act.balance
+                    elif self.balance > 0 and _act.balance <= 0:
+                        _act.balance = self.balance
+                        _act.equity = self.equity
+                        _mgr._save()
+            except Exception:
+                pass
 
         eq = self.equity
         mg = self.margin

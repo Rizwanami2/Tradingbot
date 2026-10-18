@@ -456,19 +456,20 @@ def switch_broker_mode(
 
         via_str = f"Gateway (`{acc.gateway_url}`)" if acc.gateway_url else "Native MetaTrader 5 Terminal"
 
+        warn_lines = []
         bal = float(getattr(live_broker, "balance", 0.0) or 0.0)
         eq = float(getattr(live_broker, "equity", bal) or bal)
         lev = float(getattr(live_broker, "leverage", 100.0) or 100.0)
         free_m = float(getattr(live_broker, "free_margin", eq) or eq)
 
-        acc.balance = bal
-        acc.equity = eq
-        mgr._save()
-
-        warn_lines = []
         if hasattr(live_broker, "get_account_info"):
             try:
                 ai = live_broker.get_account_info()
+                if ai:
+                    bal = float(getattr(ai, "balance", bal))
+                    eq = float(getattr(ai, "equity", eq))
+                    lev = float(getattr(ai, "leverage", lev))
+                    free_m = float(getattr(ai, "free_margin", free_m))
                 if hasattr(ai, "terminal_trade_allowed") and not ai.terminal_trade_allowed:
                     warn_lines.append("⚠️ **MT5 Algo Trading is DISABLED**: Click 'Algo Trading' toolbar button in MT5 to turn it GREEN.")
                 if hasattr(ai, "trade_allowed") and not ai.trade_allowed:
@@ -477,6 +478,11 @@ def switch_broker_mode(
                     warn_lines.append("⚠️ **Automated/EA Trading is DISABLED by Broker** for this account.")
             except Exception:
                 pass
+
+        acc.balance = bal
+        acc.equity = eq
+        mgr._save()
+
         warn_block = ("\n" + "\n".join(warn_lines) + "\n") if warn_lines else ""
 
         return (

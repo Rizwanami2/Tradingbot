@@ -214,9 +214,10 @@ class ExecutionEngine:
             try:
                 from execution import create_broker
                 import config
-                broker_mode = getattr(config, "BROKER_MODE", "mt5_live")
+                init_bal = float(getattr(self.risk_manager.state, "equity", None) or getattr(config, "INITIAL_EQUITY", 10000.0) or 10000.0) if hasattr(self, "risk_manager") and hasattr(self.risk_manager, "state") else 10000.0
                 self.broker = create_broker(
                     broker_mode=broker_mode,
+                    initial_balance=init_bal,
                     mt5_mode=getattr(config, "MT5_MODE", "live"),
                     mt5_login=getattr(config, "MT5_LOGIN", 0),
                     mt5_password=getattr(config, "MT5_PASSWORD", ""),

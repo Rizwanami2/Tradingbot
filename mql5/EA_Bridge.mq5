@@ -330,9 +330,19 @@ string StatusJSON(long magic)
       vol += PositionGetDouble(POSITION_VOLUME);
    }
 
+   double bal   = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq    = AccountInfoDouble(ACCOUNT_EQUITY);
+   double mg    = AccountInfoDouble(ACCOUNT_MARGIN);
+   double free_m = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   long   lev   = AccountInfoInteger(ACCOUNT_LEVERAGE);
+   string curr  = AccountInfoString(ACCOUNT_CURRENCY);
+   string srv   = AccountInfoString(ACCOUNT_SERVER);
+   string comp  = AccountInfoString(ACCOUNT_COMPANY);
+
    return StringFormat(
-      "{\"ok\":true,\"positions\":%d,\"volume\":%.2f,\"login\":%d}",
-      pos, vol, (int)AccountInfoInteger(ACCOUNT_LOGIN)
+      "{\"ok\":true,\"positions\":%d,\"volume\":%.2f,\"login\":%I64d,\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"leverage\":%d,\"currency\":\"%s\",\"server\":\"%s\",\"company\":\"%s\"}",
+      pos, vol, (long)AccountInfoInteger(ACCOUNT_LOGIN),
+      bal, eq, mg, free_m, (int)lev, curr, srv, comp
    );
 }
 

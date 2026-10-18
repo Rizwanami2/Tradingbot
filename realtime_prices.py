@@ -19,13 +19,27 @@ Priority for gold:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; TradingBot/2.0)"}
-TIMEOUT = 8
+TIMEOUT = 3.5
+
+_SESSION = requests.Session()
+_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=25, max_retries=1)
+_SESSION.mount("http://", _adapter)
+_SESSION.mount("https://", _adapter)
+_SESSION.headers.update(UA)
+
+_SPOT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_SPOT_LOCK = threading.Lock()
+_LEVELS_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_LEVELS_LOCK = threading.Lock()
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -63,7 +77,7 @@ def _binance_symbol(sym: str) -> str:
 
 def _get_json(url: str, params: Optional[dict] = None) -> Optional[Any]:
     try:
-        r = requests.get(url, params=params, headers=UA, timeout=TIMEOUT)
+        r = _SESSION.get(url, params=params, timeout=TIMEOUT)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -71,9 +85,16 @@ def _get_json(url: str, params: Optional[dict] = None) -> Optional[Any]:
     return None
 
 
-def fetch_spot_price(symbol: str = "BTCUSDT") -> Dict[str, Any]:
-    """Return unified live quote dict with ok/mark/source."""
+def fetch_spot_price(symbol: str = "BTCUSDT", max_age_seconds: float = 2.5) -> Dict[str, Any]:
+    """Return unified live quote dict with ok/mark/source with in-memory TTL caching."""
     sym = _norm_symbol(symbol)
+    now = time.time()
+    with _SPOT_LOCK:
+        if sym in _SPOT_CACHE:
+            ts, val = _SPOT_CACHE[sym]
+            if now - ts < max_age_seconds and val.get("ok"):
+                return val.copy()
+
     errors: List[str] = []
 
     # 0. Live MT5 Broker Quote (Primary live source)
@@ -83,6 +104,8 @@ def fetch_spot_price(symbol: str = "BTCUSDT") -> Dict[str, Any]:
         if b is not None and hasattr(b, "get_live_quote"):
             q = b.get_live_quote(sym)
             if q.get("ok") and float(q.get("mark") or 0.0) > 0.0:
+                with _SPOT_LOCK:
+                    _SPOT_CACHE[sym] = (time.time(), q)
                 return q
     except Exception:
         pass
@@ -178,6 +201,8 @@ def _ok(symbol: str, price: float, source: str, extra: Optional[dict] = None) ->
     }
     if extra:
         out.update(extra)
+    with _SPOT_LOCK:
+        _SPOT_CACHE[symbol] = (time.time(), out)
     return out
 
 
@@ -290,9 +315,16 @@ def fetch_ohlcv(symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataF
     return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
 
-def compute_levels(symbol: str = "BTCUSDT") -> Dict[str, Any]:
-    """Real-time key levels: mark, PDH/PDL, pivots, session H/L, swings."""
+def compute_levels(symbol: str = "BTCUSDT", max_age_seconds: float = 15.0) -> Dict[str, Any]:
+    """Real-time key levels: mark, PDH/PDL, pivots, session H/L, swings with TTL cache."""
     sym = _norm_symbol(symbol)
+    now = time.time()
+    with _LEVELS_LOCK:
+        if sym in _LEVELS_CACHE:
+            ts, val = _LEVELS_CACHE[sym]
+            if now - ts < max_age_seconds and val.get("ok"):
+                return val.copy()
+
     quote = fetch_spot_price(sym)
     mark = float(quote.get("mark") or 0)
 
@@ -358,7 +390,7 @@ def compute_levels(symbol: str = "BTCUSDT") -> Dict[str, Any]:
         "swing_lows": near_sl,
     }
 
-    return {
+    res = {
         "ok": True,
         "symbol": sym,
         "mark": mark,
@@ -367,6 +399,9 @@ def compute_levels(symbol: str = "BTCUSDT") -> Dict[str, Any]:
         "levels": levels,
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
+    with _LEVELS_LOCK:
+        _LEVELS_CACHE[sym] = (time.time(), res)
+    return res
 
 
 def format_levels_message(data: Dict[str, Any]) -> str:

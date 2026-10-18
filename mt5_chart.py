@@ -10,7 +10,11 @@ technical indicators, and MT5 live execution telemetry for:
 
 from __future__ import annotations
 
+import copy
 import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,6 +22,13 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger("MT5Chart")
+
+_QUOTE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_QUOTE_LOCK = threading.Lock()
+_CANDLE_CACHE: Dict[str, Tuple[float, List[Dict[str, float]]]] = {}
+_CANDLE_LOCK = threading.Lock()
+_CONTEXT_CACHE: Dict[str, Tuple[float, str]] = {}
+_CONTEXT_LOCK = threading.Lock()
 
 
 def normalize_mt5_symbol(symbol: str) -> str:
@@ -38,7 +49,7 @@ def get_display_names(symbol: str) -> Tuple[str, str, str]:
     return "XAUUSD", "Gold", "🟡"
 
 
-def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None) -> Dict[str, Any]:
+def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None, max_age_seconds: float = 3.0) -> Dict[str, Any]:
     """
     Fetch real-time mark, bid, ask, and spread for MT5 symbol.
     Priority:
@@ -47,6 +58,69 @@ def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None) -> Dict[str,
       3. MultiAgent MarketDataFeed
     """
     norm_sym = normalize_mt5_symbol(symbol)
+
+    # 1. Broker live mark price (if explicitly provided in dict)
+    if broker is not None and hasattr(broker, "mark_prices") and isinstance(broker.mark_prices, dict):
+        try:
+            for k in (norm_sym, f"{norm_sym}.m", f"{norm_sym}m", symbol.upper()):
+                val = broker.mark_prices.get(k)
+                if isinstance(val, (int, float)) and val > 0:
+                    mark_p = float(val)
+                    spread = 3.50 if norm_sym == "BTCUSD" else 0.35
+                    return {
+                        "ok": True,
+                        "symbol": norm_sym,
+                        "mark": mark_p,
+                        "bid": round(mark_p - spread / 2.0, 2),
+                        "ask": round(mark_p + spread / 2.0, 2),
+                        "spread": spread,
+                        "source": "MT5 Broker",
+                        "rt_data": {},
+                    }
+        except Exception:
+            pass
+
+    # 2. Broker live tick / quote endpoint
+    if broker is not None and hasattr(broker, "get_live_quote"):
+        try:
+            q = broker.get_live_quote(norm_sym)
+            if isinstance(q, dict) and q.get("ok"):
+                raw_m = q.get("mark")
+                if isinstance(raw_m, (int, float)) and raw_m > 0:
+                    mark_p = float(raw_m)
+                    raw_bid = q.get("bid")
+                    raw_ask = q.get("ask")
+                    raw_spread = q.get("spread")
+                    spread = float(raw_spread) if isinstance(raw_spread, (int, float)) else (3.50 if norm_sym == "BTCUSD" else 0.35)
+                    bid = float(raw_bid) if isinstance(raw_bid, (int, float)) else round(mark_p - spread / 2.0, 2)
+                    ask = float(raw_ask) if isinstance(raw_ask, (int, float)) else round(mark_p + spread / 2.0, 2)
+                    return {
+                        "ok": True,
+                        "symbol": norm_sym,
+                        "mark": mark_p,
+                        "bid": bid,
+                        "ask": ask,
+                        "spread": spread,
+                        "source": str(q.get("source", "MT5 Broker")),
+                        "rt_data": {},
+                    }
+        except Exception as e:
+            logger.debug("broker.get_live_quote error: %s", e)
+
+    # 3. Check TTL cache
+    now = time.time()
+    broker_id = id(broker) if broker is not None else "default"
+    cache_key = f"{norm_sym}_{broker_id}"
+    with _QUOTE_LOCK:
+        if cache_key in _QUOTE_CACHE:
+            ts, cached_quote = _QUOTE_CACHE[cache_key]
+            if now - ts < max_age_seconds and cached_quote.get("ok"):
+                return cached_quote.copy()
+        elif norm_sym in _QUOTE_CACHE and broker is None:
+            ts, cached_quote = _QUOTE_CACHE[norm_sym]
+            if now - ts < max_age_seconds and cached_quote.get("ok"):
+                return cached_quote.copy()
+
     mark_price = 0.0
     bid = 0.0
     ask = 0.0
@@ -60,40 +134,7 @@ def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None) -> Dict[str,
         except Exception:
             pass
 
-    # 1. Broker live mark price (if explicitly provided in dict)
-    if broker is not None and hasattr(broker, "mark_prices") and isinstance(broker.mark_prices, dict):
-        try:
-            for k in (norm_sym, f"{norm_sym}.m", f"{norm_sym}m", symbol.upper()):
-                val = broker.mark_prices.get(k)
-                if isinstance(val, (int, float)) and val > 0:
-                    mark_price = float(val)
-                    source = "MT5 Broker"
-                    break
-        except Exception:
-            pass
-
-    # 2. Broker live tick / quote endpoint
-    if mark_price <= 0 and broker is not None and hasattr(broker, "get_live_quote"):
-        try:
-            q = broker.get_live_quote(norm_sym)
-            if isinstance(q, dict) and q.get("ok"):
-                raw_m = q.get("mark")
-                if isinstance(raw_m, (int, float)) and raw_m > 0:
-                    mark_price = float(raw_m)
-                    raw_bid = q.get("bid")
-                    raw_ask = q.get("ask")
-                    raw_spread = q.get("spread")
-                    if isinstance(raw_bid, (int, float)):
-                        bid = float(raw_bid)
-                    if isinstance(raw_ask, (int, float)):
-                        ask = float(raw_ask)
-                    if isinstance(raw_spread, (int, float)):
-                        spread = float(raw_spread)
-                    source = str(q.get("source", "MT5 Broker"))
-        except Exception as e:
-            logger.debug("broker.get_live_quote error: %s", e)
-
-    # 2. Realtime prices spot quote
+    # Realtime prices spot quote
     rt_data: Dict[str, Any] = {}
     try:
         from realtime_prices import fetch_spot_price
@@ -107,7 +148,7 @@ def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None) -> Dict[str,
     except Exception as e:
         logger.debug("realtime_prices lookup error: %s", e)
 
-    # 3. Fallback to MarketDataFeed quote
+    # Fallback to MarketDataFeed quote
     if mark_price <= 0:
         try:
             from multi_agent_trading_bot import MarketDataFeed
@@ -122,15 +163,15 @@ def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None) -> Dict[str,
     # Calculate realistic bid/ask/spread if not directly provided
     if mark_price > 0:
         if norm_sym == "BTCUSD":
-            spread = 3.50  # typical tight BTC spread ~ $3.50
+            spread = 3.50
             bid = round(mark_price - spread / 2.0, 2)
             ask = round(mark_price + spread / 2.0, 2)
         else:
-            spread = 0.35  # typical Gold spread ~ $0.35 (35 cents)
+            spread = 0.35
             bid = round(mark_price - spread / 2.0, 2)
             ask = round(mark_price + spread / 2.0, 2)
 
-    return {
+    res = {
         "ok": mark_price > 0,
         "symbol": norm_sym,
         "mark": mark_price,
@@ -140,14 +181,35 @@ def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None) -> Dict[str,
         "source": source,
         "rt_data": rt_data,
     }
+    if res["ok"]:
+        with _QUOTE_LOCK:
+            _QUOTE_CACHE[cache_key] = (time.time(), res)
+            if broker is None:
+                _QUOTE_CACHE[norm_sym] = (time.time(), res)
+    return res
 
 
-def fetch_mt5_candles(symbol: str, timeframe: str = "1m", limit: int = 15, broker: Optional[Any] = None) -> List[Dict[str, float]]:
+def fetch_mt5_candles(
+    symbol: str,
+    timeframe: str = "1m",
+    limit: int = 15,
+    broker: Optional[Any] = None,
+    max_age_seconds: float = 8.0,
+) -> List[Dict[str, float]]:
     """
     Fetch recent OHLCV candles calibrated to live MT5 price.
     Returns list of dicts: [{"open": float, "high": float, "low": float, "close": float, "volume": float}]
     """
     norm_sym = normalize_mt5_symbol(symbol)
+    broker_id = id(broker) if broker is not None else "default"
+    cache_key = f"{norm_sym}_{timeframe}_{limit}_{broker_id}"
+    now = time.time()
+    with _CANDLE_LOCK:
+        if cache_key in _CANDLE_CACHE:
+            ts, cached_candles = _CANDLE_CACHE[cache_key]
+            if now - ts < max_age_seconds and cached_candles:
+                return copy.deepcopy(cached_candles)
+
     df: Optional[pd.DataFrame] = None
 
     if broker is None:
@@ -210,6 +272,10 @@ def fetch_mt5_candles(symbol: str, timeframe: str = "1m", limit: int = 15, broke
                     "volume": 100.0,
                 })
             candles[-1]["close"] = cur_mark
+
+    if candles:
+        with _CANDLE_LOCK:
+            _CANDLE_CACHE[cache_key] = (time.time(), candles)
 
     return candles
 
@@ -472,9 +538,12 @@ def format_mt5_chart_card(chart_data: Dict[str, Any]) -> str:
 
 
 def format_combined_mt5_chart_dashboard(broker: Optional[Any] = None) -> str:
-    """Format combined MT5 Live Chart dashboard covering BOTH Bitcoin & Gold."""
-    btc_chart = get_mt5_live_chart("BTCUSD", timeframe="1m", broker=broker)
-    gold_chart = get_mt5_live_chart("XAUUSD", timeframe="1m", broker=broker)
+    """Format combined MT5 Live Chart dashboard covering BOTH Bitcoin & Gold in parallel."""
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_btc = executor.submit(get_mt5_live_chart, "BTCUSD", "1m", broker)
+        f_gold = executor.submit(get_mt5_live_chart, "XAUUSD", "1m", broker)
+        btc_chart = f_btc.result()
+        gold_chart = f_gold.result()
 
     btc_card = format_mt5_chart_card(btc_chart)
     gold_card = format_mt5_chart_card(gold_chart)
@@ -486,18 +555,28 @@ def format_combined_mt5_chart_dashboard(broker: Optional[Any] = None) -> str:
     return f"{header}{gold_card}\n\n{btc_card}"
 
 
-def get_mt5_combined_market_context(broker: Optional[Any] = None) -> str:
+def get_mt5_combined_market_context(broker: Optional[Any] = None, max_age_seconds: float = 5.0) -> str:
     """
     Generate real-time MT5 Live Chart market context for injection
-    into Gemini assistant and conversational /chat /ask queries.
+    into Gemini assistant and conversational /chat /ask queries with caching.
     """
-    btc = get_mt5_live_chart("BTCUSD", timeframe="1m", broker=broker)
-    gold = get_mt5_live_chart("XAUUSD", timeframe="1m", broker=broker)
+    now = time.time()
+    with _CONTEXT_LOCK:
+        if "market_context" in _CONTEXT_CACHE:
+            ts, val = _CONTEXT_CACHE["market_context"]
+            if now - ts < max_age_seconds and val:
+                return val
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_btc = executor.submit(get_mt5_live_chart, "BTCUSD", "1m", broker)
+        f_gold = executor.submit(get_mt5_live_chart, "XAUUSD", "1m", broker)
+        btc = f_btc.result()
+        gold = f_gold.result()
 
     btc_t = btc["technicals"]
     gold_t = gold["technicals"]
 
-    return (
+    res = (
         f"=== MT5 LIVE CHART & MARKET CONTEXT ===\n"
         f"[MT5 Live Gold (XAUUSD)]\n"
         f"Mark Price: ${gold['mark']:,.2f} | Bid: ${gold['bid']:,.2f} | Ask: ${gold['ask']:,.2f} | Spread: {gold['spread']:.2f}\n"
@@ -515,6 +594,10 @@ def get_mt5_combined_market_context(broker: Optional[Any] = None) -> str:
         f"Timestamp: {gold['timestamp']}\n"
         f"=== END MT5 LIVE CHART CONTEXT ==="
     )
+
+    with _CONTEXT_LOCK:
+        _CONTEXT_CACHE["market_context"] = (time.time(), res)
+    return res
 
 
 def build_chart_keyboard(active: str = "both") -> Any:

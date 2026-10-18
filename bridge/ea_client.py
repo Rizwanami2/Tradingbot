@@ -118,7 +118,7 @@ def modify(symbol: str = "", ticket: int = 0, sl: float = 0.0, tp: float = 0.0, 
     return send_command("MODIFY", symbol=symbol, ticket=ticket, sl=sl, tp=tp, magic=magic, timeout=timeout)
 
 
-def status(magic: int = DEFAULT_MAGIC, timeout: Optional[float] = None) -> Dict[str, Any]:
+def status(magic: int = DEFAULT_MAGIC, timeout: Optional[float] = 1.0) -> Dict[str, Any]:
     return send_command("STATUS", magic=magic, timeout=timeout)
 
 

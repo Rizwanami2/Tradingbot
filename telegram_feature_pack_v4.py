@@ -73,7 +73,7 @@ async def export_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def setups_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         pack = _get()
-        text = pack.edge.setup_report() + "\n\n" + pack.edge.calibration_report()
+        text = "🎯 **Setups & Expectancy**\n" + pack.edge.setup_report() + "\n\n" + pack.edge.calibration_report()
         await safe_reply(update, text, parse_mode="Markdown")
     except Exception as e:
         logger.exception("Error in /setups command: %s", e)

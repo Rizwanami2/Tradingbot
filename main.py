@@ -75,12 +75,18 @@ from ops_dashboard import StatusStore
 from telegram_brain import safe_reply
 
 
-async def _to_thread(func, *args, **kwargs):
-    if hasattr(asyncio, "to_thread"):
-        return await asyncio.to_thread(func, *args, **kwargs)
+if not hasattr(asyncio, "to_thread"):
     import functools
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
+    async def _asyncio_to_thread(func, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
+    asyncio.to_thread = _asyncio_to_thread
+
+
+async def _to_thread(func, *args, **kwargs):
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 import warnings
@@ -98,10 +104,6 @@ for _noisy in ("httpx", "httpcore", "telegram", "telegram.ext", "urllib3"):
 
 logger = logging.getLogger("TradingBot")
 
-gemini = GeminiClient()
-risk_mgr = RiskManager(equity=config.INITIAL_EQUITY, symbol=config.DEFAULT_SYMBOL)
-risk_mgr.set_leverage(config.DEFAULT_LEVERAGE)
-arbiter = Arbiter(allow_asian=True)
 try:
     from mt5_accounts import get_account_manager
     _active_acc = get_account_manager().get_active_account()
@@ -110,8 +112,16 @@ try:
         config.MT5_PASSWORD = _active_acc.password
         config.MT5_SERVER = _active_acc.server
         config.MT5_GATEWAY_URL = _active_acc.gateway_url
+        if _active_acc.balance > 0:
+            config.MT5_BALANCE = _active_acc.balance
+            config.INITIAL_EQUITY = _active_acc.balance
 except Exception:
     pass
+
+gemini = GeminiClient()
+risk_mgr = RiskManager(equity=config.INITIAL_EQUITY, symbol=config.DEFAULT_SYMBOL)
+risk_mgr.set_leverage(config.DEFAULT_LEVERAGE)
+arbiter = Arbiter(allow_asian=True)
 
 from execution import create_broker_fail_closed
 
@@ -121,6 +131,10 @@ try:
         api_key=getattr(config, "DELTA_EXCHANGE_API_KEY", "") or getattr(config, "EXCHANGE_API_KEY", ""),
         api_secret=getattr(config, "DELTA_EXCHANGE_API_SECRET", "") or getattr(config, "EXCHANGE_API_SECRET", ""),
     )
+    if _broker and hasattr(_broker, "balance") and _broker.balance > 0:
+        risk_mgr.state.equity = _broker.balance
+        risk_mgr.state.peak_equity = max(risk_mgr.state.peak_equity, _broker.balance)
+        risk_mgr.equity = _broker.balance
 except Exception as _broker_err:
     if "PYTEST_CURRENT_TEST" in os.environ or getattr(config, "TESTING", False):
         b_m = str(getattr(config, "BROKER_MODE", "")).lower()
@@ -485,10 +499,9 @@ async def levels_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sym = "BTCUSDT"
     if sym in ("GOLD", "XAU", "XAUT"):
         sym = "XAUUSD"
-    await update.message.reply_text(f"⏳ Fetching **{sym}** levels…", parse_mode="Markdown")
     try:
         from realtime_prices import compute_levels, format_levels_message
-        data = compute_levels(sym)
+        data = await asyncio.to_thread(compute_levels, sym)
         await update.message.reply_text(format_levels_message(data), parse_mode="Markdown")
     except Exception as e:
         logger.exception("levels failed")
@@ -497,7 +510,7 @@ async def levels_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def price_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
-    info = get_price_info(sym)
+    info = await asyncio.to_thread(get_price_info, sym)
     await update.message.reply_text(format_price_string(info), parse_mode="Markdown")
 
 
@@ -513,15 +526,15 @@ async def chart_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     b = getattr(engine, "broker", None)
 
     if any(x in raw for x in ("btc", "bitcoin", "crypto")):
-        chart_data = get_mt5_live_chart("BTCUSD", broker=b)
+        chart_data = await asyncio.to_thread(get_mt5_live_chart, "BTCUSD", broker=b)
         text = format_mt5_chart_card(chart_data)
         kb = build_chart_keyboard("btc")
     elif any(x in raw for x in ("gold", "xau", "xauusd")):
-        chart_data = get_mt5_live_chart("XAUUSD", broker=b)
+        chart_data = await asyncio.to_thread(get_mt5_live_chart, "XAUUSD", broker=b)
         text = format_mt5_chart_card(chart_data)
         kb = build_chart_keyboard("gold")
     else:
-        text = format_combined_mt5_chart_dashboard(broker=b)
+        text = await asyncio.to_thread(format_combined_mt5_chart_dashboard, broker=b)
         kb = build_chart_keyboard("both")
 
     try:
@@ -540,12 +553,10 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⏳ Evaluating **{sym}** (lev `{risk_mgr.get_leverage():.0f}x`)...",
             parse_mode="Markdown",
         )
-        res = run_signal(
-            sym,
-            equity=float(getattr(risk_mgr.state, "equity", None) or config.INITIAL_EQUITY),
-            leverage=float(risk_mgr.get_leverage()),
-            source=config.DEFAULT_DATA_SOURCE,
-        )
+        eq = float(getattr(risk_mgr.state, "equity", None) or getattr(engine.broker, "balance", config.INITIAL_EQUITY) or config.INITIAL_EQUITY)
+        lev = float(risk_mgr.get_leverage())
+        src = config.DEFAULT_DATA_SOURCE
+        res = await asyncio.to_thread(run_signal, sym, equity=eq, leverage=lev, source=src)
         msg = format_signal_message(res)
         try:
             await update.message.reply_text(msg, parse_mode="Markdown")
@@ -1235,10 +1246,10 @@ async def matrix_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         from mtf_matrix import render_telegram_heatmap, render_telegram_multi_matrix
         arg = (ctx.args[0] if ctx.args else "").strip().upper()
         if not arg or arg in ("ALL", "BOTH", "MULTI"):
-            msg = render_telegram_multi_matrix(["XAUUSD", "BTCUSDT"])
+            msg = await asyncio.to_thread(render_telegram_multi_matrix, ["XAUUSD", "BTCUSDT"])
         else:
             sym = "BTCUSDT" if arg in ("BTC", "BTCUSD", "BITCOIN") else ("XAUUSD" if arg in ("XAU", "GOLD") else arg)
-            msg = render_telegram_heatmap(sym)
+            msg = await asyncio.to_thread(render_telegram_heatmap, sym)
         await safe_reply(update, msg, parse_mode="Markdown")
     except Exception as e:
         await safe_reply(update, f"⚠️ Heatmap matrix error: {e}", parse_mode=None)
@@ -1367,36 +1378,44 @@ async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             b = getattr(engine, "broker", None)
             if any(w in query_lower for w in ["btc", "bitcoin", "crypto"]):
-                card = format_mt5_chart_card(get_mt5_live_chart("BTCUSD", broker=b))
+                chart_data = await asyncio.to_thread(get_mt5_live_chart, "BTCUSD", broker=b)
+                card = format_mt5_chart_card(chart_data)
                 kb = build_chart_keyboard("btc")
                 await update.message.reply_text(card, parse_mode="Markdown", reply_markup=kb)
                 return
             elif any(w in query_lower for w in ["gold", "xau", "xauusd"]):
-                card = format_mt5_chart_card(get_mt5_live_chart("XAUUSD", broker=b))
+                chart_data = await asyncio.to_thread(get_mt5_live_chart, "XAUUSD", broker=b)
+                card = format_mt5_chart_card(chart_data)
                 kb = build_chart_keyboard("gold")
                 await update.message.reply_text(card, parse_mode="Markdown", reply_markup=kb)
                 return
             elif "both" in query_lower or query_lower.strip() in ("chart", "charts"):
-                card = format_combined_mt5_chart_dashboard(broker=b)
+                card = await asyncio.to_thread(format_combined_mt5_chart_dashboard, broker=b)
                 kb = build_chart_keyboard("both")
                 await update.message.reply_text(card, parse_mode="Markdown", reply_markup=kb)
                 return
         except Exception as _ce:
             logger.debug("Chat chart shortcut notice: %s", _ce)
 
+    if hasattr(ctx, "bot") and hasattr(ctx.bot, "send_chat_action"):
+        try:
+            await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        except Exception:
+            pass
+
     market_context = ""
     try:
         from mt5_chart import get_mt5_combined_market_context
-        market_context = get_mt5_combined_market_context(broker=getattr(engine, "broker", None))
+        market_context = await asyncio.to_thread(get_mt5_combined_market_context, broker=getattr(engine, "broker", None))
     except Exception:
         try:
-            info = get_price_info(config.DEFAULT_SYMBOL)
+            info = await asyncio.to_thread(get_price_info, config.DEFAULT_SYMBOL)
             if info.get("ok"):
                 market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
         except Exception:
             pass
 
-    reply = gemini.ask(chat_id=update.effective_chat.id, user_text=query, market_context=market_context)
+    reply = await asyncio.to_thread(gemini.ask, chat_id=update.effective_chat.id, user_text=query, market_context=market_context)
     try:
         await update.message.reply_text(reply, parse_mode="Markdown")
     except Exception:
@@ -1706,6 +1725,10 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
                 parse_mode="Markdown"
             )
     if data.startswith("chart:"):
+        try:
+            await query.answer()
+        except Exception:
+            pass
         from mt5_chart import (
             get_mt5_live_chart,
             format_mt5_chart_card,
@@ -1715,24 +1738,28 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
         b = getattr(engine, "broker", None)
         active_view = "both"
         if data == "chart:btc":
-            text = format_mt5_chart_card(get_mt5_live_chart("BTCUSD", broker=b))
+            chart_data = await asyncio.to_thread(get_mt5_live_chart, "BTCUSD", broker=b)
+            text = format_mt5_chart_card(chart_data)
             active_view = "btc"
         elif data == "chart:gold":
-            text = format_mt5_chart_card(get_mt5_live_chart("XAUUSD", broker=b))
+            chart_data = await asyncio.to_thread(get_mt5_live_chart, "XAUUSD", broker=b)
+            text = format_mt5_chart_card(chart_data)
             active_view = "gold"
         elif data.startswith("chart:refresh:"):
             req_view = data.split(":", 2)[2]
             if req_view == "btc":
-                text = format_mt5_chart_card(get_mt5_live_chart("BTCUSD", broker=b))
+                chart_data = await asyncio.to_thread(get_mt5_live_chart, "BTCUSD", broker=b)
+                text = format_mt5_chart_card(chart_data)
                 active_view = "btc"
             elif req_view == "gold":
-                text = format_mt5_chart_card(get_mt5_live_chart("XAUUSD", broker=b))
+                chart_data = await asyncio.to_thread(get_mt5_live_chart, "XAUUSD", broker=b)
+                text = format_mt5_chart_card(chart_data)
                 active_view = "gold"
             else:
-                text = format_combined_mt5_chart_dashboard(broker=b)
+                text = await asyncio.to_thread(format_combined_mt5_chart_dashboard, broker=b)
                 active_view = "both"
         else:
-            text = format_combined_mt5_chart_dashboard(broker=b)
+            text = await asyncio.to_thread(format_combined_mt5_chart_dashboard, broker=b)
             active_view = "both"
 
         markup = build_chart_keyboard(active_view)
@@ -2924,6 +2951,32 @@ async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     mgr = get_account_manager()
 
     if args:
+        first_arg = str(args[0]).strip().lower()
+        if first_arg in ("sync", "refresh", "pull", "fetch"):
+            if b and hasattr(b, "get_account_info"):
+                try:
+                    info = await asyncio.to_thread(b.get_account_info)
+                    bal = float(getattr(info, "balance", getattr(b, "balance", 0.0)))
+                    eq = float(getattr(info, "equity", getattr(b, "equity", bal)))
+                    if hasattr(risk_mgr, "state") and hasattr(risk_mgr.state, "equity"):
+                        risk_mgr.state.equity = eq
+                        risk_mgr.state.peak_equity = max(risk_mgr.state.peak_equity, eq)
+                    if hasattr(risk_mgr, "equity"):
+                        risk_mgr.equity = eq
+                    act = mgr.get_active_account()
+                    acc_tag = f"#{act.login}" if act and act.login else (f"#{info.login}" if hasattr(info, "login") and info.login else "Active")
+                    await update.message.reply_text(
+                        f"🟢 **MT5 Balance Synchronized**\n"
+                        f"• **Account:** `{acc_tag}` | **Server:** `{getattr(info, 'server', 'MT5')}`\n"
+                        f"• **Live Balance:** `${bal:,.2f}`\n"
+                        f"• **Live Equity:** `${eq:,.2f}`\n"
+                        f"• **Margin:** `${getattr(info, 'margin', 0.0):,.2f}` | **Free Margin:** `${getattr(info, 'free_margin', 0.0):,.2f}`",
+                        parse_mode="Markdown",
+                    )
+                    return
+                except Exception as e:
+                    logger.debug("balance sync error: %s", e)
+
         try:
             new_bal = float(args[0])
             if new_bal <= 0:
@@ -2959,21 +3012,33 @@ async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
-    bal = float(getattr(b, "balance", 0.0) or 0.0) if b else 0.0
-    eq = float(getattr(b, "equity", bal) or bal) if b else bal
-    mg = float(getattr(b, "margin", 0.0) or 0.0) if b else 0.0
-    free_m = float(getattr(b, "free_margin", eq) or eq) if b else eq
-    lev = float(getattr(b, "leverage", 20.0) or 20.0) if b else 20.0
+    # Query latest account info from broker if available
+    acc_info = None
+    if b and hasattr(b, "get_account_info"):
+        try:
+            acc_info = await asyncio.to_thread(b.get_account_info)
+        except Exception:
+            pass
+
+    bal = float(getattr(acc_info, "balance", getattr(b, "balance", 0.0)) or 0.0) if b else 0.0
+    eq = float(getattr(acc_info, "equity", getattr(b, "equity", bal)) or bal) if b else bal
+    mg = float(getattr(acc_info, "margin", getattr(b, "margin", 0.0)) or 0.0) if b else 0.0
+    free_m = float(getattr(acc_info, "free_margin", getattr(b, "free_margin", eq)) or eq) if b else eq
+    lev = float(getattr(acc_info, "leverage", getattr(b, "leverage", 20.0)) or 20.0) if b else 20.0
+    acc_login = getattr(acc_info, "login", getattr(b, "login", 0)) or "Active"
+    acc_server = getattr(acc_info, "server", getattr(b, "server", "MT5 Terminal")) or "MT5 Terminal"
 
     await update.message.reply_text(
         "⚠️ **Paper Trading Wallet Removed**\n"
-        "Paper trading and manual wallet balance simulation have been removed.\n"
+        "Paper trading and manual wallet simulation have been removed.\n"
         "MetaTrader 5 Live is the sole exclusive broker.\n\n"
+        "🏦 **MetaTrader 5 Live Account Balance**\n"
+        f"• **Account:** `#{acc_login}` | **Server:** `{acc_server}`\n"
         f"• **Live Balance:** `${bal:,.2f}` | **Equity:** `${eq:,.2f}`\n"
         f"• **Margin:** `${mg:,.2f}` | **Free Margin:** `${free_m:,.2f}` | **Leverage:** `{lev:.0f}x`\n\n"
-        "• To update live balance/equity: `/balance <amount>` or `/mt5 balance <amount>`\n"
-        "• Use `/mt5 status` or `/live` to view your live MT5 account telemetry.\n"
-        "• Use `/mt5 accounts` to manage your live accounts.",
+        "• To update balance manually: `/balance <amount>`\n"
+        "• To refresh from terminal: `/balance sync`\n"
+        "• Use `/mt5 status` or `/live` to view detailed telemetry.",
         parse_mode="Markdown",
     )
 
@@ -3470,14 +3535,25 @@ async def chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text or ""
     market_context = ""
     try:
-        info = get_price_info(config.DEFAULT_SYMBOL)
-        if info.get("ok"):
-            market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+        from mt5_chart import get_mt5_combined_market_context
+        market_context = await asyncio.to_thread(get_mt5_combined_market_context, broker=getattr(engine, "broker", None))
     except Exception:
-        pass
-    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
-    reply = gemini.ask(chat_id=chat_id, user_text=user_text, market_context=market_context)
-    await update.message.reply_text(reply, parse_mode="Markdown")
+        try:
+            info = await asyncio.to_thread(get_price_info, config.DEFAULT_SYMBOL)
+            if info.get("ok"):
+                market_context = f"{config.DEFAULT_SYMBOL} mark={info.get('mark')} change={info.get('change_pct')}%"
+        except Exception:
+            pass
+    if hasattr(ctx, "bot") and hasattr(ctx.bot, "send_chat_action"):
+        try:
+            await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception:
+            pass
+    reply = await asyncio.to_thread(gemini.ask, chat_id=chat_id, user_text=user_text, market_context=market_context)
+    try:
+        await update.message.reply_text(reply, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(reply.replace("*", "").replace("`", ""))
 
 
 async def live_monitoring_worker(app):
