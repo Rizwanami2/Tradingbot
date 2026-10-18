@@ -17,6 +17,10 @@ fi
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 msg="${1:-Auto commit after task completion}"
 
+# Automatically remove any README files if generated
+find . -maxdepth 3 -iname "*readme*" -not -path "*/.git/*" -exec rm -f {} + 2>/dev/null || true
+git rm --cached -r --ignore-unmatch "*README*" "*readme*" 2>/dev/null || true
+
 # Stage all changes
 git add .
 

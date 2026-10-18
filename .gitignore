@@ -36,3 +36,6 @@ attachments/
 .runtime/
 virtual_stops_state.json
 execution_analytics.json
+
+# Never track README files
+[Rr][Ee][Aa][Dd][Mm][Ee]*
