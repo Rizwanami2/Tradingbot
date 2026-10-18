@@ -192,6 +192,9 @@ def _write_runtime_status() -> None:
             "active_positions": int(summary.get("active_positions_count", 0)),
             "pending_setups": int(summary.get("pending_setups_count", 0)),
             "risk_mode": str(state.mode),
+            "slots_mode": getattr(engine, "slots_mode", "auto"),
+            "max_open_trades": int(getattr(engine, "max_open_trades", 6) or 6),
+            "min_profit_usd": float(getattr(engine, "min_profit_usd", 0.50) or 0.50),
         }
         StatusStore(config.STATUS_FILE).write(snapshot)
     except Exception as exc:
@@ -318,11 +321,12 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
             "• `/quality [SYM]` — Comprehensive signal quality score & breakdown"
         )
-    elif cat in ("execution", "orders", "trades", "pos", "positions"):
+    elif cat in ("execution", "orders", "trades", "pos", "positions", "slots", "slot"):
         text = (
-            "⚡ **Execution & Positions (Active Limit: 6):**\n"
-            "• `/positions` — Open active trades, pending setups & real-time PnL\n"
-            "• `/autotrade on|off` — Multi-symbol autotrading (up to 6 concurrent active trades)\n"
+            "⚡ **Execution & Positions (Active Limit: Max 6):**\n"
+            "• `/positions [auto|manual <1-6>]` — Open active trades, pending setups & real-time PnL\n"
+            "• `/slots [auto|manual <1-6>|<1-6>|minprofit]` — Set manual / auto slots (1-6) & $0.50 min profit floor\n"
+            "• `/autotrade on|off` — Multi-symbol autotrading (min $0.50 profit guaranteed per trade)\n"
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
             "• `/closed` — Recently closed trades history & realized PnL\n"
@@ -1134,12 +1138,27 @@ async def lot_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         args = [a.lower() for a in (ctx.args or [])]
-        if args and args[0] in ("sync", "refresh", "reconcile", "wallet", "reload"):
-            if hasattr(engine, "reconcile_positions"):
-                try:
-                    engine.reconcile_positions()
-                except Exception as rx:
-                    logger.debug("[positions_command] reconcile error: %s", rx)
+        if args:
+            if args[0] in ("auto", "dynamic", "adaptive"):
+                ok, msg = engine.set_slots_mode("auto")
+                await update.message.reply_text(f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+                return
+            elif args[0] in ("manual", "man", "fixed"):
+                cnt = int(args[1]) if len(args) > 1 and args[1].isdigit() else int(getattr(engine, "manual_slots", 6))
+                ok, msg = engine.set_slots_mode("manual", cnt)
+                await update.message.reply_text(f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+                return
+            elif args[0].isdigit():
+                cnt = int(args[0])
+                ok, msg = engine.set_slots_mode("manual", cnt)
+                await update.message.reply_text(f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+                return
+            elif args[0] in ("sync", "refresh", "reconcile", "wallet", "reload"):
+                if hasattr(engine, "reconcile_positions"):
+                    try:
+                        engine.reconcile_positions()
+                    except Exception as rx:
+                        logger.debug("[positions_command] reconcile error: %s", rx)
 
         if hasattr(engine, "format_positions_detail"):
             msg = engine.format_positions_detail()
@@ -1152,6 +1171,59 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg.replace("*", "").replace("`", ""))
     except Exception as e:
         await update.message.reply_text(f"Positions error: {e}")
+
+
+async def slots_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Manage active position slots: /slots, /slots auto, /slots manual <1-6>, /slots <1-6>, /slots minprofit <usd>"""
+    try:
+        args = [a.lower() for a in (ctx.args or [])]
+        if not args:
+            mode = getattr(engine, "slots_mode", "auto")
+            cur_slots = int(getattr(engine, "max_open_trades", 6))
+            free = engine.slots_available()
+            min_p = float(getattr(engine, "min_profit_usd", 0.50))
+            msg = (
+                f"🎰 **Active Positions Slots Telemetry**\n"
+                f"• **Current Limit:** `{cur_slots}/6 positions max`\n"
+                f"• **Mode:** `{mode.upper()}` (Manual / Automatic)\n"
+                f"• **Open Now:** `{len(engine.active_positions)} active | {free} slots free`\n"
+                f"• **Guaranteed Profit Floor:** `+${min_p:.2f} USD` minimum on every trade\n\n"
+                f"**Commands:**\n"
+                f"• `/slots auto` — dynamic allocation (1..6) based on equity & margin\n"
+                f"• `/slots manual <1-6>` — set fixed slot count (e.g. `/slots 3` or `/slots manual 4`)\n"
+                f"• `/slots minprofit <0.50>` — set minimum guaranteed profit floor per trade"
+            )
+            await update.message.reply_text(msg, parse_mode="Markdown")
+            return
+
+        sub = args[0]
+        if sub in ("auto", "dynamic", "adaptive"):
+            ok, msg = engine.set_slots_mode("auto")
+            await update.message.reply_text(f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+        elif sub in ("manual", "man", "fixed"):
+            cnt = int(args[1]) if len(args) > 1 and args[1].isdigit() else int(getattr(engine, "manual_slots", 6))
+            ok, msg = engine.set_slots_mode("manual", cnt)
+            await update.message.reply_text(f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+        elif sub.isdigit():
+            cnt = int(sub)
+            ok, msg = engine.set_slots_mode("manual", cnt)
+            await update.message.reply_text(f"✅ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
+        elif sub in ("minprofit", "profit", "min"):
+            if len(args) > 1:
+                try:
+                    val = float(args[1])
+                    engine.min_profit_usd = max(0.10, val)
+                    if hasattr(config, "set_min_trade_profit"):
+                        config.set_min_trade_profit(val)
+                    await update.message.reply_text(f"✅ Minimum profit floor set to `+${val:.2f} USD` per trade.", parse_mode="Markdown")
+                except Exception as ex:
+                    await update.message.reply_text(f"⚠️ Invalid amount: {ex}")
+            else:
+                await update.message.reply_text(f"Minimum profit guarantee is currently `+${getattr(engine, 'min_profit_usd', 0.50):.2f} USD`.")
+        else:
+            await update.message.reply_text("Usage: `/slots [auto | manual <1-6> | <1-6> | minprofit <usd>]`", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Slots error: {e}")
 
 
 async def close_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3605,11 +3677,49 @@ def run_cli_interactive():
                     except ValueError:
                         pass
                 print(reset_risk_limits(scope=scope, restart_autotrade=is_restart, new_equity=new_eq))
-        elif name == "positions":
-            if hasattr(engine, "format_positions_detail"):
-                print(engine.format_positions_detail())
+        elif name in ("positions", "slots", "maxpositions", "slot"):
+            if len(parts) > 1:
+                arg1 = parts[1].lower().strip()
+                if arg1 in ("auto", "dynamic", "adaptive"):
+                    ok, msg = engine.set_slots_mode("auto")
+                    print(msg)
+                elif arg1 in ("manual", "man", "fixed"):
+                    cnt = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else int(getattr(engine, "manual_slots", 6))
+                    ok, msg = engine.set_slots_mode("manual", cnt)
+                    print(msg)
+                elif arg1.isdigit():
+                    cnt = int(arg1)
+                    ok, msg = engine.set_slots_mode("manual", cnt)
+                    print(msg)
+                elif arg1 in ("sync", "refresh", "reconcile", "wallet"):
+                    if hasattr(engine, "reconcile_positions"):
+                        engine.reconcile_positions()
+                    if hasattr(engine, "format_positions_detail"):
+                        print(engine.format_positions_detail())
+                    else:
+                        print(engine.get_portfolio_summary())
+                elif arg1 in ("minprofit", "profit", "min"):
+                    if len(parts) > 2:
+                        try:
+                            val = float(parts[2])
+                            engine.min_profit_usd = max(0.10, val)
+                            if hasattr(config, "set_min_trade_profit"):
+                                config.set_min_trade_profit(val)
+                            print(f"Minimum profit guarantee set to +${val:.2f} USD per trade.")
+                        except Exception as e:
+                            print(f"Error: {e}")
+                    else:
+                        print(f"Current minimum profit guarantee: +${getattr(engine, 'min_profit_usd', 0.50):.2f} USD per trade.")
+                else:
+                    if hasattr(engine, "format_positions_detail"):
+                        print(engine.format_positions_detail())
+                    else:
+                        print(engine.get_portfolio_summary())
             else:
-                print(engine.get_portfolio_summary())
+                if hasattr(engine, "format_positions_detail"):
+                    print(engine.format_positions_detail())
+                else:
+                    print(engine.get_portfolio_summary())
         elif name in ("watchlist", "wl", "symbols", "assets"):
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg in ("btc", "bitcoin", "btcusdt"):
@@ -4364,11 +4474,11 @@ def run_cli_interactive():
             print(f"⚠️ Native live broker '{name.upper()}' has been removed. MetaTrader 5 Live is the sole exclusive broker.")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], chart [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
-                "⚡ Execution: positions, autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
+                "⚡ Execution: positions, slots [auto|manual <1-6>|minprofit], autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
                 "🛡️ Risk: status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], replay [ID], export, setups, abooks, heal\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, relearn [SYM]\n"
@@ -4746,6 +4856,7 @@ def main():
 
     # Execution & Trades
     app.add_handler(CommandHandler("positions", positions_command))
+    app.add_handler(CommandHandler(["slots", "maxpositions", "slot"], slots_command))
     app.add_handler(CommandHandler("autotrade", autotrade_command))
     app.add_handler(CommandHandler(["watchlist", "wl", "symbols", "assets"], watchlist_command))
     app.add_handler(CommandHandler(["close", "closeall"], close_command))

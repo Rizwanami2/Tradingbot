@@ -99,6 +99,13 @@ async def live_monitoring_worker(
         any_data = False
         autotrade_active = bool(autotrade_active_getter())
 
+        # Update dynamic active positions limit if in auto slots mode
+        if hasattr(engine, "update_auto_slots") and getattr(engine, "slots_mode", "auto") == "auto":
+            try:
+                engine.update_auto_slots()
+            except Exception:
+                pass
+
         max_open = int(getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6)) or 6)
         current_profile_name = getattr(config, "CURRENT_PROFILE", "scalp")
         try:

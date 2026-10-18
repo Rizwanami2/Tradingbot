@@ -227,7 +227,10 @@ def apply_profile(
     if engine is not None:
         engine.scalp_mode = getattr(p, "is_scalp", False)
         engine.fast_market_fill = getattr(p, "fast_market_fill", False)
-        engine.max_open_trades = getattr(p, "max_open_trades", 6)
+        if getattr(engine, "slots_mode", "auto") == "manual":
+            engine.max_open_trades = min(6, max(1, getattr(engine, "manual_slots", 6)))
+        else:
+            engine.max_open_trades = min(6, max(1, getattr(p, "max_open_trades", 6)))
         engine.max_positions_per_symbol = getattr(p, "scalp_max_positions_per_symbol", 3)
         if getattr(p, "is_scalp", False):
             engine.scalp_tp_usd = getattr(p, "scalp_tp_usd", 2.50)
