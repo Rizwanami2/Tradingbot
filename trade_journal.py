@@ -61,6 +61,12 @@ class TradeJournal:
         self.open: Dict[str, JournalEntry] = {}
         self._load()
 
+    def reload(self):
+        self.entries = []
+        self.open = {}
+        self._load()
+        return self
+
     def _load(self):
         if os.path.exists(self.path):
             try:
@@ -144,7 +150,18 @@ class TradeJournal:
                     e = self.open.pop(k)
                     break
         if e is None:
-            return None
+            # If not in open dict, create entry so trade is never dropped
+            e = JournalEntry(
+                id=str(trade_id),
+                symbol=str(trade_id).upper(),
+                direction="LONG" if (pnl is not None and pnl >= 0) else "SHORT",
+                entry=float(exit_price),
+                stop=float(exit_price),
+                tp1=float(exit_price),
+                size=1.0,
+                risk_amount=abs(float(pnl)) if pnl else 10.0,
+                opened_at=datetime.now(timezone.utc).isoformat(),
+            )
 
         exit_price = float(exit_price)
         if r_multiple is None:

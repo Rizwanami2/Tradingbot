@@ -347,6 +347,33 @@ async def live_monitoring_worker(
                             if not ok_ai:
                                 continue
 
+                            # Multi-Timeframe Trend & Volatility Confluence Matrix check
+                            try:
+                                from mtf_matrix import check_mtf_confluence
+                                mtf_ok, mtf_reason, mtf_mult = check_mtf_confluence(symbol, dname)
+                                if not mtf_ok:
+                                    logger.info("Autotrade %s: vetoed by MTF Confluence Matrix — %s", symbol, mtf_reason)
+                                    continue
+                                if mtf_mult > 1.0 and "score" in sig:
+                                    sig["score"] = float(sig["score"]) * mtf_mult
+                            except Exception as _mtf_err:
+                                logger.debug("Autotrade MTF check note: %s", _mtf_err)
+
+                            # Signal Quality Filter (candle shape, wicks, volume profile)
+                            try:
+                                from signal_quality import evaluate_signal_quality
+                                sq_res = evaluate_signal_quality(
+                                    df1,
+                                    direction=dname,
+                                    spread=0.0,
+                                    expected_rr=float(sig.get("rr", 2.0) or 2.0),
+                                )
+                                if not sq_res.allowed:
+                                    logger.info("Autotrade %s: vetoed by Signal Quality — %s", symbol, ", ".join(sq_res.reasons))
+                                    continue
+                            except Exception as _sq_err:
+                                logger.debug("Autotrade signal quality note: %s", _sq_err)
+
                             try:
                                 order = engine.register_setup(sig, reason=sig.get("reason", ""))
                                 _ai_on_open(symbol, str(getattr(order, "direction", "") or dname), meta={"scorecard": sig.get("ai_scorecard")})

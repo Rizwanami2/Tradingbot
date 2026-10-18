@@ -461,3 +461,41 @@ def _render_score_bar(score: float, width: int = 10) -> str:
         return "🟥" * filled + "⬜" * (width - filled)
     else:
         return "🟨" * filled + "⬜" * (width - filled)
+
+
+def check_mtf_confluence(
+    symbol: str,
+    direction: str,
+    force_refresh: bool = False,
+) -> Tuple[bool, str, float]:
+    """
+    Evaluate multi-timeframe matrix confluence for an autotrade signal.
+    Returns (allowed, reason, score_mult):
+    - allowed: False if fighting severe MTF counter-trend
+    - reason: explanation of MTF structure
+    - score_mult: 1.20x for strong alignment, 1.0x normal
+    """
+    snap = analyze_symbol_mtf(symbol, force_refresh=force_refresh)
+    d = direction.upper()
+    is_long = "BUY" in d or "LONG" in d
+    is_short = "SELL" in d or "SHORT" in d
+
+    if is_long:
+        if snap.overall_score <= -60.0:
+            return False, f"Severe MTF bearish confluence ({snap.overall_score:+.1f}/100)", 0.0
+        if "DIVERGENT" in snap.ltf_htf_alignment and snap.overall_score <= -30.0:
+            return False, f"Divergent MTF HTF resistance ({snap.overall_score:+.1f}/100)", 0.0
+        if snap.overall_score >= 40.0 and "ALIGNED" in snap.ltf_htf_alignment:
+            return True, f"Strong bullish MTF confluence ({snap.overall_score:+.1f}/100)", 1.20
+        return True, f"MTF structure OK ({snap.overall_score:+.1f}/100)", 1.0
+
+    if is_short:
+        if snap.overall_score >= 60.0:
+            return False, f"Severe MTF bullish confluence ({snap.overall_score:+.1f}/100)", 0.0
+        if "DIVERGENT" in snap.ltf_htf_alignment and snap.overall_score >= 30.0:
+            return False, f"Divergent MTF HTF support ({snap.overall_score:+.1f}/100)", 0.0
+        if snap.overall_score <= -40.0 and "ALIGNED" in snap.ltf_htf_alignment:
+            return True, f"Strong bearish MTF confluence ({snap.overall_score:+.1f}/100)", 1.20
+        return True, f"MTF structure OK ({snap.overall_score:+.1f}/100)", 1.0
+
+    return True, "Neutral MTF confluence", 1.0

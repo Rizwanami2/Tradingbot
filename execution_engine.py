@@ -585,7 +585,7 @@ class ExecutionEngine:
                 exit_price=exit_px,
                 r_multiple=float(r_mult),
                 pnl=float(pos.realized_pnl),
-                auto_learn=False,
+                auto_learn=True,
             )
         except Exception:
             pass
@@ -979,6 +979,27 @@ class ExecutionEngine:
                         )
                     except Exception as _e_vs:
                         logger.debug("Failed registering virtual stop: %s", _e_vs)
+
+                    # 3. Record open trade in TradeJournal for analytics, board, and learning
+                    try:
+                        from trade_journal import TradeJournal
+                        journal = TradeJournal()
+                        journal.record_open(
+                            symbol=setup.symbol,
+                            direction=setup.direction,
+                            entry=exec_price,
+                            stop=setup.stop_loss,
+                            tp1=setup.tp1,
+                            size=setup.lots,
+                            risk_amount=abs(exec_price - setup.stop_loss) * setup.size,
+                            agents=getattr(setup, "agents", []),
+                            regime=getattr(setup, "regime", ""),
+                            score=getattr(setup, "score", 0.0),
+                            conviction=getattr(setup, "conviction", 0.6),
+                            trade_id=str(setup.id),
+                        )
+                    except Exception as _e_tj:
+                        logger.debug("Failed recording open in TradeJournal: %s", _e_tj)
 
                     is_delta = "delta" in type(self.broker).__name__.lower()
                     status_title = "DELTA LIVE TRADE CONFIRMED" if is_delta else "MT5 LIVE TRADE CONFIRMED"
