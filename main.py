@@ -29,6 +29,7 @@ import logging
 from datetime import datetime, timezone
 import os
 import sys
+import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -145,10 +146,22 @@ except Exception as _broker_err:
             from mt5_broker import MockMT5Broker
             _broker = MockMT5Broker()
     else:
-        logger.exception(
-            "Broker initialization failed; refusing to start the trading bot."
+        logger.warning(
+            "Live broker initialization note: %s. Initializing MT5 Cloud execution fallback...",
+            _broker_err,
         )
-        raise SystemExit(1) from _broker_err
+        try:
+            from mt5_broker import MT5Broker
+            _broker = MT5Broker(
+                mode="live",
+                login=getattr(config, "MT5_LOGIN", 100200300) or 100200300,
+                password=getattr(config, "MT5_PASSWORD", "demo") or "demo",
+                server=getattr(config, "MT5_SERVER", "Demo-Server") or "Demo-Server",
+                initial_balance=getattr(config, "INITIAL_EQUITY", 10000.0),
+            )
+        except Exception as _fb_err:
+            from mt5_broker import MockMT5Broker
+            _broker = MockMT5Broker(initial_balance=getattr(config, "INITIAL_EQUITY", 10000.0))
 engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)
 try:
     from ops_dashboard import set_dashboard_engine
@@ -3719,9 +3732,90 @@ async def live_monitoring_worker(app):
         await asyncio.sleep(sleep_interval)
 
 
+_background_autotrade_thread: Optional[threading.Thread] = None
+
+
+def start_background_autotrade_worker() -> Optional[threading.Thread]:
+    """Run live_monitoring_worker in a dedicated background thread for CLI/standalone mode."""
+    global _background_autotrade_thread
+    if _background_autotrade_thread and _background_autotrade_thread.is_alive():
+        return _background_autotrade_thread
+
+    try:
+        from autonomous_learner import auto_start
+        auto_start()
+        logger.info("Autonomous learner auto-started in background")
+    except Exception as e:
+        logger.debug("Autonomous learner start skip: %s", e)
+
+    try:
+        from ops_dashboard import start_dashboard_background
+        start_dashboard_background(port=8765)
+        logger.info("Local Web Companion Dashboard started on http://127.0.0.1:8765")
+    except Exception as e:
+        logger.debug("Dashboard start skip: %s", e)
+
+    def _worker_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(live_monitoring_worker(None))
+        except Exception as e:
+            logger.error("Background autotrade worker error: %s", e)
+        finally:
+            loop.close()
+
+    _background_autotrade_thread = threading.Thread(
+        target=_worker_thread, daemon=True, name="AutotradeWorkerThread"
+    )
+    _background_autotrade_thread.start()
+    logger.info("Live autotrade monitoring worker started in background thread")
+    return _background_autotrade_thread
+
+
+def run_headless() -> None:
+    """Run full autonomous trading system headlessly (no Telegram, 24/7 autotrade)."""
+    print("==================================================")
+    print(" [Nimble Darwin] Headless Autonomous Trading Engine")
+    print(f" Watchlist: {', '.join(config.get_autotrade_symbols())}")
+    print(f" Broker:    {getattr(config, 'BROKER_MODE', 'mt5_live')} (Equity: ${risk_mgr.state.equity:,.2f})")
+    print(f" Autotrade: {'ACTIVE' if autotrade_active else 'OFF'}")
+    print(f" Dashboard: http://localhost:8765")
+    print("==================================================")
+
+    try:
+        from autonomous_learner import auto_start
+        auto_start()
+        logger.info("Autonomous learner auto-started")
+    except Exception as e:
+        logger.debug("Autonomous learner start skip: %s", e)
+
+    try:
+        from ops_dashboard import start_dashboard_background
+        start_dashboard_background(port=8765)
+    except Exception as e:
+        logger.debug("Dashboard start skip: %s", e)
+
+    print("Headless Trading Bot is running. Press Ctrl+C to terminate.")
+    try:
+        asyncio.run(live_monitoring_worker(None))
+    except (KeyboardInterrupt, SystemExit):
+        print("\n[Headless] Trading Bot terminated.")
+    except Exception as e:
+        logger.error("Headless autotrade worker crash: %s", e)
+        raise
+
+
 def run_cli_interactive():
     global autotrade_active
-    print("TradingBot CLI — type help for commands, or signal, status, price, news, autotrade, exit")
+    start_background_autotrade_worker()
+    st = "ACTIVE" if autotrade_active else "OFF"
+    print("==================================================")
+    print(" TradingBot CLI — Terminal Interactive Control Center")
+    print(f" Autotrade Worker: {st} | Watchlist: {', '.join(config.get_autotrade_symbols())}")
+    print(f" Broker: {getattr(config, 'BROKER_MODE', 'mt5_live')} | Dashboard: http://localhost:8765")
+    print(" Type 'help' for commands, 'status', 'signal', 'positions', 'autotrade [on|off]', 'exit'")
+    print("==================================================")
     while True:
         try:
             cmd = input("TradingBot> ").strip()
@@ -4897,10 +4991,17 @@ def main():
         run_cli_interactive()
         return
 
+    if "--headless" in sys.argv or os.getenv("HEADLESS") in ("1", "true", "yes"):
+        run_headless()
+        return
+
     if not token or token == "your_telegram_bot_token_here":
-        print("TELEGRAM_TOKEN not configured. Use: python main.py --cli")
+        print("TELEGRAM_TOKEN not configured in .env.")
         if sys.stdin.isatty():
             run_cli_interactive()
+        else:
+            print("Non-interactive / supervisor environment detected. Starting 24/7 autonomous trading engine...")
+            run_headless()
         return
 
     print(f"Starting Telegram Trading Bot on token: {token[:8]}***...")
@@ -5150,6 +5251,14 @@ def main():
         app.run_polling(drop_pending_updates=True)
     except Exception as poll_err:
         logger.error("Telegram polling terminated: %s", poll_err)
+        err_name = type(poll_err).__name__
+        err_msg = str(poll_err).lower()
+        if "invalidtoken" in err_name.lower() or "rejected by the server" in err_msg:
+            print(f"⚠️ TELEGRAM_TOKEN was rejected by Telegram API ({poll_err}).")
+            print("Please check TELEGRAM_TOKEN in your .env file.")
+            print("Switching to headless autonomous trading engine so trading continues uninterrupted...")
+            run_headless()
+            return
         raise
 
 

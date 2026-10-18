@@ -63,7 +63,14 @@ def run_all(args):
     t.start()
 
     print("[Launcher] Starting Telegram Bot on main thread...")
-    main.main()
+    try:
+        main.main()
+    finally:
+        if t.is_alive():
+            try:
+                t.join()
+            except (KeyboardInterrupt, SystemExit):
+                pass
 
 
 def main_launcher():

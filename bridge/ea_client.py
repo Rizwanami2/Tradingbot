@@ -74,9 +74,16 @@ def send_command(
         "ts": time.time(),
     }
     # No spaces after ':' so older EA parsers also work
-    tmp = CMD_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cmd, separators=(",", ":")), encoding="utf-8")
-    tmp.replace(CMD_FILE)
+    CMD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        tmp = CMD_FILE.with_name(f"{CMD_FILE.stem}_{os.getpid()}_{int(time.time()*1000)}.tmp")
+        tmp.write_text(json.dumps(cmd, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(CMD_FILE)
+    except Exception:
+        try:
+            CMD_FILE.write_text(json.dumps(cmd, separators=(",", ":")), encoding="utf-8")
+        except Exception as write_err:
+            return {"ok": False, "error": f"EA write error: {write_err}"}
 
     effective_timeout = float(timeout) if timeout is not None else TIMEOUT
     start = time.time()

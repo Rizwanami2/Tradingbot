@@ -123,23 +123,6 @@ def main() -> None:
     for noisy in ("httpx", "httpcore", "telegram", "telegram.ext", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    for name in (
-        "restore_production",
-        "wire_restore_backtest",
-        "wire_production_fixes",
-        "wire_strategy_fixes",
-        "wire_multitrade",
-        "wire_gautam",
-        "wire_mean_reversion",
-        "wire_micro_equity",
-        "wire_signal_fix",
-        "wire_railway_fix",
-        "wire_positions_scalp",
-        "wire_history_2y",
-        "wire_polish",
-    ):
-        _safe_wire(name)
-
     try:
         from ai_historical_predictor import patch_into_indicators_module
         patch_into_indicators_module()
@@ -147,34 +130,6 @@ def main() -> None:
         print("[run_bot] ai_historical:", e)
 
     main_py = ROOT / "main.py"
-    if main_py.exists():
-        t = main_py.read_text(encoding="utf-8", errors="ignore")
-        fixed = False
-        if "application.add_handler" in t:
-            t = t.replace("application.add_handler", "app.add_handler")
-            fixed = True
-        if "engine = ExecutionEngine(risk_manager=risk_mgr)" in t and "broker=_broker" not in t:
-            t = t.replace(
-                "engine = ExecutionEngine(risk_manager=risk_mgr)",
-                "try:\n"
-                "    from execution import create_broker\n"
-                "    _broker = create_broker(\n"
-                '        broker_mode=getattr(config, "BROKER_MODE", "mt5_live"),\n'
-                '        exchange_id=getattr(config, "DEFAULT_EXCHANGE", "binance"),\n'
-                '        api_key=getattr(config, "EXCHANGE_API_KEY", ""),\n'
-                '        api_secret=getattr(config, "EXCHANGE_API_SECRET", ""),\n'
-                '        initial_balance=getattr(config, "INITIAL_EQUITY", 1000.0),\n'
-                "    )\n"
-                "except Exception as _broker_err:\n"
-                '    print("[boot] broker:", _broker_err)\n'
-                "    _broker = None\n"
-                "engine = ExecutionEngine(risk_manager=risk_mgr, broker=_broker)",
-                1,
-            )
-            fixed = True
-        if fixed:
-            main_py.write_text(t, encoding="utf-8")
-
     if not main_py.exists():
         print("[run_bot] FATAL: main.py missing")
         sys.exit(1)

@@ -210,10 +210,20 @@ class ExecutionEngine:
         )
         if broker is not None:
             self.broker = broker
+        elif is_test_env:
+            b_m = str(getattr(config, "BROKER_MODE", "")).lower()
+            init_bal = float(getattr(self.risk_manager.state, "equity", None) or getattr(config, "INITIAL_EQUITY", 10000.0) or 10000.0) if hasattr(self, "risk_manager") and hasattr(self.risk_manager, "state") else 10000.0
+            if "delta" in b_m:
+                from delta_broker import MockDeltaBroker
+                self.broker = MockDeltaBroker()
+            else:
+                from mt5_broker import MockMT5Broker
+                self.broker = MockMT5Broker(initial_balance=init_bal)
         else:
             try:
                 from execution import create_broker
                 import config
+                broker_mode = str(getattr(config, "BROKER_MODE", "mt5_live")).strip().lower()
                 init_bal = float(getattr(self.risk_manager.state, "equity", None) or getattr(config, "INITIAL_EQUITY", 10000.0) or 10000.0) if hasattr(self, "risk_manager") and hasattr(self.risk_manager, "state") else 10000.0
                 self.broker = create_broker(
                     broker_mode=broker_mode,
