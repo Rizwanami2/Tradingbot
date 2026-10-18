@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Multi-symbol autotrade monitoring worker — Gold + BTC only."""
+"""Multi-symbol autotrade monitoring worker — Gold + BTC only. Combined with AI Advanced Suite."""
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +12,6 @@ logger = logging.getLogger("autotrade_worker")
 
 
 async def send_telegram_alert(app: Any, config: Any, text: str) -> bool:
-    """Send Telegram alert with automatic plain text fallback on Markdown parse errors."""
     if not getattr(config, "TELEGRAM_CHAT_ID", None) or not text or not getattr(app, "bot", None):
         return False
     try:
@@ -25,6 +24,60 @@ async def send_telegram_alert(app: Any, config: Any, text: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _ai_gate_signal(sig: dict, symbol: str, profile: str, dname: str = "", agree: int = 0, conv_val: float = 0.6):
+    """Run AI Advanced Suite; return (allow, sig_updated). Never raises."""
+    try:
+        from ai_advanced_suite import evaluate_signal_dict, get_ai_suite
+        suite = get_ai_suite()
+        if not getattr(suite, "enabled", True):
+            return True, sig
+        if not sig.get("direction") and dname:
+            sig["direction"] = dname
+        if not sig.get("agreement"):
+            sig["agreement"] = agree
+        if sig.get("conviction") is None:
+            sig["conviction"] = conv_val
+        sig.setdefault("symbol", symbol)
+        gate = evaluate_signal_dict(sig, profile=str(profile or "scalp"))
+        if not gate.allow:
+            logger.info("Autotrade %s: AI suite veto — %s", symbol, "; ".join(gate.reasons))
+            return False, sig
+        if gate.size_mult < 1.0 and sig.get("lot_mode", "auto") != "manual":
+            for k in ("lots", "size"):
+                if sig.get(k):
+                    sig[k] = max(0.01, round(float(sig[k]) * gate.size_mult, 4))
+            try:
+                sig["lots"] = suite.apply_lot_ceiling(float(sig.get("lots") or sig.get("size") or 0.01))
+            except Exception:
+                pass
+        sig["ai_scorecard"] = gate.scorecard
+        sig["ai_gate_reasons"] = list(gate.reasons)
+        return True, sig
+    except Exception as e:
+        logger.debug("AI suite gate error: %s", e)
+        return True, sig
+
+
+def _ai_on_open(symbol: str, direction: str, meta=None):
+    try:
+        from ai_advanced_suite import get_ai_suite
+        get_ai_suite().on_trade_opened(symbol, direction, meta=meta or {})
+    except Exception:
+        pass
+
+
+def _ai_on_close(symbol: str, fpnl: float, ev: dict = None):
+    try:
+        from ai_advanced_suite import get_ai_suite
+        ev = ev or {}
+        r_mult = float(ev.get("r_multiple", ev.get("r", 0.0)) or 0.0)
+        if r_mult == 0.0 and fpnl != 0.0:
+            r_mult = 1.0 if fpnl > 0 else -1.0
+        get_ai_suite().on_trade_closed(symbol=symbol, won=fpnl >= 0, r_multiple=r_mult)
+    except Exception:
+        pass
 
 
 async def live_monitoring_worker(
@@ -40,7 +93,6 @@ async def live_monitoring_worker(
     monitoring_health: Dict[str, Any],
     now_iso: Callable[[], str],
 ):
-    """Poll Gold + BTC only; open up to MAX_OPEN_TRADES concurrent setups/positions."""
     async def _send_alert(text: str) -> None:
         await send_telegram_alert(app, config, text)
     try:
@@ -81,7 +133,6 @@ async def live_monitoring_worker(
         return res or ["BTCUSDT", "XAUUSD"]
 
     watchlist: List[str] = resolve_watchlist()
-
     max_open = int(getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6)) or 6)
     if getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False):
         max_open = int(getattr(engine, "max_open_trades", max_open) or max_open)
@@ -91,7 +142,7 @@ async def live_monitoring_worker(
         pass
 
     feeds = {sym: MarketDataFeed(symbol=sym, source=config.DEFAULT_DATA_SOURCE) for sym in watchlist}
-    logger.info("Autotrade watchlist=%s max_open=%s (multi-symbol concurrent limit %s)", watchlist, max_open, max_open)
+    logger.info("Autotrade watchlist=%s max_open=%s (combined AI suite on)", watchlist, max_open)
     write_runtime_status()
 
     while True:
@@ -99,7 +150,6 @@ async def live_monitoring_worker(
         any_data = False
         autotrade_active = bool(autotrade_active_getter())
 
-        # Update dynamic active positions limit if in auto slots mode
         if hasattr(engine, "update_auto_slots") and getattr(engine, "slots_mode", "auto") == "auto":
             try:
                 engine.update_auto_slots()
@@ -118,18 +168,15 @@ async def live_monitoring_worker(
         except Exception:
             pass
 
-        # Dynamically refresh watchlist selection from config / runtime state
         current_watchlist = resolve_watchlist()
         if set(current_watchlist) != set(watchlist):
-            logger.info("Autotrade active selection changed: %s (previously %s)", current_watchlist, watchlist)
-            removed = set(watchlist) - set(current_watchlist)
-            for r in removed:
+            logger.info("Autotrade selection changed: %s", current_watchlist)
+            for r in set(watchlist) - set(current_watchlist):
                 if r in engine.pending_setups:
-                    engine.cancel_setup(r, reason=f"Symbol {r} removed from active autotrade selection")
+                    engine.cancel_setup(r, reason=f"Symbol {r} removed from watchlist")
             watchlist = list(current_watchlist)
         monitoring_health["watchlist"] = list(watchlist)
 
-        # Automated End-of-Session Performance Report trigger
         try:
             from session_reporter import check_and_generate_transition_report
             transition = check_and_generate_transition_report(
@@ -138,8 +185,8 @@ async def live_monitoring_worker(
             if transition:
                 _, session_msg = transition
                 await _send_alert(session_msg)
-        except Exception as _sess_err:
-            logger.debug("Session report check error: %s", _sess_err)
+        except Exception:
+            pass
 
         try:
             for symbol in watchlist:
@@ -161,7 +208,7 @@ async def live_monitoring_worker(
                                 except Exception:
                                     data["daily"] = pd.DataFrame()
                         except Exception as _b_err:
-                            logger.debug("Broker direct get_candles error: %s", _b_err)
+                            logger.debug("Broker candles error: %s", _b_err)
 
                     if data is None:
                         feed = feeds.get(symbol) or MarketDataFeed(symbol=symbol, source=config.DEFAULT_DATA_SOURCE)
@@ -183,7 +230,6 @@ async def live_monitoring_worker(
                         "close": float(candle["close"]),
                     }
 
-                    # Synchronize trade chart candles & mark prices with live MT5 quote
                     try:
                         from mt5_chart import fetch_mt5_live_quote
                         mt5_q = fetch_mt5_live_quote(symbol, broker=broker)
@@ -195,13 +241,12 @@ async def live_monitoring_worker(
                             candle_dict["close"] = mt5_mark
                             candle_dict["high"] = max(candle_dict["high"], mt5_mark)
                             candle_dict["low"] = min(candle_dict["low"], mt5_mark)
-                    except Exception as _mt5_sync_err:
-                        logger.debug("MT5 chart sync error for %s: %s", symbol, _mt5_sync_err)
+                    except Exception:
+                        pass
 
                     if not autotrade_active and symbol in engine.pending_setups:
                         engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
-                    # Real-time Regime Auto-Switcher
                     try:
                         from regime_auto_switcher import RegimeAutoSwitcher
                         if not hasattr(arbiter, "_regime_switcher") or arbiter._regime_switcher is None:
@@ -210,15 +255,11 @@ async def live_monitoring_worker(
                             df1, symbol=symbol, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config
                         )
                         if switch_res.switched:
-                            logger.info("Regime auto-switched: %s -> %s (%s)", switch_res.previous_profile, switch_res.current_profile, switch_res.reason)
                             await _send_alert(
-                                f"🔄 **REGIME AUTO-SWITCH ACTIVATED**\n"
-                                f"• **Symbol:** `{symbol}` | **Regime:** `{switch_res.regime_detected}`\n"
-                                f"• **Profile:** `{switch_res.previous_profile}` ➔ `{switch_res.current_profile}`\n"
-                                f"• **Reason:** _{switch_res.reason}_"
+                                f"REGIME AUTO-SWITCH: {symbol} {switch_res.previous_profile} -> {switch_res.current_profile} ({switch_res.reason})"
                             )
-                    except Exception as _reg_err:
-                        logger.debug("Regime auto-switcher error: %s", _reg_err)
+                    except Exception:
+                        pass
 
                     from anti_spam import get_anti_spam_limiter
                     limiter = get_anti_spam_limiter()
@@ -233,11 +274,11 @@ async def live_monitoring_worker(
                                 limiter.record_loss(symbol, abs(fpnl))
                             else:
                                 limiter.record_win(symbol)
+                            _ai_on_close(symbol, fpnl, ev)
                         elif etype == "TRADE_EXECUTED":
                             pos = ev.get("order")
                             eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
                             limiter.record_entry(symbol, eprice)
-
                         await _send_alert(ev.get("message", ""))
 
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
@@ -246,38 +287,14 @@ async def live_monitoring_worker(
                     if not autotrade_active:
                         can_open = False
                     elif getattr(limiter, "spam_trade_enabled", False):
-                        can_open, spam_reason = limiter.check_can_enter(
-                            symbol=symbol,
-                            current_price=candle_dict["close"],
-                            engine=engine,
-                            max_open=eff_max_open,
-                        )
-                        if not can_open:
-                            logger.debug("Autotrade %s: entry blocked by spam trade limit — %s", symbol, spam_reason)
+                        can_open, spam_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=eff_max_open)
                     elif is_scalping:
-                        can_open, spam_reason = limiter.check_can_enter(
-                            symbol=symbol,
-                            current_price=candle_dict["close"],
-                            engine=engine,
-                            max_open=max_open,
-                        )
-                        if not can_open:
-                            logger.debug("Autotrade %s: scalp entry blocked by anti-spam — %s", symbol, spam_reason)
+                        can_open, spam_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
                     else:
-                        can_open = (
-                            open_n < max_open
-                            and symbol not in engine.active_positions
-                            and symbol not in engine.pending_setups
-                        )
+                        can_open = open_n < max_open and symbol not in engine.active_positions and symbol not in engine.pending_setups
                         if can_open:
-                            can_open, spam_reason = limiter.check_can_enter(
-                                symbol=symbol,
-                                current_price=candle_dict["close"],
-                                engine=engine,
-                                max_open=max_open,
-                            )
-                            if not can_open:
-                                logger.debug("Autotrade %s: entry blocked by anti-spam — %s", symbol, spam_reason)
+                            can_open, spam_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
+
                     if can_open:
                         sig, why, votes = arbiter.decide(
                             df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr,
@@ -286,13 +303,15 @@ async def live_monitoring_worker(
                         if not sig:
                             logger.info("Autotrade %s: no setup — %s", symbol, why)
                         else:
+                            dname = ""
+                            agree = 0
+                            conv_val = 0.6
                             try:
                                 from autonomous_learner import get_brain
                                 brain = get_brain(auto_bootstrap=False)
                                 d = sig.get("direction")
                                 dname = d.name if hasattr(d, "name") else str(d)
                                 agree = len([v for v in (votes or []) if str(getattr(v, "direction", v.get("direction", "") if isinstance(v, dict) else "")).upper() == dname.upper()])
-                                conv_val = 0.6
                                 if isinstance(sig.get("conviction"), dict):
                                     conv_val = float(sig["conviction"].get("score", 0.6) or 0.6)
                                 elif sig.get("conviction") is not None:
@@ -323,26 +342,35 @@ async def live_monitoring_worker(
                             except Exception as _b_err:
                                 logger.debug("Autotrade brain check error: %s", _b_err)
 
+                            # Combined AI Advanced Suite (automatic)
+                            ok_ai, sig = _ai_gate_signal(sig, symbol, current_profile_name, dname=dname, agree=agree, conv_val=conv_val)
+                            if not ok_ai:
+                                continue
+
                             try:
                                 order = engine.register_setup(sig, reason=sig.get("reason", ""))
+                                _ai_on_open(symbol, str(getattr(order, "direction", "") or dname), meta={"scorecard": sig.get("ai_scorecard")})
                                 limiter.record_entry(symbol, order.entry_level)
                             except RuntimeError as reg_err:
                                 logger.info("Autotrade %s: register blocked — %s", symbol, reg_err)
                                 continue
+
                             is_scalp_order = getattr(engine, "scalp_mode", False) or getattr(order, "is_scalp", False)
                             lot_tag = " (Manual)" if getattr(order, "lot_mode", "auto") == "manual" else " (Auto)"
+                            sc = sig.get("ai_scorecard")
+                            sc_tag = f" | AI {sc:.0f}" if sc is not None else ""
                             alert = (
-                                f"⚡ **NEW SCALP SETUP** ({open_n + 1}/{max_open})\n"
-                                f"`{symbol}` **{order.direction}** @ `${order.entry_level:,.2f}`\n"
-                                f"Micro SL `${order.stop_loss:,.2f}` | Micro TP `${order.tp1:,.2f}`\n"
-                                f"Lots `{order.lots}`{lot_tag} | Lev `{order.leverage:.0f}x`\n"
-                                f"_{order.setup_reason}_"
+                                f"NEW SCALP SETUP ({open_n + 1}/{max_open})\n"
+                                f"{symbol} {order.direction} @ {order.entry_level:,.2f}\n"
+                                f"SL {order.stop_loss:,.2f} | TP {order.tp1:,.2f}\n"
+                                f"Lots {order.lots}{lot_tag} | Lev {order.leverage:.0f}x{sc_tag}\n"
+                                f"{order.setup_reason}"
                             ) if is_scalp_order else (
-                                f"⚡ **NEW MULTI-AGENT SETUP** ({open_n + 1}/{max_open})\n"
-                                f"`{symbol}` **{order.direction}**\n"
-                                f"Entry `${order.entry_level:,.2f}` | SL `${order.stop_loss:,.2f}`\n"
-                                f"Lots `{order.lots}`{lot_tag} | Lev `{order.leverage:.0f}x`\n"
-                                f"_{order.setup_reason}_"
+                                f"NEW MULTI-AGENT SETUP ({open_n + 1}/{max_open})\n"
+                                f"{symbol} {order.direction}\n"
+                                f"Entry {order.entry_level:,.2f} | SL {order.stop_loss:,.2f}\n"
+                                f"Lots {order.lots}{lot_tag} | Lev {order.leverage:.0f}x{sc_tag}\n"
+                                f"{order.setup_reason}"
                             )
                             try:
                                 from gemini_client import GeminiClient
@@ -371,6 +399,7 @@ async def live_monitoring_worker(
                                         limiter.record_loss(symbol, abs(fpnl))
                                     else:
                                         limiter.record_win(symbol)
+                                    _ai_on_close(symbol, fpnl, ev)
                                 elif etype == "TRADE_EXECUTED":
                                     pos = ev.get("order")
                                     eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
