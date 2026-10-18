@@ -164,15 +164,15 @@ class AutonomousLearner:
     # ------------------------------------------------------------------ #
     # Data loading (up to ~5 years)
     # ------------------------------------------------------------------ #
-    def _load_history(self, symbol: str = "XAUUSD", years: float = 5.0) -> Optional[pd.DataFrame]:
+    def _load_history(self, symbol: str = "XAUUSD", years: float = 5.0, timeframe: str = "1d") -> Optional[pd.DataFrame]:
         """
         Prefer real data; fall back to long synthetic series for offline learning.
-        Uses daily bars for deep history (5y), resamples conceptually via daily R.
+        Supports daily and hourly timeframes for deep multi-year history.
         """
-        bars_daily = int(years * 365) + 30
+        bars_needed = int(years * 365) + 30 if timeframe == "1d" else min(2000, int(years * 365 * 24))
         df = None
 
-        # 1) CCXT / data_feed daily
+        # 1) CCXT / data_feed
         try:
             from data_feed import DataFeed
             import config as _cfg
@@ -180,33 +180,38 @@ class AutonomousLearner:
                 symbol=symbol,
                 source=getattr(_cfg, "DEFAULT_DATA_SOURCE", "ccxt"),
                 exchange_id=getattr(_cfg, "DEFAULT_EXCHANGE", "binance"),
-                timeframe="1d",
+                timeframe=timeframe,
             )
-            df = feed.fetch(limit=min(bars_daily, 2000), timeframe="1d")
-            if df is not None and not df.empty and len(df) >= 200:
-                logger.info("History via data_feed: %d daily bars", len(df))
+            df = feed.fetch(limit=min(bars_needed, 2000), timeframe=timeframe)
+            if df is not None and not df.empty and len(df) >= 50:
+                logger.info("History via data_feed %s (%s): %d bars", symbol, timeframe, len(df))
                 return df
         except Exception as e:
             logger.debug("data_feed history: %s", e)
 
-        # 2) yfinance (good for multi-year gold / FX)
+        # 2) yfinance (good for multi-year gold / FX / crypto)
         try:
             import yfinance as yf
             ticker_map = {
                 "XAUUSD": "GC=F", "XAUTUSD": "GC=F", "GOLD": "GC=F", "PAXGUSDT": "PAXG-USD",
-                "BTCUSDT": "BTC-USD",
+                "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD", "BNBUSDT": "BNB-USD",
                 "EURUSD": "EURUSD=X",
             }
             t = ticker_map.get(symbol.upper(), symbol)
-            period = "5y" if years >= 4.5 else f"{int(years)}y"
-            hist = yf.Ticker(t).history(period=period, interval="1d")
-            if hist is not None and len(hist) >= 200:
+            if timeframe == "1h":
+                period = "730d"
+                interval = "1h"
+            else:
+                period = "5y" if years >= 4.5 else f"{int(years)}y"
+                interval = "1d"
+            hist = yf.Ticker(t).history(period=period, interval=interval)
+            if hist is not None and len(hist) >= 50:
                 hist = hist.rename(columns={
                     "Open": "open", "High": "high", "Low": "low",
                     "Close": "close", "Volume": "volume",
                 })
                 hist.index = pd.to_datetime(hist.index, utc=True)
-                logger.info("History via yfinance %s: %d bars", t, len(hist))
+                logger.info("History via yfinance %s (%s): %d bars", t, interval, len(hist))
                 return hist[["open", "high", "low", "close", "volume"]].dropna()
         except Exception as e:
             logger.debug("yfinance history: %s", e)
@@ -215,7 +220,8 @@ class AutonomousLearner:
         logger.warning("Using synthetic %dy history for learning (no real feed)", years)
         n = max(500, int(years * 252))
         rng = np.random.default_rng(7)
-        dates = pd.date_range(end=datetime.now(timezone.utc), periods=n, freq="1D")
+        freq = "1D" if timeframe == "1d" else "1h"
+        dates = pd.date_range(end=datetime.now(timezone.utc), periods=n, freq=freq)
         # regime-switching random walk
         rets = []
         regime = 0
@@ -237,11 +243,11 @@ class AutonomousLearner:
     # ------------------------------------------------------------------ #
     # Historical replay → flaw mining
     # ------------------------------------------------------------------ #
-    def _simulate_trades(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+    def _simulate_trades(self, df: pd.DataFrame, symbol: str = "XAUUSD") -> List[Dict[str, Any]]:
         """
-        Lightweight daily swing proxy:
+        Lightweight daily/hourly swing proxy:
           - Trend via EMA9/21
-          - Entry on cross, exit opposite cross or max hold 10 days
+          - Entry on cross, exit opposite cross or max hold 10 bars
           - Tag setup features for flaw mining
         """
         if df is None or len(df) < 50:
@@ -287,9 +293,12 @@ class AutonomousLearner:
                         "hour": ts.hour,
                         "weekday": ts.weekday(),
                         "regime": regime,
+                        "symbol": symbol.upper(),
                         "setup": f"{'long' if pos['dir']==1 else 'short'}|{regime}|d{ts.weekday()}",
                         "rr_planned": 2.0,
                         "source": "history",
+                        "when": ts.isoformat(),
+                        "ts": ts.isoformat(),
                     })
                     pos = None
 
@@ -433,30 +442,58 @@ class AutonomousLearner:
                 pass
         self.bootstrap()
 
-    def bootstrap(self, symbol: str = "XAUUSD", years: float = 5.0) -> Dict[str, Any]:
+    def bootstrap(
+        self,
+        symbol: str = "XAUUSD",
+        years: float = 5.0,
+        symbols: Optional[List[str]] = None,
+        timeframes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """
         Full automatic history learn + self-correction.
-        Safe to call repeatedly; results persist.
+        Supports single symbol or multi-asset / multi-timeframe deep training.
         """
-        logger.info("BOOTSTRAP start: %s ~%.1fy", symbol, years)
-        df = self._load_history(symbol, years=years)
-        trades = self._simulate_trades(df) if df is not None else []
-        if not trades:
+        if symbols:
+            sym_list = [s.strip().upper() for s in symbols]
+        elif symbol.upper() in ("ALL", "HEAVY"):
+            sym_list = ["XAUUSD", "BTCUSDT", "ETHUSDT", "SOLUSDT", "EURUSD"]
+        elif "," in symbol:
+            sym_list = [s.strip().upper() for s in symbol.split(",") if s.strip()]
+        else:
+            sym_list = [symbol.upper()]
+
+        tf_list = timeframes if timeframes else (["1d", "1h"] if len(sym_list) > 1 or symbol.upper() in ("ALL", "HEAVY") else ["1d"])
+
+        logger.info("BOOTSTRAP start: symbols=%s ~%.1fy timeframes=%s", sym_list, years, tf_list)
+        all_trades = []
+
+        for sym in sym_list:
+            for tf in tf_list:
+                try:
+                    df = self._load_history(sym, years=years, timeframe=tf)
+                    if df is not None and len(df) >= 50:
+                        tr = self._simulate_trades(df, symbol=sym)
+                        if tr:
+                            all_trades.extend(tr)
+                except Exception as _ex:
+                    logger.debug("Bootstrap simulation error for %s (%s): %s", sym, tf, _ex)
+
+        if not all_trades:
             self._log_improve("Bootstrap: no trades generated — keep prior knowledge")
             self._save()
             return {"trades": 0, "flaws": 0}
 
-        flaws = self._mine_flaws(trades)
-        self._apply_corrections(flaws, trades)
+        flaws = self._mine_flaws(all_trades)
+        self._apply_corrections(flaws, all_trades)
 
         # merge into trade log (tagged history)
-        for t in trades[-500:]:
+        for t in all_trades[-500:]:
             self._trade_log.append(t)
         self._save()
 
-        exp = sum(t["r"] for t in trades) / len(trades)
+        exp = sum(t["r"] for t in all_trades) / len(all_trades)
         summary = {
-            "trades": len(trades),
+            "trades": len(all_trades),
             "expectancy": round(exp, 3),
             "flaws": len(flaws),
             "banned_setups": len(self.knowledge.banned_setups),
@@ -465,10 +502,11 @@ class AutonomousLearner:
             "min_score": self.knowledge.min_score,
             "min_rr": self.knowledge.min_rr,
             "conviction_floor": self.knowledge.conviction_floor,
+            "symbols": sym_list,
         }
         self._log_improve(
             f"Bootstrap done: n={summary['trades']} exp={summary['expectancy']} "
-            f"flaws={summary['flaws']} bans={summary['banned_setups']}"
+            f"flaws={summary['flaws']} bans={summary['banned_setups']} syms={len(sym_list)}"
         )
         self._save()
         return summary

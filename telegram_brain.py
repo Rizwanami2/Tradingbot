@@ -131,6 +131,15 @@ async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     years = max(0.5, min(5.0, float(args[2])))
                 except ValueError:
                     pass
+            if sym in ("ALL", "HEAVY"):
+                await safe_reply(update, "⏳ *Starting Heavy Bot Training Pipeline across all assets*...", parse_mode="Markdown")
+                from heavy_trainer import HeavyTrainer
+                trainer = HeavyTrainer(years=years)
+                summary = trainer.train_all(heavy=True)
+                rep = trainer.format_markdown_report(summary)
+                await safe_reply(update, rep, parse_mode="Markdown")
+                return
+
             await safe_reply(update, f"⏳ Re-learning from {sym} history (up to {years:.1f}y)...", parse_mode=None)
             res = brain.bootstrap(symbol=sym, years=years)
             rep = (
@@ -175,23 +184,58 @@ async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif subcmd in ("help", "commands"):
             msg = (
                 "🧠 *Autonomous Learner Commands:*\n"
+                "• `/train [heavy|quick|status]` — Deep multi-asset AI & autonomous training\n"
                 "• `/brain` or `/brain status` — Overall status, memory & win rates\n"
                 "• `/brain rules` — Active learned thresholds, bans & agent weights\n"
                 "• `/brain flaws` — Detected flaws and current sanctions\n"
                 "• `/brain on` / `/brain off` — Enable or pause active signal filtering\n"
-                "• `/brain relearn [SYM] [YEARS]` — Bootstrap memory from up to 5Y data\n"
+                "• `/brain relearn [SYM|ALL] [YEARS]` — Bootstrap memory from up to 5Y data\n"
                 "• `/brain reset` — Clear memory & restore clean baseline defaults"
             )
             await safe_reply(update, msg, parse_mode="Markdown")
 
         else:
             # Fall back to summary with usage hint
-            text = brain.summary() + "\n\n_Subcommands: `/brain status`, `/brain rules`, `/brain flaws`, `/brain relearn`, `/brain reset`, `/brain on|off`_"
+            text = brain.summary() + "\n\n_Subcommands: `/train`, `/brain status`, `/brain rules`, `/brain flaws`, `/brain relearn`, `/brain reset`, `/brain on|off`_"
             await safe_reply(update, text, parse_mode="Markdown")
 
     except Exception as e:
         logger.exception("Error in /brain command: %s", e)
         await safe_reply(update, f"Brain error: {e}", parse_mode=None)
+
+
+async def train_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Trigger advanced heavy training across all AI and autonomous models."""
+    subcmd = (ctx.args[0].lower() if ctx.args else "heavy")
+    if subcmd == "status":
+        try:
+            if os.path.exists("heavy_training_report.json"):
+                with open("heavy_training_report.json", "r", encoding="utf-8") as f:
+                    rep = json.load(f)
+                from heavy_trainer import HeavyTrainer
+                text = HeavyTrainer().format_markdown_report(rep)
+                await safe_reply(update, text, parse_mode="Markdown")
+                return
+        except Exception as e:
+            await safe_reply(update, f"Could not load report: {e}", parse_mode=None)
+            return
+
+    heavy = (subcmd != "quick")
+    await safe_reply(
+        update,
+        f"⏳ *Starting {'Heavy' if heavy else 'Quick'} Bot Training Pipeline*...\n"
+        f"_Simulating multi-asset history across BTC, Gold, ETH, SOL, EUR, mining flaws, and training AI weights._",
+        parse_mode="Markdown",
+    )
+    try:
+        from heavy_trainer import HeavyTrainer
+        trainer = HeavyTrainer()
+        summary = trainer.train_all(heavy=heavy)
+        report = trainer.format_markdown_report(summary)
+        await safe_reply(update, report, parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /train command: %s", e)
+        await safe_reply(update, f"Training error: {e}", parse_mode=None)
 
 
 async def relearn_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -205,6 +249,20 @@ async def relearn_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 years = max(0.5, min(5.0, float(ctx.args[1])))
             except ValueError:
                 pass
+
+    if sym in ("ALL", "HEAVY"):
+        await safe_reply(update, "⏳ *Starting Heavy Bot Training Pipeline across all assets*...", parse_mode="Markdown")
+        try:
+            from heavy_trainer import HeavyTrainer
+            trainer = HeavyTrainer(years=years)
+            summary = trainer.train_all(heavy=True)
+            rep = trainer.format_markdown_report(summary)
+            await safe_reply(update, rep, parse_mode="Markdown")
+            return
+        except Exception as e:
+            logger.exception("Error in /relearn all command: %s", e)
+            await safe_reply(update, f"Relearn error: {e}", parse_mode=None)
+            return
 
     await safe_reply(update, f"⏳ Re-learning from {sym} history (up to {years:.1f}y)...", parse_mode=None)
     try:
@@ -235,8 +293,9 @@ def register_brain(application) -> None:
     for cmd, handler in [
         ("brain", brain_command),
         ("relearn", relearn_command),
+        ("train", train_command),
     ]:
         if cmd not in existing_cmds:
             application.add_handler(CommandHandler(cmd, handler))
             existing_cmds.add(cmd)
-    logger.info("Registered /brain /relearn")
+    logger.info("Registered /brain /relearn /train")

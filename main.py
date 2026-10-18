@@ -399,7 +399,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/tiers` — Risk tier allocations\n"
             "• `/digest` — Daily market performance digest\n"
             "• `/brain` — Autonomous learner knowledge & win rates\n"
-            "• `/relearn [SYM]` — Force 5Y history retraining bootstrap\n"
+            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
+            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
             "• `/reset` — Clear conversation context\n"
             "• `/ask [question]` — Conversational assistant with Gemini AI"
         )
@@ -465,7 +466,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/tiers` — Risk tier allocations\n"
             "• `/digest` — Daily market performance digest\n"
             "• `/brain` — Autonomous learner knowledge & win rates\n"
-            "• `/relearn [SYM]` — Force 5Y history retraining bootstrap\n"
+            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
+            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
             "• `/reset` — Clear conversation context\n"
             "• `/ask [question]` — Conversational assistant with Gemini AI\n\n"
             "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`, `/commands ai`_"
@@ -4540,14 +4542,14 @@ def run_cli_interactive():
             print(f"⚠️ Native live broker '{name.upper()}' has been removed. MetaTrader 5 Live is the sole exclusive broker.")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, relearn [SYM], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, train [heavy|quick], relearn [SYM], ask [TEXT], reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], chart [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
                 "⚡ Execution: positions, slots [auto|manual <1-6>], autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
                 "🛡️ Risk: status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], replay [ID], export, setups, abooks, heal\n"
-                "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, relearn [SYM]\n"
+                "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, train [heavy|quick], relearn [SYM|ALL]\n"
                 "💬 Assistant: ask [TEXT], reset, exit"
             )
         elif name == "asignal":
@@ -4678,15 +4680,33 @@ def run_cli_interactive():
                     print(brain.summary())
             except Exception as e:
                 print(f"Brain error: {e}")
+        elif name == "train":
+            try:
+                sub = parts[1].lower() if len(parts) > 1 else "heavy"
+                heavy = (sub != "quick")
+                print(f"Starting {'Heavy' if heavy else 'Quick'} Bot Training Pipeline across all assets...")
+                from heavy_trainer import HeavyTrainer
+                trainer = HeavyTrainer()
+                summary = trainer.train_all(heavy=heavy)
+                print("\n" + trainer.format_markdown_report(summary))
+            except Exception as e:
+                print(f"Train error: {e}")
         elif name == "relearn":
             try:
                 from autonomous_learner import get_brain
                 brain = get_brain(auto_bootstrap=False)
                 sym = parts[1].upper() if len(parts) > 1 else "XAUUSD"
                 years = float(parts[2]) if len(parts) > 2 and parts[2].replace('.', '', 1).isdigit() else 5.0
-                print(f"Retraining Autonomous Learner on {sym} ({years:.1f}y)...")
-                summary = brain.bootstrap(symbol=sym, years=years)
-                print(f"Bootstrap complete: {summary}")
+                if sym in ("ALL", "HEAVY"):
+                    print(f"Retraining Autonomous Learner across ALL assets ({years:.1f}y)...")
+                    from heavy_trainer import HeavyTrainer
+                    trainer = HeavyTrainer(years=years)
+                    summary = trainer.train_all(heavy=True)
+                    print("\n" + trainer.format_markdown_report(summary))
+                else:
+                    print(f"Retraining Autonomous Learner on {sym} ({years:.1f}y)...")
+                    summary = brain.bootstrap(symbol=sym, years=years)
+                    print(f"Bootstrap complete: {summary}")
             except Exception as e:
                 print(f"Relearn error: {e}")
         elif name in ("vstops", "vstop"):
@@ -4792,7 +4812,7 @@ def run_cli_interactive():
             except Exception as e:
                 print(f"Anti-spam error: {e}")
         else:
-            print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, cooldown, spam, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, relearn, ask, reset, exit")
+            print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, cooldown, spam, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, train, relearn, ask, reset, exit")
 
 
 def main():
@@ -4881,6 +4901,7 @@ def main():
                 BotCommand("abooks", "A/B paper books comparison"),
                 BotCommand("heal", "System health counter reset & self-healing"),
                 BotCommand("brain", "Autonomous learner intelligence & state"),
+                BotCommand("train", "Deep heavy multi-asset AI & autonomous training"),
                 BotCommand("relearn", "Retrain autonomous learner on 5Y data"),
                 BotCommand("ask", "AI trading assistant with live MT5 market context"),
                 BotCommand("reset", "Clear conversational chat memory"),
@@ -5002,9 +5023,10 @@ def main():
     except Exception:
         pass
     try:
-        from telegram_brain import brain_command, relearn_command
+        from telegram_brain import brain_command, relearn_command, train_command
         app.add_handler(CommandHandler("brain", brain_command))
         app.add_handler(CommandHandler("relearn", relearn_command))
+        app.add_handler(CommandHandler("train", train_command))
     except Exception:
         pass
 

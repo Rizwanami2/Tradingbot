@@ -27,6 +27,8 @@ ops_health.json
 ab_books.json
 learning_edge.json
 performance_stats.json
+ai_advanced_state.json
+heavy_training_report.json
 data_cache/
 *.jsonl
 *.log

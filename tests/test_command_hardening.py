@@ -268,6 +268,7 @@ class TestCommandHardening(unittest.TestCase):
         from telegram_brain import (
             brain_command,
             relearn_command,
+            train_command,
         )
 
         all_handlers = [
@@ -330,6 +331,7 @@ class TestCommandHardening(unittest.TestCase):
             ("abooks", abooks_command, []),
             ("heal", heal_command, []),
             ("brain", brain_command, []),
+            ("train_status", train_command, ["status"]),
             ("relearn", relearn_command, ["XAUUSD", "0.01"]),
             ("ask", ask_command, ["trend?"]),
             ("reset", reset_command, []),
@@ -413,6 +415,7 @@ class TestCommandHardening(unittest.TestCase):
             "abooks",
             "heal",
             "brain",
+            "train quick",
             "relearn XAUUSD 0.01",
             "ask market status?",
             "reset",
