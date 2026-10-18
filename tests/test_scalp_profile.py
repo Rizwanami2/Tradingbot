@@ -11,9 +11,19 @@ from strategy_profiles import load_profiles, apply_profile
 
 class TestScalpProfileAndSpamTrading(unittest.TestCase):
     def setUp(self):
-        self.risk_mgr = RiskManager(equity=1000.0, symbol="BTCUSDT")
+        self.risk_mgr = RiskManager(equity=10000.0, symbol="BTCUSDT", state_file="test_scalp_risk_mgr.json")
+        self.risk_mgr.reset_daily_risk()
         self.arbiter = Arbiter(allow_asian=True)
         self.engine = ExecutionEngine(risk_manager=self.risk_mgr)
+
+    def tearDown(self):
+        import os
+        if os.path.exists("test_scalp_risk_mgr.json"):
+            try:
+                os.remove("test_scalp_risk_mgr.json")
+            except OSError:
+                pass
+
 
     def test_scalp_profile_defaults(self):
         profiles = load_profiles()
@@ -548,7 +558,8 @@ class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):
 
 class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
     def setUp(self):
-        self.risk_mgr = RiskManager(equity=1000.0, symbol="XAUUSD")
+        self.risk_mgr = RiskManager(equity=10000.0, symbol="XAUUSD", state_file="test_scalp_multi_risk_mgr.json")
+        self.risk_mgr.reset_daily_risk()
         self.engine = ExecutionEngine(risk_manager=self.risk_mgr)
         self.engine.scalp_mode = True
         self.engine.scalp_trail_enabled = True
@@ -557,6 +568,15 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.engine.scalp_tp_usd = 10.0  # High ceiling so trailing exit triggers first
         self.engine.scalp_tp_pct = 5.0
         self.engine.max_open_trades = 5
+
+    def tearDown(self):
+        import os
+        if os.path.exists("test_scalp_multi_risk_mgr.json"):
+            try:
+                os.remove("test_scalp_multi_risk_mgr.json")
+            except OSError:
+                pass
+
 
     def test_multi_position_scalp_trailing_sl_independent_tracking(self):
         # Open 2 separate positions on Gold
@@ -717,6 +737,162 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertNotIn("*", call2_kwargs["text"])
         self.assertNotIn("`", call2_kwargs["text"])
         self.assertNotIn("parse_mode", call2_kwargs)
+
+
+    def test_scalp_concession_spread_slippage_veto(self):
+        """Verify scalp profile concessions allow ~1.0 R:R while standard mode requires >= 1.4."""
+        from signal_quality import spread_slippage_veto, evaluate_signal_quality
+
+        # In standard mode (expected_rr=1.0), 1.0 * (1 - (0.05 + 0.0)) = 0.95 < 1.4 -> VETOED
+        ok_std, reason_std = spread_slippage_veto(spread=0.0, atr=1.0, expected_rr=1.0, is_scalp=False)
+        self.assertFalse(ok_std)
+        self.assertIn("kills R:R", reason_std)
+
+        # In scalp mode (is_scalp=True), effective R:R ~0.95 >= 0.80 -> ALLOWED
+        ok_scalp, reason_scalp = spread_slippage_veto(spread=0.0, atr=1.0, expected_rr=1.0, is_scalp=True)
+        self.assertTrue(ok_scalp)
+        self.assertIn("spread ok", reason_scalp)
+
+    def test_scalp_concession_candle_and_volume(self):
+        """Verify candle quality and volume node concessions in scalp mode."""
+        from signal_quality import candle_quality, session_volume_node_ok
+
+        # Quiet volume (last = 4, median = 10 -> ratio 0.40)
+        # Standard requires 0.85 -> rejected
+        df_vol = pd.DataFrame({"volume": [10.0] * 60 + [4.0]})
+        ok_v_std, _ = session_volume_node_ok(df_vol, direction="LONG", lookback=60, is_scalp=False)
+        self.assertFalse(ok_v_std)
+        # Scalp concession allows 0.35 -> allowed
+        ok_v_scalp, _ = session_volume_node_ok(df_vol, direction="LONG", lookback=60, is_scalp=True)
+        self.assertTrue(ok_v_scalp)
+
+        # Small 1m body candle (body ratio 0.08)
+        # Standard requires 0.12 -> rejected
+        df_c = pd.DataFrame({
+            "open": [100.0] * 20 + [100.0],
+            "high": [105.0] * 20 + [105.0],
+            "low": [95.0] * 20 + [95.0],
+            "close": [100.0] * 20 + [100.8], # body = 0.8 / 10.0 = 0.08
+        })
+        ok_c_std, _, _ = candle_quality(df_c, is_scalp=False)
+        self.assertFalse(ok_c_std)
+        # Scalp concession allows 0.06 -> allowed
+        ok_c_scalp, _, _ = candle_quality(df_c, is_scalp=True)
+        self.assertTrue(ok_c_scalp)
+
+    def test_regime_auto_switcher_respects_scalp_profile_and_locks(self):
+        """Verify regime auto switcher does not wipe out scalp profile concessions."""
+        from regime_auto_switcher import RegimeAutoSwitcher
+        from strategy_profiles import apply_profile, get_current_profile
+        import config
+
+        switcher = RegimeAutoSwitcher(cooldown_seconds=0.0)
+        apply_profile("scalp", config=config, lock=True)
+
+        df = pd.DataFrame({
+            "open": [2700.0 + i for i in range(30)],
+            "high": [2705.0 + i for i in range(30)],
+            "low": [2695.0 + i for i in range(30)],
+            "close": [2702.0 + i for i in range(30)],
+        })
+        res = switcher.evaluate_and_switch(df, symbol="XAUUSD", config=config)
+        self.assertFalse(res.switched)
+        self.assertEqual(res.current_profile, "scalp")
+        self.assertIn("locked", res.reason.lower())
+
+        # Unlock and evaluate: scalp profile preserved under consolidation/chop market
+        config.PROFILE_LOCKED = False
+        df_chop = pd.DataFrame({
+            "open": [2700.0 + (i % 2) for i in range(35)],
+            "high": [2703.0 for i in range(35)],
+            "low": [2698.0 for i in range(35)],
+            "close": [2701.0 - (i % 2) for i in range(35)],
+        })
+        res2 = switcher.evaluate_and_switch(df_chop, symbol="XAUUSD", config=config)
+        self.assertEqual(res2.current_profile, "scalp")
+
+    def test_mt5_multi_position_reconciliation_and_sync(self):
+        """Verify ExecutionEngine reconciles and synchronizes multiple MT5 positions with tickets and telemetry."""
+        from execution import Position
+        from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
+
+        broker = MagicMock()
+        bp1 = Position(symbol="XAUUSD", side="buy", qty=0.05, entry_price=2650.0, unrealized_pnl=25.0, current_price=2655.0, stop_loss=2640.0, take_profit=2670.0, ticket=101)
+        bp2 = Position(symbol="XAUUSD", side="buy", qty=0.02, entry_price=2652.0, unrealized_pnl=6.0, current_price=2655.0, stop_loss=2642.0, take_profit=2672.0, ticket=102)
+        broker.get_positions.return_value = [bp1, bp2]
+
+        engine = ExecutionEngine(risk_manager=self.risk_mgr, broker=broker)
+
+        # 1. Reconcile adopts both positions with exact tickets
+        summary = engine.reconcile_positions()
+        self.assertEqual(summary["status"], "ok")
+        self.assertEqual(summary["broker_count"], 2)
+        self.assertEqual(summary["adopted"], 2)
+        self.assertEqual(len(engine.active_positions), 2)
+
+        p_list = list(engine.active_positions.values())
+        tickets = {str(p.ticket) for p in p_list}
+        self.assertIn("101", tickets)
+        self.assertIn("102", tickets)
+
+        # 2. Broker updates prices and closes ticket 101
+        bp2.current_price = 2660.0
+        bp2.unrealized_pnl = 16.0
+        broker.get_positions.return_value = [bp2] # ticket 101 closed on MT5
+
+        summary2 = engine.reconcile_positions()
+        self.assertEqual(summary2["closed_locally"], 1)
+        self.assertEqual(len(engine.active_positions), 1)
+
+        remaining = list(engine.active_positions.values())[0]
+        self.assertEqual(str(remaining.ticket), "102")
+        self.assertEqual(remaining.current_price, 2660.0)
+        self.assertEqual(remaining.unrealized_pnl, 16.0)
+
+    def test_mt5_live_chart_card_includes_order_positions_and_signal_levels(self):
+        """Verify MT5 live chart card renders active MT5 order positions and signal key levels."""
+        from execution import Position
+        from mt5_chart import get_mt5_live_chart, format_mt5_chart_card
+
+        broker = MagicMock()
+        broker.mark_prices = {"XAUUSD": 2655.50}
+        broker.server = "MetaQuotes-Demo"
+        broker.login = 100200
+        broker.mode = "LIVE"
+        broker.is_connected = lambda: True
+
+        bp = Position(
+            symbol="XAUUSD",
+            side="buy",
+            qty=0.05,
+            entry_price=2650.0,
+            unrealized_pnl=27.50,
+            current_price=2655.50,
+            stop_loss=2640.0,
+            take_profit=2675.0,
+            ticket=778899,
+        )
+        broker.get_positions = MagicMock(return_value=[bp])
+
+        chart_data = get_mt5_live_chart("XAUUSD", timeframe="1m", broker=broker)
+        self.assertIn("open_positions", chart_data)
+        self.assertIn("signal_levels", chart_data)
+        self.assertEqual(len(chart_data["open_positions"]), 1)
+        self.assertEqual(chart_data["open_positions"][0]["ticket"], 778899)
+
+        card = format_mt5_chart_card(chart_data)
+        # Check active orders section
+        self.assertIn("Active MT5 Order Positions", card)
+        self.assertIn("#778899", card)
+        self.assertIn("0.05 Lots", card)
+        self.assertIn("2,650.00", card)
+        self.assertIn("2,655.50", card)
+        self.assertIn("27.50", card)
+
+        # Check signal levels section
+        self.assertIn("Signal Key Levels & Market Confluence", card)
+        self.assertIn("Daily Range (PDH / PDL)", card)
+        self.assertIn("Central Pivot (P)", card)
 
 
 if __name__ == "__main__":

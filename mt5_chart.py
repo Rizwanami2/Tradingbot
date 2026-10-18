@@ -446,11 +446,111 @@ def compute_chart_technicals(candles: List[Dict[str, float]], live_mark: float =
 def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any] = None) -> Dict[str, Any]:
     """Compile comprehensive MT5 live chart data bundle for a symbol."""
     norm_sym, name, icon = get_display_names(symbol)
+
+    if broker is None:
+        try:
+            from mt5_broker import get_active_broker
+            broker = get_active_broker()
+        except Exception:
+            broker = None
+
     quote = fetch_mt5_live_quote(norm_sym, broker=broker)
     candles = fetch_mt5_candles(norm_sym, timeframe=timeframe, limit=14, broker=broker)
     mark_p = quote["mark"]
     technicals = compute_chart_technicals(candles, live_mark=mark_p)
     ascii_plot = generate_ascii_candlestick_chart(candles, height=7)
+
+    # 1. Active MT5 open positions for this symbol
+    open_positions: List[Dict[str, Any]] = []
+    if broker is not None and hasattr(broker, "get_positions"):
+        try:
+            bps = broker.get_positions()
+            for p in bps:
+                p_sym = str(getattr(p, "symbol", "")).upper()
+                if norm_sym in p_sym or p_sym in norm_sym or (norm_sym == "BTCUSD" and "BTC" in p_sym) or (norm_sym == "XAUUSD" and any(x in p_sym for x in ("XAU", "GOLD", "PAXG"))):
+                    e_px = float(getattr(p, "entry_price", mark_p) or mark_p)
+                    c_px = float(getattr(p, "current_price", mark_p) or mark_p)
+                    qty = float(getattr(p, "qty", 0.01) or 0.01)
+                    side_str = str(getattr(p, "side", "BUY")).upper()
+                    pnl = float(getattr(p, "unrealized_pnl", 0.0) or 0.0)
+                    if pnl == 0.0 and c_px > 0 and e_px > 0:
+                        diff = (c_px - e_px) if side_str in ("BUY", "LONG") else (e_px - c_px)
+                        pnl = round(diff * qty, 2)
+                    pnl_pct = round((pnl / max(e_px * qty, 1.0)) * 100.0, 2) if e_px > 0 else 0.0
+                    open_positions.append({
+                        "ticket": getattr(p, "ticket", getattr(p, "id", "LIVE")),
+                        "symbol": p_sym,
+                        "side": side_str,
+                        "qty": qty,
+                        "entry_price": e_px,
+                        "current_price": c_px,
+                        "unrealized_pnl": pnl,
+                        "pnl_pct": pnl_pct,
+                        "stop_loss": float(p.stop_loss) if getattr(p, "stop_loss", None) else None,
+                        "take_profit": float(p.take_profit) if getattr(p, "take_profit", None) else None,
+                    })
+        except Exception as _b_err:
+            logger.debug("Chart get_positions from broker notice: %s", _b_err)
+
+    try:
+        from main import engine
+        if engine is not None and hasattr(engine, "active_positions"):
+            seen_tickets = {str(p["ticket"]) for p in open_positions if p.get("ticket")}
+            for order in engine.active_positions.values():
+                o_sym = str(getattr(order, "symbol", "")).upper()
+                if norm_sym in o_sym or o_sym in norm_sym or (norm_sym == "BTCUSD" and "BTC" in o_sym) or (norm_sym == "XAUUSD" and any(x in o_sym for x in ("XAU", "GOLD", "PAXG"))):
+                    t_id = str(getattr(order, "ticket", getattr(order, "id", "")))
+                    if t_id and t_id in seen_tickets:
+                        continue
+                    e_px = float(getattr(order, "executed_price", getattr(order, "entry_level", mark_p)) or mark_p)
+                    c_px = float(getattr(order, "current_price", mark_p) or mark_p)
+                    qty = float(getattr(order, "lots", 0.01) or 0.01)
+                    side_str = str(getattr(order, "direction", "BUY")).upper()
+                    pnl = float(getattr(order, "unrealized_pnl", 0.0) or 0.0)
+                    pnl_pct = round((pnl / max(e_px * qty, 1.0)) * 100.0, 2) if e_px > 0 else 0.0
+                    open_positions.append({
+                        "ticket": t_id or "BOT-ORD",
+                        "symbol": o_sym,
+                        "side": side_str,
+                        "qty": qty,
+                        "entry_price": e_px,
+                        "current_price": c_px,
+                        "unrealized_pnl": pnl,
+                        "pnl_pct": pnl_pct,
+                        "stop_loss": float(order.stop_loss) if getattr(order, "stop_loss", None) else None,
+                        "take_profit": float(order.tp1) if getattr(order, "tp1", None) else None,
+                    })
+    except Exception as _e_err:
+        logger.debug("Chart engine positions notice: %s", _e_err)
+
+    # 2. Pending setups for this symbol
+    pending_setups: List[Dict[str, Any]] = []
+    try:
+        from main import engine
+        if engine is not None and hasattr(engine, "pending_setups"):
+            for s in engine.pending_setups.values():
+                s_sym = str(getattr(s, "symbol", "")).upper()
+                if norm_sym in s_sym or s_sym in norm_sym or (norm_sym == "BTCUSD" and "BTC" in s_sym) or (norm_sym == "XAUUSD" and any(x in s_sym for x in ("XAU", "GOLD", "PAXG"))):
+                    pending_setups.append({
+                        "id": getattr(s, "id", "SETUP"),
+                        "direction": str(getattr(s, "direction", "LONG")).upper(),
+                        "entry_level": float(getattr(s, "entry_level", mark_p)),
+                        "stop_loss": float(getattr(s, "stop_loss", 0.0) or 0.0),
+                        "take_profit": float(getattr(s, "tp1", 0.0) or 0.0),
+                        "lots": float(getattr(s, "lots", 0.01) or 0.01),
+                    })
+    except Exception:
+        pass
+
+    # 3. Signal key levels & market confluence
+    signal_levels: Dict[str, Any] = {}
+    try:
+        from realtime_prices import compute_levels
+        lvl_data = compute_levels(norm_sym)
+        if lvl_data.get("ok") and "levels" in lvl_data:
+            signal_levels = lvl_data["levels"]
+    except Exception:
+        pass
 
     # Broker account telemetry
     server_name = "MetaQuotes-Demo"
@@ -484,6 +584,9 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
         "candles": candles,
         "ascii_chart": ascii_plot,
         "technicals": technicals,
+        "open_positions": open_positions,
+        "pending_setups": pending_setups,
+        "signal_levels": signal_levels,
         "server": server_name,
         "login": login_id,
         "broker_mode": broker_mode,
@@ -494,7 +597,7 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
 
 
 def format_mt5_chart_card(chart_data: Dict[str, Any]) -> str:
-    """Format single symbol MT5 Live Chart Telegram card."""
+    """Format single symbol MT5 Live Chart Telegram card with active positions and signal levels."""
     sym = chart_data["symbol"]
     name = chart_data["name"]
     icon = chart_data["icon"]
@@ -510,6 +613,53 @@ def format_mt5_chart_card(chart_data: Dict[str, Any]) -> str:
     acc_tag = f"#{login}" if login else "Active"
     trade_status = "🟢 Connected" if chart_data["trade_ready"] else "🟡 Standby"
 
+    # 1. Format Active Positions & Orders
+    positions_list = chart_data.get("open_positions") or []
+    pending_list = chart_data.get("pending_setups") or []
+    pos_lines = []
+    if positions_list:
+        for p in positions_list:
+            t_num = str(p.get("ticket") or "OPEN")
+            t_tag = f"#{t_num}" if not t_num.startswith("#") else t_num
+            side_icon = "🟢" if "BUY" in str(p.get("side", "")).upper() or "LONG" in str(p.get("side", "")).upper() else "🔴"
+            pnl_val = float(p.get("unrealized_pnl", 0.0) or 0.0)
+            pnl_sign = "+" if pnl_val >= 0 else ""
+            pnl_icon = "🟢" if pnl_val >= 0 else "🔴"
+            e_px = float(p.get("entry_price", mark))
+            c_px = float(p.get("current_price", mark))
+            sl_val = p.get("stop_loss")
+            tp_val = p.get("take_profit")
+            sl_str = f"${sl_val:,.2f}" if sl_val else "None"
+            tp_str = f"${tp_val:,.2f}" if tp_val else "None"
+            pos_lines.append(
+                f"• {side_icon} **{t_tag} {p.get('side')} {p.get('qty', 0.01):.2f} Lots** @ `${e_px:,.2f}`\n"
+                f"  ↳ PnL: {pnl_icon} `{pnl_sign}${pnl_val:,.2f}` | Mark: `${c_px:,.2f}`\n"
+                f"  ↳ SL: `{sl_str}` | TP: `{tp_str}`"
+            )
+    else:
+        pos_lines.append("• Status: ⚪ **Flat** (No open positions — Bot ready for setup)")
+
+    if pending_list:
+        pos_lines.append("\n⏳ **Pending Orders:**")
+        for s in pending_list:
+            dir_icon = "🟢" if "LONG" in str(s.get("direction", "")).upper() else "🔴"
+            pos_lines.append(
+                f"• {dir_icon} `{s.get('direction')}` Limit @ `${s.get('entry_level', mark):,.2f}` (SL: `${s.get('stop_loss', 0.0):,.2f}` | TP: `${s.get('take_profit', 0.0):,.2f}`)"
+            )
+    pos_section = "\n".join(pos_lines)
+
+    # 2. Format Signal Key Levels
+    sig_levels = chart_data.get("signal_levels") or {}
+    pdh = sig_levels.get("pdh")
+    pdl = sig_levels.get("pdl")
+    pdh_str = f"${pdh:,.2f}" if pdh else f"${tech['high_24h']:,.2f}"
+    pdl_str = f"${pdl:,.2f}" if pdl else f"${tech['low_24h']:,.2f}"
+    r1_val = sig_levels.get("r1") or tech["r1"]
+    r2_val = sig_levels.get("r2") or tech["r2"]
+    s1_val = sig_levels.get("s1") or tech["s1"]
+    s2_val = sig_levels.get("s2") or tech["s2"]
+    p_val = sig_levels.get("pivot") or tech["pivot"]
+
     return (
         f"📊 **MT5 Live Chart — {icon} {name} (`{sym}`)**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -522,6 +672,13 @@ def format_mt5_chart_card(chart_data: Dict[str, Any]) -> str:
         f"```text\n"
         f"{plot}\n"
         f"```\n\n"
+        f"🎯 **Active MT5 Order Positions:**\n"
+        f"{pos_section}\n\n"
+        f"📐 **Signal Key Levels & Market Confluence:**\n"
+        f"• **Daily Range (PDH / PDL):** `{pdh_str}` / `{pdl_str}`\n"
+        f"• **Key Resistances:** R2 `${r2_val:,.2f}` | R1 `${r1_val:,.2f}`\n"
+        f"• **Central Pivot (P):** `${p_val:,.2f}`\n"
+        f"• **Key Supports:** S1 `${s1_val:,.2f}` | S2 `${s2_val:,.2f}`\n\n"
         f"🎯 **MT5 Structural Pivot Levels:**\n"
         f"• **R2 Resistance:** `${tech['r2']:,.2f}`\n"
         f"• **R1 Resistance:** `${tech['r1']:,.2f}`\n"

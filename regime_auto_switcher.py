@@ -114,9 +114,28 @@ class RegimeAutoSwitcher:
         regime = "NORMAL"
         reason = "Market within standard parameters"
 
+        # Check if user locked the active profile
+        profile_locked = bool(
+            getattr(config, "PROFILE_LOCKED", False)
+            or getattr(arbiter, "profile_locked", False)
+        )
+        if profile_locked:
+            return RegimeSwitchResult(
+                switched=False,
+                previous_profile=current_prof,
+                current_profile=current_prof,
+                reason=f"Profile '{current_prof}' locked by user (auto-switch held)",
+                regime_detected=regime,
+                metrics=metrics,
+            )
+
         # Determine target profile based on asset & volatility dynamics
         if "XAU" in sym or "GOLD" in sym:
-            if adx < 22:
+            if current_prof == "scalp" and adx < 32:
+                target_profile = "scalp"
+                regime = "SCALP_CONCESSION"
+                reason = "Scalp profile active with concession (ADX < 32) -> Micro-scalp mode preserved"
+            elif adx < 22:
                 target_profile = "scalp"
                 regime = "CONSOLIDATION_CHOP"
                 reason = "Gold in range consolidation (ADX < 22) -> Micro-scalp mode"

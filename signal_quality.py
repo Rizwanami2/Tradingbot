@@ -52,9 +52,10 @@ def liquidity_imbalance_score(df: pd.DataFrame, lookback: int = 40) -> Tuple[flo
     return score, f"imbalance density {density:.2f}"
 
 
-def session_volume_node_ok(df: pd.DataFrame, direction: str, lookback: int = 60) -> Tuple[bool, str]:
+def session_volume_node_ok(df: pd.DataFrame, direction: str, lookback: int = 60, is_scalp: bool = False) -> Tuple[bool, str]:
     """
     Simple volume-profile proxy: require breakout candle volume > median of recent bars.
+    In scalp mode, concessions allow quiet-bar setups before momentum expansion.
     """
     if df is None or len(df) < lookback or "volume" not in df.columns:
         return True, "no volume data — skip"
@@ -63,7 +64,8 @@ def session_volume_node_ok(df: pd.DataFrame, direction: str, lookback: int = 60)
     last = float(vol[-1])
     if med <= 0:
         return True, "flat volume"
-    if last < med * 0.85:
+    vol_mult = 0.35 if is_scalp else 0.85
+    if last < med * vol_mult:
         return False, f"breakout volume {last:.0f} < median {med:.0f}"
     return True, f"volume ok ({last:.0f} vs med {med:.0f})"
 
@@ -74,19 +76,24 @@ def spread_slippage_veto(
     expected_rr: float = 2.0,
     max_spread_atr: float = 0.18,
     slippage_atr: float = 0.05,
+    min_effective_rr: float = 1.4,
+    is_scalp: bool = False,
 ) -> Tuple[bool, str]:
     """
     Reject if spread is too wide relative to ATR or if slippage would kill R:R.
     spread / atr should be in price units same as ATR.
+    In scalp mode, concessions apply (lower min effective RR 0.80-0.85 and wider spread tolerance).
     """
     if atr <= 0:
         return True, "no atr"
     ratio = spread / atr
-    if ratio > max_spread_atr:
-        return False, f"spread {ratio:.2%} ATR > limit {max_spread_atr:.0%}"
+    spread_limit = 0.28 if is_scalp else max_spread_atr
+    if ratio > spread_limit:
+        return False, f"spread {ratio:.2%} ATR > limit {spread_limit:.0%}"
     # rough R:R degradation
     effective_rr = expected_rr * (1.0 - (slippage_atr + ratio))
-    if effective_rr < 1.4:
+    rr_threshold = 0.80 if is_scalp else min_effective_rr
+    if effective_rr < rr_threshold:
         return False, f"slippage+spread kills R:R to ~{effective_rr:.2f}"
     return True, f"spread ok ({ratio:.2%} ATR)"
 
@@ -114,7 +121,7 @@ def relative_strength_rank(
     return ranks
 
 
-def candle_quality(df: pd.DataFrame) -> Tuple[bool, str, float]:
+def candle_quality(df: pd.DataFrame, is_scalp: bool = False) -> Tuple[bool, str, float]:
     """
     Reject poor candles: doji, excessive wick, abnormal range.
     Returns (ok, reason, quality_score 0..1)
@@ -134,13 +141,17 @@ def candle_quality(df: pd.DataFrame) -> Tuple[bool, str, float]:
     # recent average range
     avg_rng = float((df["high"] - df["low"]).tail(20).mean()) or rng
 
-    if body_ratio < 0.12:
+    min_body = 0.06 if is_scalp else 0.12
+    max_wick = 0.80 if is_scalp else 0.65
+    range_mult = 4.5 if is_scalp else 3.5
+
+    if body_ratio < min_body:
         return False, "doji / tiny body", 0.2
-    if upper_wick / rng > 0.65 and body_ratio < 0.3:
+    if upper_wick / rng > max_wick and body_ratio < 0.3:
         return False, "heavy upper wick", 0.25
-    if lower_wick / rng > 0.65 and body_ratio < 0.3:
+    if lower_wick / rng > max_wick and body_ratio < 0.3:
         return False, "heavy lower wick", 0.25
-    if rng > avg_rng * 3.5:
+    if rng > avg_rng * range_mult:
         return False, "abnormal range spike", 0.3
 
     score = min(1.0, 0.4 + body_ratio * 0.6)
@@ -152,23 +163,24 @@ def evaluate_signal_quality(
     direction: str,
     spread: float = 0.0,
     expected_rr: float = 2.0,
+    is_scalp: bool = False,
 ) -> QualityResult:
     reasons: List[str] = []
     scores: List[float] = []
 
     atr = _atr(df)
-    ok_s, msg_s = spread_slippage_veto(spread, atr, expected_rr=expected_rr)
+    ok_s, msg_s = spread_slippage_veto(spread, atr, expected_rr=expected_rr, is_scalp=is_scalp)
     if not ok_s:
         return QualityResult(False, 0.0, [msg_s])
     reasons.append(msg_s)
 
-    ok_c, msg_c, sc_c = candle_quality(df)
+    ok_c, msg_c, sc_c = candle_quality(df, is_scalp=is_scalp)
     if not ok_c:
         return QualityResult(False, sc_c, [msg_c])
     reasons.append(msg_c)
     scores.append(sc_c)
 
-    ok_v, msg_v = session_volume_node_ok(df, direction)
+    ok_v, msg_v = session_volume_node_ok(df, direction, is_scalp=is_scalp)
     if not ok_v:
         return QualityResult(False, 0.3, [msg_v])
     reasons.append(msg_v)

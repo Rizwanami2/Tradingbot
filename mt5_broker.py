@@ -778,6 +778,7 @@ class MT5Broker(Broker):
                     for p in raw_positions:
                         side = "buy" if p.type == native_mt5.ORDER_TYPE_BUY else "sell"
                         curr_px = float(getattr(p, "price_current", 0.0) or 0.0) or None
+                        t_val = getattr(p, "ticket", None)
                         out.append(Position(
                             symbol=str(p.symbol),
                             side=side,
@@ -787,6 +788,8 @@ class MT5Broker(Broker):
                             take_profit=float(p.tp) if p.tp else None,
                             unrealized_pnl=float(p.profit),
                             current_price=curr_px,
+                            ticket=t_val,
+                            id=str(t_val) if t_val else None,
                         ))
                     return out
                 except Exception as e:
@@ -803,6 +806,7 @@ class MT5Broker(Broker):
                     for p in raw_positions:
                         side = "buy" if str(p.get("type", "buy")).lower() in ("buy", "0") else "sell"
                         curr_px = float(p.get("price_current", p.get("current_price", 0.0)) or 0.0) or None
+                        t_val = p.get("ticket") or p.get("order_id") or p.get("id")
                         out.append(Position(
                             symbol=str(p.get("symbol", "")),
                             side=side,
@@ -812,6 +816,8 @@ class MT5Broker(Broker):
                             take_profit=float(p.get("tp", 0.0)) if p.get("tp") else None,
                             unrealized_pnl=float(p.get("profit", p.get("unrealized_pnl", 0.0))),
                             current_price=curr_px,
+                            ticket=t_val,
+                            id=str(t_val) if t_val else None,
                         ))
                     return out
                 except Exception as e:

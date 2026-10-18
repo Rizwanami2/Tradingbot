@@ -187,6 +187,12 @@ async def live_monitoring_worker(
                 await _send_alert(session_msg)
         except Exception:
             pass
+        # MT5 Live Position Synchronization
+        try:
+            if hasattr(engine, "reconcile_positions"):
+                engine.reconcile_positions()
+        except Exception as _sync_err:
+            logger.debug("[Autotrade] Broker position reconcile notice: %s", _sync_err)
 
         try:
             for symbol in watchlist:
@@ -366,7 +372,8 @@ async def live_monitoring_worker(
                                     df1,
                                     direction=dname,
                                     spread=0.0,
-                                    expected_rr=float(sig.get("rr", 2.0) or 2.0),
+                                    expected_rr=float(sig.get("rr", 1.0 if is_scalp_sig else 2.0) or (1.0 if is_scalp_sig else 2.0)),
+                                    is_scalp=is_scalp_sig,
                                 )
                                 if not sq_res.allowed:
                                     logger.info("Autotrade %s: vetoed by Signal Quality — %s", symbol, ", ".join(sq_res.reasons))

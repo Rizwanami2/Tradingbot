@@ -100,6 +100,32 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await safe_reply(update, f"Profile error: {e}", parse_mode=None)
 
 
+async def scalp_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Direct shortcut to activate and pin the Scalp profile with concessions."""
+    try:
+        from strategy_profiles import apply_profile
+        try:
+            from main import arbiter, risk_mgr, engine
+            import config
+            config.PROFILE_LOCKED = True
+            if arbiter is not None:
+                arbiter.profile_locked = True
+            p, summary = apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
+        except Exception:
+            p, summary = apply_profile("scalp", lock=True)
+        concession_note = (
+            "\n\n🎯 **Scalp Profile Concessions Active:**\n"
+            "• **R:R Gate Concession:** Expected R:R threshold relaxed to `1.0:1` (micro-scalp)\n"
+            "• **Spread / Slippage Concession:** Veto tolerance widened to `0.85` effective R:R\n"
+            "• **Candle / Volume Concession:** Adaptive 1M bar filters for high-frequency setups\n"
+            "• **Profile Pinned:** Regime auto-switcher locked to Scalp (run `/regime auto` to unlock)"
+        )
+        await safe_reply(update, summary + concession_note, parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /scalp command: %s", e)
+        await safe_reply(update, f"Scalp activation error: {e}", parse_mode=None)
+
+
 async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     profile = ctx.args[1].lower() if len(ctx.args) > 1 else "balanced"

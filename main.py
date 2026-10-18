@@ -1205,6 +1205,13 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     except Exception as rx:
                         logger.debug("[positions_command] reconcile error: %s", rx)
 
+        # Always ensure positions are reconciled with MT5/broker before displaying
+        if hasattr(engine, "reconcile_positions"):
+            try:
+                engine.reconcile_positions()
+            except Exception as rx:
+                logger.debug("[positions_command] auto reconcile note: %s", rx)
+
         if hasattr(engine, "format_positions_detail"):
             msg = engine.format_positions_detail()
         else:
@@ -4142,6 +4149,17 @@ def run_cli_interactive():
                     print(f"Available profiles: {', '.join(profiles.keys())} (Active: {CURRENT_PROFILE})")
             except Exception as e:
                 print(f"Profile error: {e}")
+        elif name in ("scalp", "microscalp"):
+            try:
+                from strategy_profiles import apply_profile
+                config.PROFILE_LOCKED = True
+                if arbiter is not None:
+                    arbiter.profile_locked = True
+                p, summary = apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
+                clean_summary = summary.replace("**", "").replace("*", "").replace("`", "").replace("_", "")
+                print(f"⚡ SCALP PROFILE ACTIVATED WITH CONCESSIONS (PINNED):\n{clean_summary}\n• Min R:R relaxed to 1.0:1 | Slippage veto relaxed to 0.85 effective R:R")
+            except Exception as e:
+                print(f"Scalp activation error: {e}")
         elif name in ("ask", "chat"):
             query = " ".join(parts[1:]).strip()
             if not query:
@@ -5174,11 +5192,12 @@ def main():
         logger.exception("Failed to register performance_command: %s", e)
 
     try:
-        from telegram_advanced import abacktest_command, profile_command
+        from telegram_advanced import abacktest_command, profile_command, scalp_command
         app.add_handler(CommandHandler(["abacktest", "backtestall"], abacktest_command))
         app.add_handler(CommandHandler("profile", profile_command))
+        app.add_handler(CommandHandler(["scalp", "microscalp"], scalp_command))
     except Exception as e:
-        logger.exception("Failed to register abacktest/profile handlers: %s", e)
+        logger.exception("Failed to register abacktest/profile/scalp handlers: %s", e)
 
     # Autonomous AI & Feature Packs
     try:

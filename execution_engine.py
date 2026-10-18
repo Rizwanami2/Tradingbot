@@ -465,11 +465,32 @@ class ExecutionEngine:
 
         adopted = []
         for bp in broker_positions:
+            bp_ticket = str(getattr(bp, "ticket", "") or getattr(bp, "id", "") or "").strip()
             norm_sym = bp.symbol.upper()
-            existing = [p for p in self.active_positions.values() if p.symbol.upper() == norm_sym]
-            if not existing:
+            bp_side = "LONG" if str(bp.side).lower() in ("buy", "long") else "SHORT"
+
+            # Check if this position is already tracked locally
+            matched = False
+            if bp_ticket:
+                for p in self.active_positions.values():
+                    lp_ticket = str(getattr(p, "ticket", "") or getattr(p, "id", "") or "").strip()
+                    if lp_ticket == bp_ticket:
+                        matched = True
+                        break
+
+            if not matched:
+                # Fallback to symbol + direction match if local order has no ticket yet
+                for p in self.active_positions.values():
+                    lp_ticket = str(getattr(p, "ticket", "") or "").strip()
+                    if not lp_ticket and p.symbol.upper() == norm_sym and p.direction == bp_side:
+                        if bp_ticket:
+                            p.ticket = bp_ticket
+                        matched = True
+                        break
+
+            if not matched:
                 self._order_counter += 1
-                direction = "LONG" if bp.side.lower() in ("buy", "long") else "SHORT"
+                direction = bp_side
                 entry_px = float(bp.entry_price or 0.0)
                 sl = float(bp.stop_loss) if bp.stop_loss is not None else (entry_px * 0.98 if direction == "LONG" else entry_px * 1.02)
                 tp = float(bp.take_profit) if bp.take_profit is not None else (entry_px * 1.04 if direction == "LONG" else entry_px * 0.96)
@@ -496,10 +517,11 @@ class ExecutionEngine:
                     unrealized_pnl=float(bp.unrealized_pnl or 0.0),
                     remaining_size=float(bp.qty),
                     remaining_lots=float(bp.qty),
+                    ticket=bp_ticket or getattr(bp, "ticket", None),
                 )
                 self.active_positions[order.id] = order
                 adopted.append(order)
-                logger.info("[ExecutionEngine] Adopted broker position: %s %s @ %s", order.direction, order.symbol, entry_px)
+                logger.info("[ExecutionEngine] Adopted broker position #%s: %s %s @ %s", order.ticket, order.direction, order.symbol, entry_px)
 
         if adopted:
             self.save_state()
@@ -508,6 +530,9 @@ class ExecutionEngine:
     def reconcile_positions(self) -> Dict[str, Any]:
         """
         Reconcile local active positions with the broker's reported positions.
+        - Synchronizes mark prices, unrealized PnL, SL/TP levels, and ticket IDs.
+        - Closes locally any position that the broker reports as closed.
+        - Adopts any untracked positions reported by the broker.
         Fails closed (halts execution and raises OrderStateUnknownError) on query failure.
         """
         if getattr(self, "broker", None) is None:
@@ -523,9 +548,40 @@ class ExecutionEngine:
             raise OrderStateUnknownError(f"Reconcile failed: {e}") from e
 
         broker_symbols = {bp.symbol.upper() for bp in broker_positions}
+        broker_tickets = {str(getattr(bp, "ticket", "") or getattr(bp, "id", "") or "").strip() for bp in broker_positions if getattr(bp, "ticket", None) or getattr(bp, "id", None)}
+
+        # Update matched positions live telemetry (PnL, current price, tickets)
+        for bp in broker_positions:
+            bp_ticket = str(getattr(bp, "ticket", "") or getattr(bp, "id", "") or "").strip()
+            norm_sym = bp.symbol.upper()
+            for lp in self.active_positions.values():
+                lp_ticket = str(getattr(lp, "ticket", "") or getattr(lp, "id", "") or "").strip()
+                if (bp_ticket and lp_ticket == bp_ticket) or (not lp_ticket and lp.symbol.upper() == norm_sym):
+                    if bp.current_price:
+                        lp.current_price = float(bp.current_price)
+                    if bp.unrealized_pnl is not None:
+                        lp.unrealized_pnl = float(bp.unrealized_pnl)
+                    if bp.qty:
+                        lp.lots = float(bp.qty)
+                        lp.remaining_lots = float(bp.qty)
+                    if bp.stop_loss is not None:
+                        lp.stop_loss = float(bp.stop_loss)
+                    if bp.take_profit is not None:
+                        lp.tp1 = float(bp.take_profit)
+                    if bp_ticket and not lp.ticket:
+                        lp.ticket = bp_ticket
+
+        # Close local positions that are no longer reported by broker
         closed_locally = []
         for k, local_pos in list(self.active_positions.items()):
-            if local_pos.symbol.upper() not in broker_symbols:
+            lp_ticket = str(getattr(local_pos, "ticket", "") or getattr(local_pos, "id", "") or "").strip()
+            is_open_in_broker = False
+            if lp_ticket and broker_tickets:
+                is_open_in_broker = lp_ticket in broker_tickets
+            else:
+                is_open_in_broker = local_pos.symbol.upper() in broker_symbols
+
+            if not is_open_in_broker:
                 local_pos.status = OrderStatus.CLOSED
                 local_pos.closed_at = datetime.now(timezone.utc).isoformat()
                 local_pos.close_reason = "Reconciled with broker: closed externally"

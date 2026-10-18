@@ -185,6 +185,7 @@ def apply_profile(
     risk_mgr=None,
     engine=None,
     config=None,
+    lock: bool = False,
 ) -> Tuple[StrategyProfile, str]:
     """Applies a strategy profile across arbiter, risk manager, execution engine, and config in runtime."""
     global CURRENT_PROFILE
@@ -195,10 +196,18 @@ def apply_profile(
     p = profiles[name]
     CURRENT_PROFILE = p.name
 
+    if lock:
+        if config is not None:
+            config.PROFILE_LOCKED = True
+        if arbiter is not None:
+            arbiter.profile_locked = True
+
     if arbiter is not None:
         arbiter.WEIGHTS = dict(p.weights)
         arbiter.MIN_AGREEMENT = p.min_agreement
         arbiter.MIN_SCORE = p.min_score
+        arbiter.min_rr = p.min_rr
+        arbiter.min_effective_rr = 0.85 if getattr(p, "is_scalp", False) else 1.4
         arbiter.require_killzone = p.require_killzone
         arbiter.allow_asian = p.allow_asian
         arbiter.strict_htf = p.strict_htf
