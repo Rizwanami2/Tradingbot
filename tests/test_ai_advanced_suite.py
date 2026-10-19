@@ -60,6 +60,80 @@ class TestAIAdvancedSuite(unittest.TestCase):
         self.assertEqual(self.suite.state["consec_losses"], 1)
         self.assertIn("late_entry", self.suite.state.get("mistakes", {}))
 
+    def test_manual_mode_allows_with_advisory_reasons(self):
+        import time
+        self.suite.state["last_loss_ts"] = time.time()
+        # In auto mode, blocked:
+        r_auto = self.suite.evaluate_entry(self._ctx())
+        self.assertFalse(r_auto.allow)
+
+        # In manual mode, allowed with advisory warning:
+        msg = self.suite.set_manual_mode(True)
+        self.assertIn("MANUAL", msg)
+        self.assertTrue(self.suite.is_manual_mode())
+        r_manual = self.suite.evaluate_entry(self._ctx())
+        self.assertTrue(r_manual.allow)
+        self.assertTrue(any("advisory" in x.lower() or "revenge" in x.lower() for x in r_manual.reasons))
+        self.assertTrue(r_manual.metadata.get("manual_mode"))
+
+    def test_manual_override_single_trade(self):
+        import time
+        self.suite.state["last_loss_ts"] = time.time()
+        self.suite.set_control_mode("auto")
+
+        self.suite.set_override_next(True)
+        self.assertTrue(self.suite.state.get("override_next"))
+
+        r1 = self.suite.evaluate_entry(self._ctx())
+        self.assertTrue(r1.allow)
+        self.assertTrue(r1.metadata.get("manual_override"))
+        self.assertFalse(self.suite.state.get("override_next"))
+
+        # Subsequent signal is blocked again
+        r2 = self.suite.evaluate_entry(self._ctx())
+        self.assertFalse(r2.allow)
+
+    def test_reset_safety_locks(self):
+        import time
+        self.suite.state["last_loss_ts"] = time.time()
+        self.suite.state["consec_losses"] = 4
+        self.suite.state["fill_rejects"] = 10
+        self.suite.state["daily"]["realized_r"] = -5.0
+
+        msg = self.suite.reset_safety_locks()
+        self.assertIn("reset successfully", msg)
+        self.assertEqual(self.suite.state["last_loss_ts"], 0.0)
+        self.assertEqual(self.suite.state["consec_losses"], 0)
+        self.assertEqual(self.suite.state["fill_rejects"], 0)
+        self.assertEqual(self.suite.state["daily"]["realized_r"], 0.0)
+
+    def test_learn_freeze_bug_fix(self):
+        self.suite.learn_freeze = True
+        self.suite.state["learn_frozen"] = True
+
+        msg = self.suite.set_learn_freeze(False)
+        self.assertIn("False", msg)
+        self.assertFalse(self.suite.learn_freeze)
+        self.assertFalse(self.suite.state["learn_frozen"])
+
+    def test_parameter_setters_and_summary(self):
+        self.suite.set_min_scorecard(68.0)
+        self.assertEqual(self.suite.min_scorecard, 68.0)
+        self.assertEqual(self.suite.state["min_scorecard"], 68.0)
+
+        self.suite.set_lot_ceiling(2.5)
+        self.assertEqual(self.suite.lot_ceiling, 2.5)
+        self.assertEqual(self.suite.state["lot_ceiling"], 2.5)
+
+        self.suite.set_scorecard_balance_only(False)
+        self.assertFalse(self.suite.balance_mode_only_scorecard)
+        self.assertFalse(self.suite.state["balance_mode_only_scorecard"])
+
+        s = self.suite.get_summary_dict()
+        self.assertEqual(s["min_scorecard"], 68.0)
+        self.assertEqual(s["lot_ceiling"], 2.5)
+        self.assertFalse(s["balance_only_scorecard"])
+
 
 if __name__ == "__main__":
     unittest.main()

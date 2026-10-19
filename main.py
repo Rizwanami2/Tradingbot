@@ -613,6 +613,7 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
     elif cat in ("ai", "brain", "learner", "agent", "agents"):
         text = (
             "🧠 **Autonomous AI & Standings:**\n"
+            "• `/ai [status|mode|manual|auto|override|reset|help]` — AI Advanced Suite & manual gating controls\n"
             "• `/board` — Strategy board & agent standings\n"
             "• `/journal` — Trade journal analytics & history\n"
             "• `/agents` — Agent performance rankings & stats\n"
@@ -1740,6 +1741,11 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "helpme": "/help",
         "commandslist": "/commands",
         "bot": "/status",
+        "aisuite": "/ai",
+        "suite": "/ai",
+        "riskpersona": "/ai persona",
+        "daybias": "/ai bias",
+        "scorecard": "/ai scorecard",
     }
 
     suggested = suggestions.get(cmd_clean)
@@ -2246,6 +2252,15 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
                 return
         except Exception as _cb_err:
             logger.warning("learner callback error: %s", _cb_err)
+
+    if data.startswith("ai:"):
+        try:
+            from telegram_ai import handle_ai_callback
+            handled = await handle_ai_callback(data, update, ctx)
+            if handled:
+                return
+        except Exception as _ai_err:
+            logger.warning("ai callback error: %s", _ai_err)
 
     if data in ("auto:on", "auto:scalp"):
         broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
@@ -5564,6 +5579,61 @@ def run_cli_interactive():
                     print(rep)
             except Exception as e:
                 print(f"Anti-spam error: {e}")
+        elif name in ("ai", "aisuite"):
+            try:
+                from ai_advanced_suite import get_ai_suite
+                suite = get_ai_suite()
+                sub = parts[1].lower() if len(parts) > 1 else "status"
+                if sub in ("status", "stat", "show", "info"):
+                    print(suite.status_text())
+                elif sub in ("on", "enable", "1", "true"):
+                    print(suite.set_enabled(True))
+                elif sub in ("off", "disable", "0", "false"):
+                    print(suite.set_enabled(False))
+                elif sub in ("manual", "supervise", "advisory"):
+                    print(suite.set_control_mode("manual"))
+                elif sub in ("auto", "strict", "autonomous"):
+                    print(suite.set_control_mode("auto"))
+                elif sub in ("mode", "control"):
+                    if len(parts) > 2:
+                        print(suite.set_control_mode(parts[2]))
+                    else:
+                        print(f"Current mode: {'MANUAL (Advisory)' if suite.is_manual_mode() else 'AUTO (Strict Gating)'}")
+                elif sub in ("override", "allow"):
+                    print(suite.set_override_next(True))
+                elif sub in ("reset", "unlock", "clear"):
+                    print(suite.reset_safety_locks())
+                elif sub in ("persona", "risk"):
+                    val = parts[2].lower() if len(parts) > 2 else "med"
+                    print(suite.set_persona(val))
+                elif sub in ("bias", "daybias"):
+                    val = parts[2].lower() if len(parts) > 2 else "clear"
+                    print(suite.set_bias(val))
+                elif sub in ("freeze", "lock"):
+                    print(suite.set_learn_freeze(True))
+                elif sub in ("unfreeze", "unlocklearn"):
+                    print(suite.set_learn_freeze(False))
+                elif sub in ("scorecard", "minscore"):
+                    if len(parts) > 2:
+                        print(suite.set_min_scorecard(float(parts[2])))
+                    else:
+                        print(f"Min scorecard: {suite.min_scorecard:.0f}")
+                elif sub in ("ceiling", "lot"):
+                    if len(parts) > 2:
+                        print(suite.set_lot_ceiling(float(parts[2])))
+                    else:
+                        print(f"Lot ceiling: {suite.lot_ceiling:.2f}")
+                elif sub in ("health", "ok"):
+                    ok, detail = suite.health_ok()
+                    print(f"AI Health: {'OK' if ok else 'ISSUES'} - {detail} (Fill rejects: {suite.state.get('fill_rejects', 0)})")
+                elif sub in ("critique", "review"):
+                    print(suite.weekly_critique_prompt()[:1000])
+                elif sub in ("help", "commands", "?"):
+                    print("AI Suite CLI Commands:\n  ai status\n  ai on|off\n  ai manual|auto\n  ai override\n  ai reset\n  ai persona [low|med|high]\n  ai bias [long|short|clear]\n  ai freeze|unfreeze\n  ai scorecard <val>\n  ai ceiling <lots>\n  ai health\n  ai critique")
+                else:
+                    print(f"Unknown ai option: {sub}. Try 'ai help' or 'ai status'")
+            except Exception as e:
+                print(f"AI command error: {e}")
         else:
             print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, cooldown, spam, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, train, relearn, ask, reset, exit")
 
@@ -5667,6 +5737,7 @@ def main():
                 BotCommand("veto", "Quick toggle for trade veto filtering (on/off)"),
                 BotCommand("train", "Deep heavy multi-asset AI & autonomous training"),
                 BotCommand("relearn", "Retrain autonomous learner on 5Y data"),
+                BotCommand("ai", "AI Advanced Suite & manual gating controls"),
                 BotCommand("ask", "AI trading assistant with live MT5 market context"),
                 BotCommand("reset", "Clear conversational chat memory"),
             ]
@@ -5795,6 +5866,11 @@ def main():
         app.add_handler(CommandHandler("train", train_command))
         app.add_handler(CommandHandler(["learner", "autonomous"], learner_command))
         app.add_handler(CommandHandler(["veto", "learnerveto"], veto_command))
+    except Exception:
+        pass
+    try:
+        from telegram_ai import ai_command
+        app.add_handler(CommandHandler(["ai", "aisuite"], ai_command))
     except Exception:
         pass
 

@@ -79,9 +79,39 @@ class AIAdvancedSuite:
         self.state = self._load_state()
         if "suite_enabled" in self.state:
             self.enabled = bool(self.state["suite_enabled"])
+        if "learn_frozen" in self.state:
+            self.learn_freeze = bool(self.state["learn_frozen"])
+        if "min_scorecard" in self.state:
+            self.min_scorecard = float(self.state["min_scorecard"])
+        if "lot_ceiling" in self.state:
+            self.lot_ceiling = float(self.state["lot_ceiling"])
+        if "balance_mode_only_scorecard" in self.state:
+            self.balance_mode_only_scorecard = bool(self.state["balance_mode_only_scorecard"])
 
     def _load_state(self) -> Dict[str, Any]:
-        default = {"daily": {"date": "", "trades": 0, "realized_r": 0.0, "wins": 0, "losses": 0}, "consec_losses": 0, "last_loss_ts": 0.0, "narratives": [], "mistakes": {}, "agent_trust": {}, "fill_rejects": 0, "equity_peak": 0.0, "equity": 0.0, "milestones_hit": [], "shadow_log": [], "learn_frozen": False, "risk_persona": "med", "bias_day": "", "audit": [], "version": 1}
+        default = {
+            "daily": {"date": "", "trades": 0, "realized_r": 0.0, "wins": 0, "losses": 0},
+            "consec_losses": 0,
+            "last_loss_ts": 0.0,
+            "narratives": [],
+            "mistakes": {},
+            "agent_trust": {},
+            "fill_rejects": 0,
+            "equity_peak": 0.0,
+            "equity": 0.0,
+            "milestones_hit": [],
+            "shadow_log": [],
+            "learn_frozen": False,
+            "risk_persona": "med",
+            "bias_day": "",
+            "control_mode": "auto",
+            "override_next": False,
+            "min_scorecard": 55.0,
+            "lot_ceiling": 1.0,
+            "balance_mode_only_scorecard": True,
+            "audit": [],
+            "version": 1,
+        }
         if self.state_path.exists():
             try:
                 raw = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -115,6 +145,9 @@ class AIAdvancedSuite:
         if "range" in regime and not ctx.is_scalp: s -= 5.0
         return float(np.clip(s, 0.0, 100.0))
 
+    def is_manual_mode(self) -> bool:
+        return str(self.state.get("control_mode") or "auto").lower() in ("manual", "supervised", "advisory")
+
     def evaluate_entry(self, ctx: SignalContext) -> GateResult:
         res = GateResult(allow=True, size_mult=1.0)
         if not self.enabled:
@@ -123,43 +156,99 @@ class AIAdvancedSuite:
         self._roll_day()
         direction = (ctx.direction or "FLAT").upper()
         if direction in ("FLAT", "NONE", ""): return res.veto("flat direction")
+
+        # 1-trade manual override check
+        if self.state.get("override_next"):
+            self.state["override_next"] = False
+            self._save()
+            res.metadata["manual_override"] = True
+            res.reasons.append("manual override consumed (trade allowed)")
+            self._audit("entry_manual_override", {"symbol": ctx.symbol, "direction": direction})
+            return res
+
+        is_manual = self.is_manual_mode()
+        if is_manual:
+            res.metadata["manual_mode"] = True
+
+        def _veto_or_advise(reason: str) -> bool:
+            """In manual control mode, flag advisory warnings without hard blocking.
+            In auto mode, enforce strict algorithmic veto."""
+            if is_manual:
+                res.metadata.setdefault("advisory_vetoes", []).append(reason)
+                res.reasons.append(f"[MANUAL ADVISORY] {reason}")
+                return False
+            else:
+                res.veto(reason)
+                return True
+
         if self.state.get("last_loss_ts"):
             dt = time.time() - float(self.state["last_loss_ts"])
-            if dt < self.revenge_window_sec: return res.veto(f"revenge-trade lock ({int(self.revenge_window_sec - dt)}s left)")
-        if int(self.state["daily"].get("trades", 0)) >= self.max_daily_trades: return res.veto(f"max daily trades ({self.max_daily_trades})")
-        if int(self.state.get("consec_losses", 0)) >= self.max_consec_losses: return res.veto(f"max consecutive losses ({self.max_consec_losses})")
-        if float(self.state["daily"].get("realized_r", 0.0)) <= -abs(self.daily_loss_r): return res.veto(f"daily loss brake ({self.daily_loss_r}R)")
+            if dt < self.revenge_window_sec:
+                if _veto_or_advise(f"revenge-trade lock ({int(self.revenge_window_sec - dt)}s left)"):
+                    return res
+        if int(self.state["daily"].get("trades", 0)) >= self.max_daily_trades:
+            if _veto_or_advise(f"max daily trades ({self.max_daily_trades})"):
+                return res
+        if int(self.state.get("consec_losses", 0)) >= self.max_consec_losses:
+            if _veto_or_advise(f"max consecutive losses ({self.max_consec_losses})"):
+                return res
+        if float(self.state["daily"].get("realized_r", 0.0)) <= -abs(self.daily_loss_r):
+            if _veto_or_advise(f"daily loss brake ({self.daily_loss_r}R)"):
+                return res
         age = time.time() - float(ctx.signal_ts or time.time())
-        if age > self.stale_sec: return res.veto(f"stale signal ({int(age)}s)")
+        if age > self.stale_sec:
+            if _veto_or_advise(f"stale signal ({int(age)}s)"):
+                return res
         regime = (ctx.regime or "unknown").lower()
-        if "chaos" in regime or "shock" in regime: return res.veto(f"regime veto ({regime})")
+        if "chaos" in regime or "shock" in regime:
+            if _veto_or_advise(f"regime veto ({regime})"):
+                return res
         persona = str(self.state.get("risk_persona") or "med").lower()
         if persona == "low":
             res.size_mult *= 0.5
-            if ctx.conviction < 0.65: return res.veto("low-risk persona: conviction < 0.65")
-        elif persona == "high": res.size_mult *= 1.15
+            if ctx.conviction < 0.65:
+                if _veto_or_advise("low-risk persona: conviction < 0.65"):
+                    return res
+        elif persona == "high":
+            res.size_mult *= 1.15
         bias = str(self.state.get("bias_day") or "").lower()
-        if bias == "long" and direction != "LONG": return res.veto("bias-day LONG only")
-        if bias == "short" and direction != "SHORT": return res.veto("bias-day SHORT only")
+        if bias == "long" and direction != "LONG":
+            if _veto_or_advise("bias-day LONG only"):
+                return res
+        if bias == "short" and direction != "SHORT":
+            if _veto_or_advise("bias-day SHORT only"):
+                return res
         profile = (ctx.profile or "").lower()
         scorecard = self._scorecard(ctx)
         res.scorecard = scorecard
         balance_profiles = ("balance", "balanced", "protect", "conservative")
         use_scorecard = (not self.balance_mode_only_scorecard) or (profile in balance_profiles or os.getenv("AI_MODE", "").lower() in balance_profiles)
-        if use_scorecard and scorecard < self.min_scorecard: return res.veto(f"scorecard {scorecard:.0f} < {self.min_scorecard:.0f}")
+        if use_scorecard and scorecard < self.min_scorecard:
+            if _veto_or_advise(f"scorecard {scorecard:.0f} < {self.min_scorecard:.0f}"):
+                return res
         if ctx.agent_dirs:
             longs = sum(1 for d in ctx.agent_dirs.values() if str(d).upper() in ("LONG", "BUY"))
             shorts = sum(1 for d in ctx.agent_dirs.values() if str(d).upper() in ("SHORT", "SELL"))
-            if longs and shorts and abs(longs - shorts) <= 1 and len(ctx.agent_dirs) >= 3: return res.veto(f"agent conflict L{longs}/S{shorts}")
-        if ctx.news_risk >= 0.75: return res.veto(f"news risk {ctx.news_risk:.2f}")
+            if longs and shorts and abs(longs - shorts) <= 1 and len(ctx.agent_dirs) >= 3:
+                if _veto_or_advise(f"agent conflict L{longs}/S{shorts}"):
+                    return res
+        if ctx.news_risk >= 0.75:
+            if _veto_or_advise(f"news risk {ctx.news_risk:.2f}"):
+                return res
         if ctx.news_risk >= 0.5:
             res.size_mult *= 0.5
             res.reasons.append("news risk size cut")
-        if ctx.atr > 0 and ctx.spread > 0 and ctx.spread > 0.35 * ctx.atr: return res.veto("spread too wide vs ATR")
+        if ctx.atr > 0 and ctx.spread > 0 and ctx.spread > 0.35 * ctx.atr:
+            if _veto_or_advise("spread too wide vs ATR"):
+                return res
         if ctx.atr > 0 and ctx.entry_price > 0 and ctx.daily_open > 0:
             move = abs(ctx.entry_price - ctx.daily_open) / ctx.atr
-            if move >= self.fomo_atr_mult and ctx.conviction < 0.75: return res.veto(f"FOMO distance {move:.1f} ATR from daily open")
-        if not ctx.structure_ok: return res.veto("structure gate failed")
+            if move >= self.fomo_atr_mult and ctx.conviction < 0.75:
+                if _veto_or_advise(f"FOMO distance {move:.1f} ATR from daily open"):
+                    return res
+        if not ctx.structure_ok:
+            if _veto_or_advise("structure gate failed"):
+                return res
         if ctx.htf_bias:
             hb = ctx.htf_bias.upper()
             if hb in ("LONG", "BULL") and direction == "SHORT":
@@ -176,11 +265,15 @@ class AIAdvancedSuite:
         peak = float(self.state.get("equity_peak") or eq or 1.0)
         if peak > 0 and eq > 0:
             dd = (peak - eq) / peak
-            if dd >= 0.10: return res.veto("recovery mode: DD>=10%")
+            if dd >= 0.10:
+                if _veto_or_advise("recovery mode: DD>=10%"):
+                    return res
             if dd >= 0.06: res.size_mult *= 0.5
             if dd >= 0.03: res.size_mult *= 0.75
         res.size_mult = float(max(0.0, min(res.size_mult, 1.5)))
-        if res.size_mult <= 0.05: return res.veto("size mult near zero")
+        if res.size_mult <= 0.05:
+            if _veto_or_advise("size mult near zero"):
+                return res
         res.reasons.append(f"scorecard={scorecard:.0f}")
         self._audit("entry_allow" if res.allow else "entry_veto", {"symbol": ctx.symbol, "direction": direction, "scorecard": scorecard, "size_mult": res.size_mult, "reasons": list(res.reasons)})
         return res
@@ -237,25 +330,127 @@ class AIAdvancedSuite:
     def status_text(self) -> str:
         self._roll_day()
         d = self.state.get("daily", {})
+        mode = str(self.state.get("control_mode") or "auto").upper()
+        mode_desc = "MANUAL (Trader Advisory — no hard veto)" if mode == "MANUAL" else "AUTO (Strict Algorithmic Gating)"
+        frozen = bool(self.state.get("learn_frozen") or self.learn_freeze)
         lines = [
             "AI Advanced Suite",
             f"- Enabled: {self.enabled}",
-            f"- Persona: {self.state.get('risk_persona')} | Bias: {self.state.get('bias_day') or 'none'}",
+            f"- Control Mode: {mode_desc}",
+            f"- Persona: {self.state.get('risk_persona', 'med').upper()} | Bias: {self.state.get('bias_day') or 'none'}",
             f"- Today trades: {d.get('trades', 0)}/{self.max_daily_trades} | R: {float(d.get('realized_r', 0)):.2f}",
             f"- Consec losses: {self.state.get('consec_losses', 0)}/{self.max_consec_losses}",
-            f"- Learn frozen: {self.state.get('learn_frozen') or self.learn_freeze}",
+            f"- Learn frozen: {frozen}",
             f"- Fill rejects: {self.state.get('fill_rejects', 0)}",
-            f"- Equity: {float(self.state.get('equity') or 0):.2f} peak {float(self.state.get('equity_peak') or 0):.2f}",
-            f"- Scorecard min: {self.min_scorecard} (balance-only={self.balance_mode_only_scorecard})",
+            f"- Equity: ${float(self.state.get('equity') or 0):,.2f} peak ${float(self.state.get('equity_peak') or 0):,.2f}",
+            f"- Scorecard min: {self.min_scorecard:.0f} (balance-only={self.balance_mode_only_scorecard})",
+            f"- Lot ceiling: {self.lot_ceiling:.2f} lots",
             f"- Health live: {self.live_health}",
         ]
         return "\n".join(lines)
+
+    def get_summary_dict(self) -> Dict[str, Any]:
+        """Return rich dictionary of current AI suite telemetry and manual controls."""
+        self._roll_day()
+        d = self.state.get("daily", {})
+        dt = time.time() - float(self.state.get("last_loss_ts") or 0.0)
+        revenge_active = (float(self.state.get("last_loss_ts") or 0.0) > 0) and (dt < self.revenge_window_sec)
+        revenge_left = int(self.revenge_window_sec - dt) if revenge_active else 0
+        loss_brake_tripped = float(d.get("realized_r", 0.0)) <= -abs(self.daily_loss_r)
+        return {
+            "enabled": bool(self.enabled),
+            "control_mode": str(self.state.get("control_mode") or "auto").lower(),
+            "is_manual": self.is_manual_mode(),
+            "override_next": bool(self.state.get("override_next")),
+            "risk_persona": str(self.state.get("risk_persona") or "med").lower(),
+            "bias_day": str(self.state.get("bias_day") or ""),
+            "learn_frozen": bool(self.state.get("learn_frozen") or self.learn_freeze),
+            "trades_today": int(d.get("trades", 0)),
+            "max_daily_trades": self.max_daily_trades,
+            "realized_r": float(d.get("realized_r", 0.0)),
+            "wins": int(d.get("wins", 0)),
+            "losses": int(d.get("losses", 0)),
+            "consec_losses": int(self.state.get("consec_losses", 0)),
+            "max_consec_losses": self.max_consec_losses,
+            "revenge_active": revenge_active,
+            "revenge_left_sec": revenge_left,
+            "loss_brake_tripped": loss_brake_tripped,
+            "fill_rejects": int(self.state.get("fill_rejects", 0)),
+            "equity": float(self.state.get("equity") or 0.0),
+            "equity_peak": float(self.state.get("equity_peak") or 0.0),
+            "min_scorecard": float(self.min_scorecard),
+            "balance_only_scorecard": bool(self.balance_mode_only_scorecard),
+            "lot_ceiling": float(self.lot_ceiling),
+            "live_health": bool(self.live_health),
+        }
 
     def set_enabled(self, on: bool) -> str:
         self.enabled = bool(on)
         self.state["suite_enabled"] = bool(on)
         self._save()
         return f"AI suite {'ON' if on else 'OFF'}"
+
+    def set_control_mode(self, mode: str) -> str:
+        m = str(mode or "").strip().lower()
+        if m in ("manual", "supervise", "supervised", "advisory", "trader"):
+            self.state["control_mode"] = "manual"
+            self._save()
+            return "Control mode set to MANUAL (Trader Supervised / Advisory — gates advise without hard veto)"
+        elif m in ("auto", "autonomous", "strict", "strict_auto"):
+            self.state["control_mode"] = "auto"
+            self._save()
+            return "Control mode set to AUTO (Strict Autonomous Gating — all algorithmic gates enforced)"
+        return "Use: /ai mode auto | manual"
+
+    def set_manual_mode(self, manual: bool) -> str:
+        return self.set_control_mode("manual" if manual else "auto")
+
+    def set_override_next(self, override: bool = True) -> str:
+        self.state["override_next"] = bool(override)
+        self._save()
+        st = "ACTIVATED — next signal will bypass gate vetoes" if override else "DEACTIVATED"
+        return f"Manual 1-trade override {st}"
+
+    def reset_safety_locks(self) -> str:
+        cleared = []
+        if self.state.get("last_loss_ts"):
+            self.state["last_loss_ts"] = 0.0
+            cleared.append("Revenge Lock")
+        if int(self.state.get("consec_losses", 0)) > 0:
+            cleared.append(f"Consec Losses ({self.state['consec_losses']})")
+            self.state["consec_losses"] = 0
+        if int(self.state.get("fill_rejects", 0)) > 0:
+            cleared.append(f"Fill Rejects ({self.state['fill_rejects']})")
+            self.state["fill_rejects"] = 0
+        if float(self.state.get("daily", {}).get("realized_r", 0.0)) <= -abs(self.daily_loss_r):
+            cleared.append("Daily Loss Brake")
+            self.state.setdefault("daily", {})["realized_r"] = 0.0
+        self.state["override_next"] = False
+        self._audit("manual_safety_reset", {"cleared": cleared})
+        self._save()
+        details = ", ".join(cleared) if cleared else "No active locks found"
+        return f"Safety locks reset successfully ({details})"
+
+    def set_min_scorecard(self, score: float) -> str:
+        val = float(np.clip(score, 0.0, 100.0))
+        self.min_scorecard = val
+        self.state["min_scorecard"] = val
+        self._save()
+        return f"Minimum signal scorecard set to {val:.0f}"
+
+    def set_lot_ceiling(self, ceiling: float) -> str:
+        val = float(max(0.01, ceiling))
+        self.lot_ceiling = val
+        self.state["lot_ceiling"] = val
+        self._save()
+        return f"Lot size ceiling set to {val:.2f} lots"
+
+    def set_scorecard_balance_only(self, balance_only: bool) -> str:
+        self.balance_mode_only_scorecard = bool(balance_only)
+        self.state["balance_mode_only_scorecard"] = bool(balance_only)
+        self._save()
+        st = "Balance/Conservative profiles ONLY" if balance_only else "ALL strategy profiles"
+        return f"Scorecard gate applies to: {st}"
 
     def set_persona(self, persona: str) -> str:
         p = persona.strip().lower()
@@ -269,14 +464,27 @@ class AIAdvancedSuite:
         self.state["bias_day"] = b; self._save(); return f"Day bias set to {b.upper()}"
 
     def set_learn_freeze(self, frozen: bool) -> str:
-        self.state["learn_frozen"] = bool(frozen); self._save(); return f"Learn freeze = {frozen}"
+        self.learn_freeze = bool(frozen)
+        self.state["learn_frozen"] = bool(frozen)
+        self._save()
+        return f"Learn freeze = {frozen}"
 
-    def health_ok(self, ea_ok: bool = True, ticks_ok: bool = True) -> Tuple[bool, str]:
+    def health_ok(self, ea_ok: Optional[bool] = None, ticks_ok: Optional[bool] = None) -> Tuple[bool, str]:
         if not self.live_health: return True, "health checks disabled"
         problems = []
-        if not ea_ok: problems.append("EA bridge not ok")
+        if ea_ok is None:
+            try:
+                from bridge import ea_client
+                st = ea_client.status()
+                ea_ok = bool(st.get("ok", False))
+            except Exception:
+                ea_ok = True
+        if ticks_ok is None:
+            ticks_ok = True
+        if not ea_ok: problems.append("EA bridge not connected")
         if not ticks_ok: problems.append("no ticks")
-        if int(self.state.get("fill_rejects", 0)) >= 8: problems.append("fill rejects elevated")
+        if int(self.state.get("fill_rejects", 0)) >= 8: problems.append(f"fill rejects elevated ({self.state.get('fill_rejects', 0)})")
+        if int(self.state.get("consec_losses", 0)) >= self.max_consec_losses: problems.append(f"consecutive losses limit reached ({self.state.get('consec_losses')})")
         return (False, "; ".join(problems)) if problems else (True, "ok")
 
     def weekly_critique_prompt(self) -> str:
