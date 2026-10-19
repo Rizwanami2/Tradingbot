@@ -1978,6 +1978,11 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sub = args[1].lower() if len(args) > 1 else "toggle"
         if sub in ("on", "1", "true", "enable", "start"):
             brain.set_enabled(True)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(True)
+            except Exception:
+                pass
             await update.message.reply_text(
                 "🟢 **Autotrade: Autonomous Learner Veto ACTIVATED**\n"
                 "• Live signals are checked against learned rules and flaw bans.\n"
@@ -1987,6 +1992,11 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         elif sub in ("off", "0", "false", "disable", "pause", "stop"):
             brain.set_enabled(False)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(False)
+            except Exception:
+                pass
             await update.message.reply_text(
                 "🔴 **Autotrade: Autonomous Learner Veto PAUSED**\n"
                 "• All autotrade signals will execute unblocked by learner bans.\n"

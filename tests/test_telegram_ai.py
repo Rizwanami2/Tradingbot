@@ -181,6 +181,106 @@ class TestTelegramAI(unittest.IsolatedAsyncioTestCase):
         handled = await handle_ai_callback(update_mock, self.ctx)
         self.assertTrue(handled)
 
+        # Switch to advanced view
+        query_mock.data = "ai:view:advanced"
+        handled = await handle_ai_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+        self.assertEqual(self.suite.state.get("ui_mode"), "advanced")
+
+        # Switch to classic view
+        query_mock.data = "ai:view:classic"
+        handled = await handle_ai_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+        self.assertEqual(self.suite.state.get("ui_mode"), "classic")
+
+        # Clear bans callback
+        query_mock.data = "ai:clearbans"
+        handled = await handle_ai_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+
+    async def test_ai_classic_and_advance_mode_switch(self):
+        # Default is classic mode
+        self.ctx.args = []
+        await ai_command(self.update, self.ctx)
+        msg_default = self.message.reply_text.call_args[0][0]
+        self.assertIn("Classic Mode", msg_default)
+        self.assertIn("AI & Veto Combined", msg_default)
+
+        # Switch to advanced mode
+        self.ctx.args = ["advance"]
+        await ai_command(self.update, self.ctx)
+        msg_adv = self.message.reply_text.call_args[0][0]
+        self.assertIn("Advanced Command Mode Activated", msg_adv)
+        self.assertIn("Advanced View", msg_adv)
+        self.assertEqual(self.suite.state.get("ui_mode"), "advanced")
+
+        # Switch back to classic mode
+        self.ctx.args = ["classic"]
+        await ai_command(self.update, self.ctx)
+        msg_classic = self.message.reply_text.call_args[0][0]
+        self.assertIn("Classic Command Mode Activated", msg_classic)
+        self.assertIn("Classic Mode", msg_classic)
+        self.assertEqual(self.suite.state.get("ui_mode"), "classic")
+
+    async def test_ai_combined_on_off_syncs_learner(self):
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+
+        # Turn OFF
+        self.ctx.args = ["off"]
+        await ai_command(self.update, self.ctx)
+        self.assertFalse(self.suite.enabled)
+        self.assertFalse(brain.is_enabled())
+        msg_off = self.message.reply_text.call_args[0][0]
+        self.assertIn("OFF", msg_off)
+        self.assertIn("AI & Veto Protection PAUSED", msg_off)
+
+        # Turn ON
+        self.ctx.args = ["on"]
+        await ai_command(self.update, self.ctx)
+        self.assertTrue(self.suite.enabled)
+        self.assertTrue(brain.is_enabled())
+        msg_on = self.message.reply_text.call_args[0][0]
+        self.assertIn("ON", msg_on)
+        self.assertIn("AI & Veto Protection ACTIVATED", msg_on)
+
+    async def test_ai_unban_and_clearbans(self):
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        brain.knowledge.banned_hours = [14]
+        brain.knowledge.banned_weekdays = [0]
+
+        # Unban hour via /ai unban 14
+        self.ctx.args = ["unban", "14"]
+        await ai_command(self.update, self.ctx)
+        self.assertNotIn(14, brain.knowledge.banned_hours)
+        msg_unban = self.message.reply_text.call_args[0][0]
+        self.assertIn("Unbanned UTC Hour 14:00", msg_unban)
+
+        # Unban monday via /ai unban monday
+        self.ctx.args = ["unban", "monday"]
+        await ai_command(self.update, self.ctx)
+        self.assertNotIn(0, brain.knowledge.banned_weekdays)
+        msg_unban_wd = self.message.reply_text.call_args[0][0]
+        self.assertIn("Unbanned Monday", msg_unban_wd)
+
+        # Clear bans via /ai clearbans
+        brain.knowledge.banned_hours = [10, 15]
+        self.ctx.args = ["clearbans"]
+        await ai_command(self.update, self.ctx)
+        self.assertEqual(brain.knowledge.banned_hours, [])
+        msg_clear = self.message.reply_text.call_args[0][0]
+        self.assertIn("Cleared All Active Bans", msg_clear)
+
+    async def test_veto_command_combined_dashboard(self):
+        from telegram_brain import veto_command
+        self.ctx.args = []
+        await veto_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        msg = self.message.reply_text.call_args[0][0]
+        self.assertIn("AI Advanced Suite & Manual Control Hub", msg)
+        self.assertIn("Classic Mode", msg)
+
     def test_cli_ai_interactive(self):
         from main import run_cli_interactive
         input_data = io.StringIO(

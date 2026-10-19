@@ -105,6 +105,7 @@ class AIAdvancedSuite:
             "risk_persona": "med",
             "bias_day": "",
             "control_mode": "auto",
+            "ui_mode": "classic",
             "override_next": False,
             "min_scorecard": 55.0,
             "lot_ceiling": 1.0,
@@ -382,7 +383,17 @@ class AIAdvancedSuite:
             "balance_only_scorecard": bool(self.balance_mode_only_scorecard),
             "lot_ceiling": float(self.lot_ceiling),
             "live_health": bool(self.live_health),
+            "ui_mode": str(self.state.get("ui_mode", "classic")),
         }
+
+    def set_ui_mode(self, mode: str) -> str:
+        m = "classic" if str(mode or "").strip().lower() in ("classic", "simple", "clean") else "advanced"
+        self.state["ui_mode"] = m
+        self._save()
+        return f"Command UI mode set to {m.upper()}"
+
+    def is_classic_mode(self) -> bool:
+        return self.state.get("ui_mode", "classic") == "classic"
 
     def set_enabled(self, on: bool) -> str:
         self.enabled = bool(on)

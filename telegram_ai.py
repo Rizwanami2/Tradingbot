@@ -12,17 +12,89 @@ from telegram_brain import safe_reply
 logger = logging.getLogger("TelegramAI")
 
 
-def build_ai_dashboard(suite=None) -> Tuple[str, InlineKeyboardMarkup]:
-    """Build a modern, formatted markdown dashboard with interactive 1-tap manual controls."""
+def build_ai_dashboard(suite=None, mode: Optional[str] = None) -> Tuple[str, InlineKeyboardMarkup]:
+    """Build modern markdown dashboard with classic simple mode by default and deep advanced view."""
     if suite is None:
         from ai_advanced_suite import get_ai_suite
         suite = get_ai_suite()
 
     s = suite.get_summary_dict()
 
-    # Status indicators & emojis
-    status_icon = "🟢 ACTIVE" if s["enabled"] else "🔴 OFF"
+    from autonomous_learner import get_brain
+    brain = get_brain(auto_bootstrap=False)
+
+    active_mode = str(mode or suite.state.get("ui_mode", "classic")).lower()
+    if active_mode not in ("classic", "advanced"):
+        active_mode = "classic"
+
+    ai_on = bool(s["enabled"])
+    brain_on = bool(brain.is_enabled())
+
+    # Combined AI & Veto status indicators
+    if ai_on and brain_on:
+        status_icon = "🟢 ACTIVE / ON (AI & Veto Combined)"
+    elif ai_on:
+        status_icon = "🟡 PARTIAL (AI Suite Active, Veto Paused)"
+    elif brain_on:
+        status_icon = "🟡 PARTIAL (Veto Active, AI Suite Paused)"
+    else:
+        status_icon = "🔴 PAUSED / OFF (All Filters Disabled)"
+
     mode_icon = "🕹️ MANUAL (Trader Supervised / Advisory)" if s["is_manual"] else "🤖 AUTO (Strict Algorithmic Gating)"
+
+    # Learner veto active ban status
+    b_hrs = getattr(brain.knowledge, "banned_hours", [])
+    b_wds = getattr(brain.knowledge, "banned_weekdays", [])
+    b_setups = getattr(brain.knowledge, "banned_setups", {})
+    if not b_hrs and not b_wds and not b_setups:
+        veto_summary = "🟢 Clean (No Active Bans)"
+    else:
+        ban_parts = []
+        if b_hrs:
+            ban_parts.append(f"Hours {sorted(b_hrs)}")
+        if b_wds:
+            wd_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            ban_parts.append(f"Days {[wd_names[w % 7] for w in b_wds]}")
+        if b_setups:
+            ban_parts.append(f"{len(b_setups)} Setups")
+        veto_summary = f"🔴 Banned: {', '.join(ban_parts)}"
+
+    if active_mode == "classic":
+        text = (
+            "🤖 **AI Advanced Suite & Manual Control Hub** (Classic Mode)\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **AI Suite Status:** `{status_icon}`\n"
+            f"• **Control Mode:** `{mode_icon}`\n"
+            f"• **Learner Veto:** `{veto_summary}`\n"
+            f"• **Scorecard Gate:** Min `{s['min_scorecard']:.0f}` pts\n"
+            f"• **Today Performance:** `{s['wins']}W / {s['losses']}L` | `{s['realized_r']:+.2f}R` (`{s['trades_today']}` trades)\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 _Combined AI & Veto active. Simple 1-tap controls below:_"
+        )
+
+        btn_toggle = (
+            InlineKeyboardButton("🔴 Turn OFF (Pause)", callback_data="ai:toggle")
+            if (ai_on or brain_on)
+            else InlineKeyboardButton("🟢 Turn ON (Activate)", callback_data="ai:toggle")
+        )
+        btn_mode = (
+            InlineKeyboardButton("🤖 Switch to Auto", callback_data="ai:mode:auto")
+            if s["is_manual"]
+            else InlineKeyboardButton("🕹️ Switch to Manual", callback_data="ai:mode:manual")
+        )
+        markup = InlineKeyboardMarkup([
+            [btn_toggle, btn_mode],
+            [
+                InlineKeyboardButton("🔓 Clear All Bans", callback_data="ai:clearbans"),
+                InlineKeyboardButton("⚙️ Advanced View", callback_data="ai:view:advanced"),
+            ],
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data="ai:refresh"),
+            ],
+        ])
+        return text, markup
+
+    # Advanced View
     persona_map = {"low": "🟢 LOW (Conservative)", "med": "🟡 MED (Balanced)", "high": "🔴 HIGH (Aggressive)"}
     persona_str = persona_map.get(s["risk_persona"], s["risk_persona"].upper())
 
@@ -49,13 +121,14 @@ def build_ai_dashboard(suite=None) -> Tuple[str, InlineKeyboardMarkup]:
     score_scope = "Balance Profile Only" if s["balance_only_scorecard"] else "All Profiles"
 
     text = (
-        "🤖 **AI Advanced Suite & Manual Control Hub**\n"
+        "🤖 **AI Advanced Suite & Manual Control Hub** (Advanced View)\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"• **AI Suite Status:** `{status_icon}`\n"
         f"• **Control Mode:** `{mode_icon}`\n"
         f"• **Risk Persona:** `{persona_str}`\n"
         f"• **Day Bias:** `{bias_str}`\n"
         f"• **Learning State:** `{learn_str}`\n"
+        f"• **Learner Veto:** `{veto_summary}`\n"
         f"• **Scorecard Gate:** Min `{s['min_scorecard']:.0f}` (`{score_scope}`)\n"
         f"• **Lot Ceiling:** `{s['lot_ceiling']:.2f} lots` max\n"
         f"• **Manual Override:** `{override_str}`\n\n"
@@ -66,12 +139,12 @@ def build_ai_dashboard(suite=None) -> Tuple[str, InlineKeyboardMarkup]:
         f"• **Daily Loss Brake:** `{loss_brake_str}`\n"
         f"• **Fill Rejects:** `{s['fill_rejects']}` | **Equity:** `${s['equity']:,.2f}`\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 _Tap buttons below for instant manual control or type `/ai help`:_"
+        "💡 _Deep telemetry active. Tap below to switch back to Classic or adjust:_"
     )
 
     btn_toggle_ai = (
         InlineKeyboardButton("🔴 Turn AI OFF", callback_data="ai:toggle")
-        if s["enabled"]
+        if (ai_on or brain_on)
         else InlineKeyboardButton("🟢 Turn AI ON", callback_data="ai:toggle")
     )
     btn_toggle_mode = (
@@ -110,8 +183,10 @@ def build_ai_dashboard(suite=None) -> Tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("❤️ Health", callback_data="ai:health"),
             InlineKeyboardButton("🔄 Refresh", callback_data="ai:refresh"),
         ],
+        [
+            InlineKeyboardButton("📱 Classic View (Clean)", callback_data="ai:view:classic"),
+        ],
     ])
-
     return text, markup
 
 
@@ -128,8 +203,12 @@ async def ai_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             msg = (
                 "🤖 **AI Advanced Suite & Manual Control Guide**\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
-                "• `/ai` or `/ai status` — Interactive AI dashboard & live controls\n"
-                "• `/ai on` / `/ai off` — Enable or disable entire AI gating suite\n\n"
+                "• `/ai` or `/ai status` — Combined AI & Veto dashboard & live controls\n"
+                "• `/ai classic` — Switch to Classic Clean Mode (concise 1-tap view)\n"
+                "• `/ai advance` — Switch to Advanced Mode (deep telemetry & breakers)\n"
+                "• `/ai on` / `/ai off` — Enable or disable combined AI & Veto protection\n"
+                "• `/ai unban <hour|day|all>` — Unban hour (e.g. 14) or day (e.g. monday)\n"
+                "• `/ai clearbans` — Clear all active bans & reset safety locks\n\n"
                 "🕹️ **Manual Control & Overrides:**\n"
                 "• `/ai mode manual` or `/ai manual` — Switch to Manual Control mode (gates advise without hard veto)\n"
                 "• `/ai mode auto` or `/ai auto` — Switch to Autonomous Strict Gating mode\n"
@@ -151,6 +230,18 @@ async def ai_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await safe_reply(update, msg, parse_mode="Markdown")
             return
 
+        if sub in ("classic", "simple", "clean"):
+            suite.set_ui_mode("classic")
+            text, markup = build_ai_dashboard(suite, mode="classic")
+            await safe_reply(update, "📱 **Classic Command Mode Activated** (Clean & concise)\n\n" + text, parse_mode="Markdown", reply_markup=markup)
+            return
+
+        if sub in ("advance", "advanced", "deep", "pro"):
+            suite.set_ui_mode("advanced")
+            text, markup = build_ai_dashboard(suite, mode="advanced")
+            await safe_reply(update, "⚙️ **Advanced Command Mode Activated** (Full deep telemetry)\n\n" + text, parse_mode="Markdown", reply_markup=markup)
+            return
+
         if sub in ("status", "stat", "dashboard", "dash", "info", "show"):
             text, markup = build_ai_dashboard(suite)
             await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
@@ -158,14 +249,99 @@ async def ai_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if sub in ("on", "enable", "1", "true"):
             res = suite.set_enabled(True)
+            try:
+                from autonomous_learner import get_brain
+                get_brain(auto_bootstrap=False).set_enabled(True)
+            except Exception:
+                pass
             text, markup = build_ai_dashboard(suite)
-            await safe_reply(update, f"✅ {res}\n\n" + text, parse_mode="Markdown", reply_markup=markup)
+            await safe_reply(update, f"✅ **AI & Veto Protection ACTIVATED (ON)**\n• {res}\n• Autonomous Learner Veto: ON\n\n" + text, parse_mode="Markdown", reply_markup=markup)
             return
 
         if sub in ("off", "disable", "0", "false"):
             res = suite.set_enabled(False)
+            try:
+                from autonomous_learner import get_brain
+                get_brain(auto_bootstrap=False).set_enabled(False)
+            except Exception:
+                pass
             text, markup = build_ai_dashboard(suite)
-            await safe_reply(update, f"⚠️ {res}\n\n" + text, parse_mode="Markdown", reply_markup=markup)
+            await safe_reply(update, f"⚠️ **AI & Veto Protection PAUSED (OFF)**\n• {res}\n• Autonomous Learner Veto: OFF\n\n" + text, parse_mode="Markdown", reply_markup=markup)
+            return
+
+        if sub in ("clearbans", "clearallbans", "unbanall"):
+            try:
+                from autonomous_learner import get_brain
+                brain = get_brain(auto_bootstrap=False)
+                c_res = brain.clear_bans()
+            except Exception:
+                c_res = {"hours": 0, "weekdays": 0, "setups": 0}
+            suite.reset_safety_locks()
+            text, markup = build_ai_dashboard(suite)
+            await safe_reply(
+                update,
+                f"🔓 **Cleared All Active Bans & Reset Safety Locks**\n"
+                f"• Hours cleared: `{c_res['hours']}`\n"
+                f"• Weekdays cleared: `{c_res['weekdays']}`\n"
+                f"• Setups cleared: `{c_res['setups']}`\n"
+                f"• Safety locks: `RESET`\n\n" + text,
+                parse_mode="Markdown",
+                reply_markup=markup,
+            )
+            return
+
+        if sub in ("unban", "allow"):
+            target = args[1].lower() if len(args) > 1 else ""
+            wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            if target in ("weekday", "wd", "day") and len(args) > 2:
+                target = args[2].lower()
+            elif target in ("hour", "hours") and len(args) > 2 and args[2].isdigit():
+                target = args[2]
+
+            try:
+                from autonomous_learner import get_brain
+                brain = get_brain(auto_bootstrap=False)
+                w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+                if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+                    ok = brain.unban_weekday(w)
+                    w_name = wd_names[w]
+                    msg = f"🔓 **Unbanned {w_name} (Weekday {w})** from AI & Veto filter." if ok else f"ℹ️ **{w_name}** was not banned."
+                elif target.isdigit():
+                    h = int(target) % 24
+                    if h in brain.knowledge.banned_weekdays and h not in brain.knowledge.banned_hours:
+                        ok = brain.unban_weekday(h)
+                        w_name = wd_names[h % 7]
+                        msg = f"🔓 **Unbanned {w_name} (Weekday {h})** from AI & Veto filter."
+                    else:
+                        ok = brain.unban_hour(h)
+                        msg = f"🔓 **Unbanned UTC Hour {h:02d}:00** from AI & Veto filter." if ok else f"ℹ️ Hour {h:02d}:00 was not banned."
+                elif target in ("weekdays", "allweekdays", "weekday"):
+                    cnt = brain.clear_banned_weekdays()
+                    msg = f"🔓 **Cleared all {cnt} banned weekdays** from AI & Veto filter."
+                elif target in ("hours", "allhours"):
+                    cnt = brain.clear_banned_hours()
+                    msg = f"🔓 **Cleared all {cnt} banned UTC hours** from AI & Veto filter."
+                elif target in ("all", "allbans", "everything"):
+                    c_res = brain.clear_bans()
+                    suite.reset_safety_locks()
+                    msg = f"🔓 **Cleared all active bans & reset safety locks** (Hours: {c_res['hours']}, Weekdays: {c_res['weekdays']}, Setups: {c_res['setups']})."
+                elif target:
+                    removed = brain.unban_setup(target)
+                    msg = f"🔓 **Unbanned Setup(s):** `{', '.join(removed)}`" if removed else f"ℹ️ No banned setups matching '{target}' found."
+                else:
+                    msg = (
+                        "ℹ️ **AI & Veto Unban Usage:**\n"
+                        "• `/ai unban monday` (or `mon`, `tue`, etc.)\n"
+                        "• `/ai unban <hour>` (e.g. `/ai unban 14`)\n"
+                        "• `/ai unban all` or `/ai clearbans`"
+                    )
+                    await safe_reply(update, msg, parse_mode="Markdown")
+                    return
+            except Exception as e:
+                msg = f"Unban error: {e}"
+
+            text, markup = build_ai_dashboard(suite)
+            await safe_reply(update, f"{msg}\n\n" + text, parse_mode="Markdown", reply_markup=markup)
             return
 
         if sub in ("mode", "control"):
@@ -400,7 +576,39 @@ async def handle_ai_callback(data: Any, update: Optional[Update] = None, ctx: Op
         return True
 
     elif action == "toggle":
-        suite.set_enabled(not suite.enabled)
+        try:
+            from autonomous_learner import get_brain
+            brain = get_brain(auto_bootstrap=False)
+            new_st = not (suite.enabled or brain.is_enabled())
+            suite.set_enabled(new_st)
+            brain.set_enabled(new_st)
+        except Exception:
+            suite.set_enabled(not suite.enabled)
+        text, markup = build_ai_dashboard(suite)
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            pass
+        return True
+
+    elif action.startswith("view:"):
+        target_view = action.split(":", 1)[1]
+        suite.set_ui_mode(target_view)
+        text, markup = build_ai_dashboard(suite, mode=target_view)
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            pass
+        return True
+
+    elif action == "clearbans":
+        try:
+            from autonomous_learner import get_brain
+            brain = get_brain(auto_bootstrap=False)
+            brain.clear_bans()
+        except Exception:
+            pass
+        suite.reset_safety_locks()
         text, markup = build_ai_dashboard(suite)
         try:
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)

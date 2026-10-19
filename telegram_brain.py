@@ -174,6 +174,11 @@ async def handle_learner_callback(data: str, update: Update, ctx: ContextTypes.D
 
     if action in ("off", "disable", "pause"):
         brain.set_enabled(False)
+        try:
+            from ai_advanced_suite import get_ai_suite
+            get_ai_suite().set_enabled(False)
+        except Exception:
+            pass
         msg = (
             "🔴 *Autonomous Learner Filter Paused*\n"
             "• Trade signal vetoing is **DISABLED**.\n"
@@ -185,6 +190,11 @@ async def handle_learner_callback(data: str, update: Update, ctx: ContextTypes.D
 
     elif action in ("on", "enable", "activate"):
         brain.set_enabled(True)
+        try:
+            from ai_advanced_suite import get_ai_suite
+            get_ai_suite().set_enabled(True)
+        except Exception:
+            pass
         msg = (
             "🟢 *Autonomous Learner Filter Activated*\n"
             "• Trade signal vetoing is **ACTIVE**.\n"
@@ -197,6 +207,11 @@ async def handle_learner_callback(data: str, update: Update, ctx: ContextTypes.D
     elif action == "toggle":
         new_val = not getattr(brain.knowledge, "enabled", True)
         brain.set_enabled(new_val)
+        try:
+            from ai_advanced_suite import get_ai_suite
+            get_ai_suite().set_enabled(new_val)
+        except Exception:
+            pass
         st = "ACTIVATED 🟢" if new_val else "PAUSED 🔴"
         msg = (
             f"🧠 *Autonomous Learner Filter:* `{st}`\n"
@@ -304,17 +319,27 @@ async def learner_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if subcmd in ("on", "enable", "start", "1", "true"):
             brain.set_enabled(True)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(True)
+            except Exception:
+                pass
             msg = (
                 "🟢 *Autonomous Learner Filter Activated*\n"
                 "• Live signals are actively checked against learned filters.\n"
                 "• Flawed hours, banned setups, and low-expectancy patterns will be vetoed.\n"
-                "• Regime size multipliers are active.\n\n"
+                "• Combined AI & Veto protection is active.\n\n"
                 "💡 _To pause vetoing anytime: `/learner off` or `/veto off`_"
             )
             await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(True))
 
         elif subcmd in ("off", "disable", "pause", "stop", "0", "false"):
             brain.set_enabled(False)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(False)
+            except Exception:
+                pass
             msg = (
                 "🔴 *Autonomous Learner Filter Paused*\n"
                 "• Signal vetoing is **DISABLED** (signals pass through unblocked).\n"
@@ -473,7 +498,18 @@ async def learner_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await safe_reply(update, f"Learner error: {e}", parse_mode=None)
 
 
-veto_command = learner_command
+async def veto_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Unified /veto command — opens combined AI & Veto hub or delegates to learner actions."""
+    args = list(getattr(ctx, "args", []) or [])
+    if not args or (args and args[0].lower() in ("status", "dash", "dashboard", "hub")):
+        try:
+            from telegram_ai import build_ai_dashboard
+            text, markup = build_ai_dashboard()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
+            return
+        except Exception as e:
+            logger.debug("veto dashboard fallback: %s", e)
+    await learner_command(update, ctx)
 
 
 async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

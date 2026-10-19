@@ -425,9 +425,10 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
             unban_note = f" | Unban: `/learner unban {w_name.lower()}`"
         elif m_hr:
             unban_note = f" | Unban: `/learner unban {m_hr.group(1)}`"
-        else:
-            unban_note = ""
-        return False, f"Trade execution blocked by Autonomous Learner: {vr}\n💡 _Toggle filter: `/learner off` or `/veto off`{unban_note}_"
+        return False, (
+            f"Trade execution blocked by Autonomous Learner: {vr}\n"
+            f"💡 _AI & Veto Filter active. Toggle: `/ai off` or `/veto off` or `/learner off`{unban_note}_"
+        )
     if getattr(engine, "execution_halted", False):
         if not getattr(engine, "active_positions", None) and not getattr(engine, "pending_setups", None):
             try:
