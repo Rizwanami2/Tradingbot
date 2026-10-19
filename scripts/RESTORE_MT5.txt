@@ -1,16 +1,14 @@
-RESTORE mt5_broker.py + hybrid mode
-====================================
+Restore ORIGINAL mt5_broker.py (remove hybrid)
+==============================================
 
 cd C:\Tradingbot
-git fetch origin
-git show 575aba1aa62a9e9ae6b48d212438a956b8ae6e62:mt5_broker.py > mt5_broker.py
-python scripts/apply_mt5_hybrid.py
+git pull origin main
+python scripts/restore_mt5_original.py
 
-Verify: findstr "Hybrid ON" mt5_broker.py
+# OR from git history:
+# git show 575aba1aa62a9e9ae6b48d212438a956b8ae6e62:mt5_broker.py > mt5_broker.py
 
-.env: MT5_BACKEND=ea_bridge
+.env stays:
+MT5_BACKEND=ea_bridge
 
-Restart bot. Log should show:
-  Hybrid ON: native quotes/candles + EA Bridge orders
-
-Orders = EA Bridge | Quotes = native MetaTrader5
+No hybrid. Orders and data via EA bridge (or native if you set MT5_BACKEND=native).
