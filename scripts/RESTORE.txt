@@ -1,0 +1,25 @@
+RESTORE — normal project state
+==============================
+
+1) Pull latest
+   cd C:\Tradingbot
+   git fetch origin
+   git pull origin main
+
+2) Ensure full mt5_broker.py (not a stub)
+   findstr "class MT5Broker" mt5_broker.py
+   If missing:
+     git show 575aba1aa62a9e9ae6b48d212438a956b8ae6e62:mt5_broker.py > mt5_broker.py
+
+3) If you ran risk-fix script and want OLD defaults back:
+   python scripts/restore_module_defaults.py
+
+4) .env normal (EA bridge, no hybrid)
+   MT5_BACKEND=ea_bridge
+   EA_BRIDGE_DIR=
+   BOT_AUTOTRADE=false
+
+5) Restart bot
+
+Hybrid mode is cancelled. Risk tighter defaults are optional via
+  python scripts/apply_module_risk_fixes.py
