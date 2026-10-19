@@ -877,12 +877,8 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Risk Mode:** {mode_icon} `{s.mode.upper()}` | **Today PnL:** `${s.daily_pnl:+,.2f}`\n"
         f"• **Broker:** `{bname}` (Mode: `{bmode}`){b_extra}\n"
     )
-    try:
-        from anti_spam import get_anti_spam_limiter
-        _lim = get_anti_spam_limiter()
-        msg += f"• **Anti-Spam:** Entry `{_lim.entry_cooldown_sec}s` | Loss `{_lim.loss_cooldown_sec}s` | Max/Sym `{_lim.max_positions_per_symbol}` (/cooldown)\n"
-    except Exception:
-        pass
+    slots_avail = engine.slots_available() if hasattr(engine, "slots_available") else (max_trades - summary.get("active_positions_count", 0))
+    msg += f"• **Slots:** `{summary['active_positions_count']}/{max_trades}` active (`{slots_avail}` free) | Max/Asset `{getattr(engine, 'max_positions_per_symbol', 3)}` (/slots)\n"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
@@ -4564,7 +4560,7 @@ def run_cli_interactive():
             if sym_choice:
                 config.set_autotrade_symbols(sym_choice)
                 print(f"Autotrade symbols set to: {', '.join(sym_choice)}")
-            if any(a in ("scalp", "spam") for a in args):
+            if any(a in ("scalp",) for a in args):
                 try:
                     from strategy_profiles import apply_profile
                     apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
@@ -4572,7 +4568,7 @@ def run_cli_interactive():
                     pass
                 autotrade_active = True
                 engine.reset_halt()
-                print(f"Autotrade ON in RAPID SCALP SPAM MODE ({broker_mode} mode) for {', '.join(config.get_autotrade_symbols())}")
+                print(f"Autotrade ON in HIGH-ACCURACY SCALP MODE ({broker_mode} mode) for {', '.join(config.get_autotrade_symbols())}")
             elif arg in ("on", "1", "true", "enable") or (sym_choice and arg in ("btc", "gold", "both", "all")):
                 autotrade_active = True
                 engine.reset_halt()
@@ -5317,12 +5313,12 @@ def run_cli_interactive():
                 print(f"Settings error: {e}")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, train [heavy|quick], relearn [SYM], ask [TEXT], settings, reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, train [heavy|quick], relearn [SYM], ask [TEXT], settings, reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], chart [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
                 "⚡ Execution: positions, slots [auto|manual <1-6>], autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
-                "🛡️ Risk: status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
+                "🛡️ Risk: status, health, risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], replay [ID], export, setups, abooks, heal\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, train [heavy|quick], relearn [SYM|ALL]\n"
                 "⚙️ Settings: settings, config (view & configure active system settings)\n"
@@ -5688,7 +5684,7 @@ def run_cli_interactive():
             except Exception as e:
                 print(f"AI command error: {e}")
         else:
-            print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, cooldown, spam, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, train, relearn, ask, reset, exit")
+            print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, train, relearn, ask, reset, exit")
 
 
 def main():

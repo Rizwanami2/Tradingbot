@@ -833,7 +833,7 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     symbols_str = ", ".join(getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)())
 
-    if any(a in ("scalp", "spam") for a in args):
+    if any(a in ("scalp",) for a in args):
         try:
             from strategy_profiles import apply_profile
             apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)

@@ -315,11 +315,11 @@ async def live_monitoring_worker(
                         can_open = False
                     elif is_scalping:
                         # Deterministic scalp slot management: total capacity, per-currency limit, minimum price distance
-                        can_open, spam_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
+                        can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
                     else:
                         can_open = open_n < max_open and symbol not in engine.active_positions and symbol not in engine.pending_setups
                         if can_open:
-                            can_open, spam_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
+                            can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
 
                     if can_open:
                         sig, why, votes = arbiter.decide(

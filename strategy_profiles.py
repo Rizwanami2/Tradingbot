@@ -41,7 +41,7 @@ class StrategyProfile:
     poll_interval: int = 2          # Fast 2s polling in autotrade
     fast_poll_interval: int = 1     # 1s poll when monitoring positions
     max_open_trades: int = 6        # Up to 6 slots (3 Gold, 3 BTC)
-    # Scalp Trailing Stop Loss & Anti-Spam Controls
+    # Scalp Trailing Stop Loss & Position Controls
     scalp_trail_enabled: bool = True
     scalp_trail_activation_usd: float = 1.00
     scalp_trail_distance_usd: float = 0.80
