@@ -200,10 +200,13 @@ async def live_monitoring_worker(
                 await _send_alert(session_msg)
         except Exception:
             pass
-        # MT5 Live Position Synchronization
+        # MT5 Live Position Synchronization & Stale Halt Auto-Heal
         try:
             if hasattr(engine, "reconcile_positions"):
                 engine.reconcile_positions()
+                if getattr(engine, "execution_halted", False) and not engine.active_positions and not engine.pending_setups:
+                    logger.info("[AutotradeWorker] Auto-cleared stale execution_halted state after clean reconciliation.")
+                    engine.reset_halt()
         except Exception as _sync_err:
             logger.debug("[Autotrade] Broker position reconcile notice: %s", _sync_err)
 

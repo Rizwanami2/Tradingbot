@@ -14,12 +14,19 @@ from mt5_broker import (
     MT5Broker,
     MockMT5Broker,
     resolve_mt5_symbol,
+    _RESOLVED_CACHE,
 )
 from risk_manager import RiskManager
 from execution_engine import ExecutionEngine, OrderStatus
 
 
 class TestMT5Broker(unittest.TestCase):
+    def setUp(self):
+        _RESOLVED_CACHE.clear()
+
+    def tearDown(self):
+        _RESOLVED_CACHE.clear()
+
     def test_resolve_mt5_symbol_aliases(self):
         # Basic alias resolution
         self.assertEqual(resolve_mt5_symbol("GOLD"), "XAUUSD")

@@ -416,11 +416,17 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
     if sig.get("vetoed"):
         return False, f"Trade execution blocked by Autonomous Learner: {sig.get('veto_reason', 'Vetoed')}"
     if getattr(engine, "execution_halted", False):
-        return False, (
-            "Execution halted after uncertain broker state. "
-            "Reconcile broker positions, then resume with `/autotrade on` or `/risk restart`. "
-            "Verify live MT5 connection with `/mt5 status`."
-        )
+        if not getattr(engine, "active_positions", None) and not getattr(engine, "pending_setups", None):
+            try:
+                engine.reset_halt()
+            except Exception:
+                pass
+        else:
+            return False, (
+                "Execution halted after uncertain broker state. "
+                "Reconcile broker positions, then resume with `/autotrade on` or `/risk restart`. "
+                "Verify live MT5 connection with `/mt5 status`."
+            )
     try:
         order = engine.register_setup(sig, reason=sig.get("reason", "Multi-Agent Consensus"))
     except Exception as e:
@@ -434,6 +440,12 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
     except Exception as e:
         return True, f"Setup registered (fill pending): {e}"
     msgs = [ev.get("message") for ev in events if ev.get("message")]
+    failed_evs = [ev for ev in events if ev.get("event") in ("BROKER_EXECUTION_FAILED", "BROKER_CLOSE_FAILED")]
+    if failed_evs:
+        last_fail = failed_evs[-1].get("message") or "Broker execution failed"
+        return False, last_fail
     if order.symbol in getattr(engine, "active_positions", {}):
         return True, msgs[-1] if msgs else f"Trade filled: {order.symbol} {order.direction}"
-    return True, msgs[-1] if msgs else f"Setup pending: {order.symbol} @ {order.entry_level}"
+    if order.id in getattr(engine, "pending_setups", {}):
+        return True, msgs[-1] if msgs else f"Setup pending: {order.symbol} @ {order.entry_level}"
+    return False, msgs[-1] if msgs else f"Setup not executed: {order.symbol}"

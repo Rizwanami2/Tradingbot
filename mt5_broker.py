@@ -118,12 +118,56 @@ def _safe_f(x: Any, default: float = 0.0) -> float:
         return default
 
 
+_RESOLVED_CACHE: Dict[str, str] = {}
+
+
+def get_candidate_mt5_symbols(symbol: str) -> List[str]:
+    """
+    Return comprehensive, ordered list of potential broker symbol names for Gold or Bitcoin.
+    Covers standard, micro, raw, ecn, pro, spread-betting, and broker-specific naming.
+    """
+    s = str(symbol or "").strip().upper().replace("/", "").replace("-", "")
+    is_gold = any(x in s for x in ("XAU", "GOLD", "PAXG", "XAUT"))
+    is_btc = any(x in s for x in ("BTC", "BITCOIN", "XBT"))
+
+    suffixes = [
+        "", ".m", "m", ".raw", "_raw", ".pro", "_pro", ".c", ".ecn", "_ecn",
+        "_i", ".s", "_s", "_sb", ".std", ".a", ".z", "micro", "mini", "+", "#", "b", "."
+    ]
+
+    cands: List[str] = []
+    if is_gold:
+        base_names = ["XAUUSD", "GOLD", "XAUTUSD", "PAXGUSD", "PAXGUSDT", "XAU"]
+    elif is_btc:
+        base_names = ["BTCUSD", "BTCUSDT", "BITCOIN", "XBTUSD", "XBTUSDT", "BTC"]
+    else:
+        base_names = [s]
+
+    for base in base_names:
+        for suf in suffixes:
+            cand = f"{base}{suf}"
+            if cand not in cands:
+                cands.append(cand)
+    return cands
+
+
 def resolve_mt5_symbol(symbol: str, available_symbols: Optional[List[str]] = None) -> str:
     """
     Resolve unified symbol to broker-specific MT5 symbol.
-    Handles broker suffixes (.m, .raw, _i) and aliases (GOLD -> XAUUSD and reverse).
+    Handles broker suffixes (.m, .raw, _i, +, #, etc.), aliases (GOLD -> XAUUSD and reverse),
+    and queries live MT5 terminal symbols when available.
     """
     s = str(symbol or "").strip().upper().replace("/", "").replace("-", "")
+    if available_symbols is None:
+        if s in _RESOLVED_CACHE:
+            return _RESOLVED_CACHE[s]
+    else:
+        cached = _RESOLVED_CACHE.get(s)
+        if cached:
+            avail_upper_set = {x.upper() for x in available_symbols}
+            if cached.upper() in avail_upper_set:
+                return cached
+
     aliases = {
         "GOLD": "XAUUSD",
         "XAU": "XAUUSD",
@@ -136,33 +180,158 @@ def resolve_mt5_symbol(symbol: str, available_symbols: Optional[List[str]] = Non
     }
     normalized = aliases.get(s, s)
 
+    # 1. Check provided available_symbols list
     if available_symbols:
         avail_upper = {sym.upper(): sym for sym in available_symbols}
-        # Exact match
         if normalized in avail_upper:
             return avail_upper[normalized]
         if s in avail_upper:
             return avail_upper[s]
-        # Match reverse aliases
+        for cand in get_candidate_mt5_symbols(s):
+            if cand.upper() in avail_upper:
+                return avail_upper[cand.upper()]
         if normalized == "XAUUSD":
-            for gold_alias in ("GOLD", "XAUUSD", "XAU"):
-                if gold_alias in avail_upper:
-                    return avail_upper[gold_alias]
+            for k, orig in avail_upper.items():
+                if "XAU" in k or "GOLD" in k:
+                    return orig
         elif normalized in ("BTCUSD", "BTCUSDT"):
-            for btc_alias in ("BTCUSD", "BTCUSDT", "BITCOIN", "BTC"):
-                if btc_alias in avail_upper:
-                    return avail_upper[btc_alias]
-        # Match with common broker suffixes
-        for suffix in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn", "_sb"):
-            cand = f"{normalized}{suffix.upper()}"
-            if cand in avail_upper:
-                return avail_upper[cand]
-            if normalized == "XAUUSD":
-                gold_cand = f"GOLD{suffix.upper()}"
-                if gold_cand in avail_upper:
-                    return avail_upper[gold_cand]
+            for k, orig in avail_upper.items():
+                if "BTC" in k or "BITCOIN" in k:
+                    return orig
+
+    # 2. Check native MT5 if connected and available
+    if native_mt5 is not None:
+        try:
+            # Check symbols already in Market Watch first
+            selected_syms = native_mt5.symbols_get(selected=True)
+            if selected_syms:
+                mw_names = {sym.name.upper(): sym.name for sym in selected_syms}
+                for cand in get_candidate_mt5_symbols(s):
+                    if cand.upper() in mw_names:
+                        res = mw_names[cand.upper()]
+                        _RESOLVED_CACHE[s] = res
+                        return res
+                if normalized == "XAUUSD":
+                    for k, orig in mw_names.items():
+                        if "XAU" in k or "GOLD" in k:
+                            _RESOLVED_CACHE[s] = orig
+                            return orig
+                elif normalized in ("BTCUSD", "BTCUSDT"):
+                    for k, orig in mw_names.items():
+                        if "BTC" in k or "BITCOIN" in k:
+                            _RESOLVED_CACHE[s] = orig
+                            return orig
+
+            # Query all server symbols
+            all_syms = native_mt5.symbols_get()
+            if all_syms:
+                all_names = {sym.name.upper(): sym.name for sym in all_syms}
+                for cand in get_candidate_mt5_symbols(s):
+                    if cand.upper() in all_names:
+                        real_name = all_names[cand.upper()]
+                        native_mt5.symbol_select(real_name, True)
+                        _RESOLVED_CACHE[s] = real_name
+                        return real_name
+                if normalized == "XAUUSD":
+                    for k, orig in all_names.items():
+                        if "XAU" in k or "GOLD" in k:
+                            native_mt5.symbol_select(orig, True)
+                            _RESOLVED_CACHE[s] = orig
+                            return orig
+                elif normalized in ("BTCUSD", "BTCUSDT"):
+                    for k, orig in all_names.items():
+                        if "BTC" in k or "BITCOIN" in k:
+                            native_mt5.symbol_select(orig, True)
+                            _RESOLVED_CACHE[s] = orig
+                            return orig
+
+            # If symbols_get was None, test candidates directly via symbol_select/symbol_info
+            for cand in get_candidate_mt5_symbols(s):
+                if native_mt5.symbol_select(cand, True):
+                    sinfo = native_mt5.symbol_info(cand)
+                    if sinfo is not None:
+                        _RESOLVED_CACHE[s] = cand
+                        return cand
+                else:
+                    sinfo = native_mt5.symbol_info(cand)
+                    if sinfo is not None:
+                        native_mt5.symbol_select(cand, True)
+                        _RESOLVED_CACHE[s] = cand
+                        return cand
+        except Exception as e:
+            logger.debug("resolve_mt5_symbol native check notice: %s", e)
 
     return normalized
+
+
+def select_and_resolve_symbol(symbol: str) -> Tuple[str, Optional[Any]]:
+    """
+    Intelligently discovers, selects into Market Watch, and returns (broker_symbol, symbol_info).
+    Guarantees that broker aliases (e.g. GOLD vs XAUUSD, broker suffixes) are resolved and activated.
+    """
+    res_sym = resolve_mt5_symbol(symbol)
+    if native_mt5 is not None:
+        try:
+            # 1. Test res_sym
+            if native_mt5.symbol_select(res_sym, True):
+                sinfo = native_mt5.symbol_info(res_sym)
+                if sinfo is not None:
+                    _RESOLVED_CACHE[symbol] = res_sym
+                    return res_sym, sinfo
+            else:
+                sinfo = native_mt5.symbol_info(res_sym)
+                if sinfo is not None:
+                    native_mt5.symbol_select(res_sym, True)
+                    _RESOLVED_CACHE[symbol] = res_sym
+                    return res_sym, sinfo
+
+            # 2. Iterate through candidate aliases
+            for cand in get_candidate_mt5_symbols(symbol):
+                if native_mt5.symbol_select(cand, True):
+                    sinfo = native_mt5.symbol_info(cand)
+                    if sinfo is not None:
+                        _RESOLVED_CACHE[symbol] = cand
+                        return cand, sinfo
+                sinfo = native_mt5.symbol_info(cand)
+                if sinfo is not None:
+                    native_mt5.symbol_select(cand, True)
+                    _RESOLVED_CACHE[symbol] = cand
+                    return cand, sinfo
+
+            # 3. Query all symbols from MT5 server
+            all_syms = native_mt5.symbols_get()
+            if all_syms:
+                norm_upper = res_sym.upper()
+                is_gold = any(x in norm_upper for x in ("XAU", "GOLD", "PAXG"))
+                is_btc = any(x in norm_upper for x in ("BTC", "BITCOIN", "XBT"))
+
+                cands_upper = [c.upper() for c in get_candidate_mt5_symbols(symbol)]
+                for s in all_syms:
+                    if s.name.upper() in cands_upper:
+                        native_mt5.symbol_select(s.name, True)
+                        sinfo = native_mt5.symbol_info(s.name)
+                        if sinfo is not None:
+                            _RESOLVED_CACHE[symbol] = s.name
+                            return s.name, sinfo
+
+                for s in all_syms:
+                    s_up = s.name.upper()
+                    if is_gold and ("XAU" in s_up or "GOLD" in s_up):
+                        native_mt5.symbol_select(s.name, True)
+                        sinfo = native_mt5.symbol_info(s.name)
+                        if sinfo is not None:
+                            _RESOLVED_CACHE[symbol] = s.name
+                            return s.name, sinfo
+                    elif is_btc and ("BTC" in s_up or "BITCOIN" in s_up):
+                        native_mt5.symbol_select(s.name, True)
+                        sinfo = native_mt5.symbol_info(s.name)
+                        if sinfo is not None:
+                            _RESOLVED_CACHE[symbol] = s.name
+                            return s.name, sinfo
+        except Exception as e:
+            logger.debug("select_and_resolve_symbol error: %s", e)
+
+    return res_sym, (native_mt5.symbol_info(res_sym) if native_mt5 is not None else None)
 
 
 def _gateway_request(
@@ -412,6 +581,13 @@ class MT5Broker(Broker):
                         logger.warning("[MT5Broker] WARNING: Automated/EA trading is DISABLED by broker for MT5 account #%s", self.login)
                     self._connected = True
                     logger.info("[MT5Broker] Connected to live MT5 account #%s on %s", self.login, self.server)
+                    for target_sym in ("XAUUSD", "BTCUSD"):
+                        try:
+                            s_name, s_info = select_and_resolve_symbol(target_sym)
+                            if s_info is not None:
+                                logger.info("[MT5Broker] Pre-flight: Auto-discovered and activated '%s' (for %s) in Market Watch.", s_name, target_sym)
+                        except Exception as _disc_e:
+                            logger.debug("[MT5Broker] Pre-flight discovery note: %s", _disc_e)
                     return True
                 except Exception as exc:
                     self._connected = False
@@ -578,20 +754,13 @@ class MT5Broker(Broker):
                         f"Broker has DISABLED automated/EA trading for account #{self.login}."
                     )
 
-                # 1. Resolve & Select Symbol in Market Watch (with suffix fallbacks)
-                resolved_sym = resolve_mt5_symbol(symbol)
-                sym_selected = native_mt5.symbol_select(resolved_sym, True)
-                if not sym_selected:
-                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                        cand = f"{resolved_sym}{suf}"
-                        if native_mt5.symbol_select(cand, True):
-                            resolved_sym = cand
-                            sym_selected = True
-                            break
-
-                sym_info = native_mt5.symbol_info(resolved_sym)
+                # 1. Resolve & Select Symbol in Market Watch (with comprehensive candidate fallbacks)
+                resolved_sym, sym_info = select_and_resolve_symbol(symbol)
                 if sym_info is None:
-                    raise ExecutionError(f"Symbol '{resolved_sym}' not found in MT5 Market Watch.")
+                    raise ExecutionError(
+                        f"Symbol '{symbol}' (resolved: '{resolved_sym}') not found in MT5 Market Watch. "
+                        "Please verify your MT5 terminal has this instrument enabled in Market Watch."
+                    )
 
                 trade_mode = getattr(sym_info, "trade_mode", 4)
                 if trade_mode == getattr(native_mt5, "SYMBOL_TRADE_MODE_DISABLED", 0):
@@ -1136,13 +1305,7 @@ class MT5Broker(Broker):
         # 1. Native MetaTrader5
         if native_mt5 is not None and self._connected and self.effective_backend != "gateway":
             try:
-                target_sym = norm_sym
-                if not native_mt5.symbol_select(target_sym, True):
-                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                        cand = f"{norm_sym}{suf}"
-                        if native_mt5.symbol_select(cand, True):
-                            target_sym = cand
-                            break
+                target_sym, _ = select_and_resolve_symbol(symbol)
                 tick = native_mt5.symbol_info_tick(target_sym)
                 if tick is not None:
                     bid = float(tick.bid)
@@ -1278,13 +1441,7 @@ class MT5Broker(Broker):
                     "1d": getattr(native_mt5, "TIMEFRAME_D1", 1440),
                 }
                 tf = tf_map.get(tf_str, getattr(native_mt5, "TIMEFRAME_M1", 1))
-                target_sym = norm_sym
-                if not native_mt5.symbol_select(target_sym, True):
-                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                        cand = f"{norm_sym}{suf}"
-                        if native_mt5.symbol_select(cand, True):
-                            target_sym = cand
-                            break
+                target_sym, _ = select_and_resolve_symbol(symbol)
                 rates = native_mt5.copy_rates_from_pos(target_sym, tf, 0, min(limit, 1000))
                 if rates is not None and len(rates) > 0:
                     df = pd.DataFrame(rates)
@@ -1617,19 +1774,10 @@ class MT5Broker(Broker):
                         )
 
                 for sym in symbols_to_check:
-                    res_sym = resolve_mt5_symbol(sym)
-                    sel = native_mt5.symbol_select(res_sym, True)
-                    if not sel:
-                        for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                            cand = f"{res_sym}{suf}"
-                            if native_mt5.symbol_select(cand, True):
-                                res_sym = cand
-                                sel = True
-                                break
-                    sinfo = native_mt5.symbol_info(res_sym) if sel else None
+                    res_sym, sinfo = select_and_resolve_symbol(sym)
                     if sinfo is None:
                         diag["symbols"][sym] = {"ok": False, "error": f"Symbol '{res_sym}' not found in MT5."}
-                        diag["warnings"].append(f"Symbol '{sym}' not found in MT5 Market Watch.")
+                        diag["warnings"].append(f"Symbol '{sym}' (tried '{res_sym}') not found in MT5 Market Watch.")
                     else:
                         tmode = getattr(sinfo, "trade_mode", 4)
                         is_disabled = tmode == getattr(native_mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)

@@ -37,6 +37,77 @@ except ImportError:
     logger.warning("Native MetaTrader5 library not found. Running in mock/simulation mode.")
 
 
+_GW_RESOLVED_CACHE: Dict[str, str] = {}
+
+def get_candidate_symbols(symbol: str) -> List[str]:
+    s = str(symbol or "").strip().upper().replace("/", "").replace("-", "")
+    is_gold = any(x in s for x in ("XAU", "GOLD", "PAXG", "XAUT"))
+    is_btc = any(x in s for x in ("BTC", "BITCOIN", "XBT"))
+    suffixes = [
+        "", ".m", "m", ".raw", "_raw", ".pro", "_pro", ".c", ".ecn", "_ecn",
+        "_i", ".s", "_s", "_sb", ".std", ".a", ".z", "micro", "mini", "+", "#", "b", "."
+    ]
+    cands: List[str] = []
+    base_names = ["XAUUSD", "GOLD", "XAUTUSD", "PAXGUSD", "PAXGUSDT", "XAU"] if is_gold else (
+        ["BTCUSD", "BTCUSDT", "BITCOIN", "XBTUSD", "XBTUSDT", "BTC"] if is_btc else [s]
+    )
+    for b in base_names:
+        for suf in suffixes:
+            cand = f"{b}{suf}"
+            if cand not in cands:
+                cands.append(cand)
+    return cands
+
+def select_and_resolve_symbol(symbol: str) -> Tuple[str, Optional[Any]]:
+    s = str(symbol or "").strip().upper().replace("/", "").replace("-", "")
+    if s in _GW_RESOLVED_CACHE:
+        cached = _GW_RESOLVED_CACHE[s]
+        return cached, (mt5.symbol_info(cached) if mt5 is not None else None)
+    if mt5 is None:
+        return s, None
+    try:
+        # Check if already selectable
+        if mt5.symbol_select(s, True):
+            sinfo = mt5.symbol_info(s)
+            if sinfo is not None:
+                _GW_RESOLVED_CACHE[s] = s
+                return s, sinfo
+        # Check all candidates
+        for cand in get_candidate_symbols(s):
+            if mt5.symbol_select(cand, True):
+                sinfo = mt5.symbol_info(cand)
+                if sinfo is not None:
+                    _GW_RESOLVED_CACHE[s] = cand
+                    return cand, sinfo
+            sinfo = mt5.symbol_info(cand)
+            if sinfo is not None:
+                mt5.symbol_select(cand, True)
+                _GW_RESOLVED_CACHE[s] = cand
+                return cand, sinfo
+        # Query all symbols from MT5 server
+        all_syms = mt5.symbols_get()
+        if all_syms:
+            is_gold = any(x in s for x in ("XAU", "GOLD", "PAXG"))
+            is_btc = any(x in s for x in ("BTC", "BITCOIN", "XBT"))
+            for item in all_syms:
+                s_up = item.name.upper()
+                if is_gold and ("XAU" in s_up or "GOLD" in s_up):
+                    mt5.symbol_select(item.name, True)
+                    sinfo = mt5.symbol_info(item.name)
+                    if sinfo is not None:
+                        _GW_RESOLVED_CACHE[s] = item.name
+                        return item.name, sinfo
+                elif is_btc and ("BTC" in s_up or "BITCOIN" in s_up):
+                    mt5.symbol_select(item.name, True)
+                    sinfo = mt5.symbol_info(item.name)
+                    if sinfo is not None:
+                        _GW_RESOLVED_CACHE[s] = item.name
+                        return item.name, sinfo
+    except Exception as e:
+        logger.debug("Gateway select_and_resolve_symbol notice: %s", e)
+    return s, (mt5.symbol_info(s) if mt5 is not None else None)
+
+
 class MT5GatewayHandler(BaseHTTPRequestHandler):
     def _send_json(self, status_code: int, data: Dict[str, Any]):
         body = json.dumps(data, default=str).encode("utf-8")
@@ -137,15 +208,7 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 blockers.append("Broker has disabled automated/EA trading for this account.")
             sym_checks = {}
             for sym in ("XAUUSD", "BTCUSD"):
-                sinfo = mt5.symbol_info(sym)
-                target_sym = sym
-                if not sinfo:
-                    for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                        cand = f"{sym}{suf}"
-                        if mt5.symbol_select(cand, True):
-                            sinfo = mt5.symbol_info(cand)
-                            target_sym = cand
-                            break
+                target_sym, sinfo = select_and_resolve_symbol(sym)
                 if sinfo:
                     tmode = getattr(sinfo, "trade_mode", 4)
                     fmode = getattr(sinfo, "filling_mode", 0)
@@ -222,15 +285,7 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 "1d": getattr(mt5, "TIMEFRAME_D1", 1440),
             }
             tf = tf_map.get(tf_str, getattr(mt5, "TIMEFRAME_M1", 1))
-
-            target_sym = sym
-            if not mt5.symbol_select(target_sym, True):
-                for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                    cand = f"{sym}{suf}"
-                    if mt5.symbol_select(cand, True):
-                        target_sym = cand
-                        break
-
+            target_sym, _ = select_and_resolve_symbol(sym)
             rates = mt5.copy_rates_from_pos(target_sym, tf, 0, min(limit, 1000))
             if rates is None or len(rates) == 0:
                 self._send_json(404, {"ok": False, "error": f"Failed to copy rates for {sym}: {mt5.last_error()}"})
@@ -267,14 +322,7 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 })
                 return
 
-            target_sym = sym
-            if not mt5.symbol_select(target_sym, True):
-                for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                    cand = f"{sym}{suf}"
-                    if mt5.symbol_select(cand, True):
-                        target_sym = cand
-                        break
-
+            target_sym, _ = select_and_resolve_symbol(sym)
             tick = mt5.symbol_info_tick(target_sym)
             if tick is None:
                 self._send_json(404, {"ok": False, "error": f"No tick data for {sym}"})
@@ -386,15 +434,8 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 })
                 return
 
-            # 1. Market Watch symbol selection with suffix fallbacks
-            if not mt5.symbol_select(sym, True):
-                for suf in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
-                    cand = f"{sym}{suf}"
-                    if mt5.symbol_select(cand, True):
-                        sym = cand
-                        break
-
-            sym_info = mt5.symbol_info(sym)
+            # 1. Market Watch symbol selection with comprehensive candidate fallbacks
+            sym, sym_info = select_and_resolve_symbol(sym)
             if sym_info is None:
                 self._send_json(400, {"ok": False, "error": f"Symbol '{sym}' not found in MT5 Market Watch."})
                 return

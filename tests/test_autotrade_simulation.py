@@ -13,13 +13,14 @@ from unittest.mock import MagicMock, patch
 
 import config
 from execution_engine import ExecutionEngine, OrderStatus, TradeOrder
-from mt5_broker import MT5Broker
+from mt5_broker import MT5Broker, _RESOLVED_CACHE
 from risk_manager import RiskManager
 from bridge import ea_client
 
 
 class TestAutotradeSimulation(unittest.TestCase):
     def setUp(self):
+        _RESOLVED_CACHE.clear()
         self.test_dir = tempfile.mkdtemp(prefix="ea_bridge_sim_")
         ea_client.set_bridge_dir(self.test_dir)
         self._orig_backend = getattr(config, "MT5_BACKEND", "auto")
@@ -43,6 +44,7 @@ class TestAutotradeSimulation(unittest.TestCase):
         )
 
     def tearDown(self):
+        _RESOLVED_CACHE.clear()
         config.MT5_BACKEND = self._orig_backend
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
