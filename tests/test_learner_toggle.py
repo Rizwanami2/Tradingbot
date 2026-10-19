@@ -79,10 +79,18 @@ class TestLearnerToggleAndUnban(unittest.TestCase):
         self.assertEqual(self.brain.knowledge.banned_hours, [])
 
     def test_unban_weekday_and_setups(self):
+        self.brain.knowledge.banned_weekdays = [5, 6]
         self.assertTrue(self.brain.unban_weekday(5))
         self.assertNotIn(5, self.brain.knowledge.banned_weekdays)
         self.assertEqual(self.brain.clear_banned_weekdays(), 1)
         self.assertEqual(self.brain.knowledge.banned_weekdays, [])
+
+        # Unban by name (monday, mon, etc.)
+        self.brain.knowledge.banned_weekdays = [0, 1]
+        self.assertTrue(self.brain.unban_weekday("monday"))
+        self.assertNotIn(0, self.brain.knowledge.banned_weekdays)
+        self.assertTrue(self.brain.unban_weekday("tue"))
+        self.assertNotIn(1, self.brain.knowledge.banned_weekdays)
 
         removed = self.brain.unban_setup("ranging")
         self.assertEqual(removed, ["short|ranging"])
@@ -92,6 +100,21 @@ class TestLearnerToggleAndUnban(unittest.TestCase):
         cleared_bans = self.brain.clear_bans()
         self.assertEqual(cleared_bans["setups"], 1)
         self.assertEqual(self.brain.knowledge.banned_setups, {})
+
+    def test_weekday_policy_disables_hard_veto(self):
+        # By default allow_weekday_bans is False: weekday 0 (Monday) does NOT veto
+        self.brain.knowledge.allow_weekday_bans = False
+        self.brain.knowledge.banned_weekdays = [0]
+        ok, reason, mult = self.brain.advise_signal(weekday=0, score=2.5, rr=2.5, agreement=3, conviction=0.8)
+        self.assertTrue(ok)
+        self.assertNotIn(0, self.brain.knowledge.banned_weekdays)  # auto-purged
+
+        # When explicitly enabled, weekday ban vetoes
+        self.brain.set_allow_weekday_bans(True)
+        self.brain.knowledge.banned_weekdays = [0]
+        ok_veto, reason_veto, _ = self.brain.advise_signal(weekday=0, score=2.5, rr=2.5, agreement=3, conviction=0.8)
+        self.assertFalse(ok_veto)
+        self.assertIn("banned weekday 0", reason_veto)
 
 
 class TestLearnerTelegramHandlers(unittest.IsolatedAsyncioTestCase):
@@ -150,6 +173,22 @@ class TestLearnerTelegramHandlers(unittest.IsolatedAsyncioTestCase):
         text = self.message.reply_text.call_args[0][0]
         self.assertIn("Cleared all 3 banned UTC hours", text)
 
+    async def test_learner_unban_weekday_command(self):
+        self.test_brain.knowledge.banned_weekdays = [0]
+        self.ctx.args = ["unban", "monday"]
+        await learner_command(self.update, self.ctx)
+        self.assertNotIn(0, self.test_brain.knowledge.banned_weekdays)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Unbanned Monday (Weekday 0)", text)
+
+    async def test_learner_clearweekdays_command(self):
+        self.test_brain.knowledge.banned_weekdays = [0, 4]
+        self.ctx.args = ["clearweekdays"]
+        await learner_command(self.update, self.ctx)
+        self.assertEqual(self.test_brain.knowledge.banned_weekdays, [])
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Cleared all 2 banned weekdays", text)
+
     async def test_veto_command_alias(self):
         self.ctx.args = ["off"]
         await veto_command(self.update, self.ctx)
@@ -164,6 +203,17 @@ class TestLearnerTelegramHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertIn("learner:unban:14", buttons)
         self.assertIn("learner:rules", buttons)
         self.assertIn("learner:on", buttons)
+
+    async def test_build_learner_block_keyboard_weekday(self):
+        note = "AUTO: banned weekday 0 (learned)"
+        kb = build_learner_block_keyboard(note)
+        self.assertIsNotNone(kb)
+        buttons = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn("learner:unban_wd:0", buttons)
+        self.assertIn("learner:off", buttons)
+        self.assertIn("learner:clearbans", buttons)
+        btn_texts = [btn.text for row in kb.inline_keyboard for btn in row]
+        self.assertTrue(any("Unban Monday" in t for t in btn_texts))
 
     async def test_handle_learner_callback(self):
         self.update.callback_query = MagicMock()
@@ -180,6 +230,12 @@ class TestLearnerTelegramHandlers(unittest.IsolatedAsyncioTestCase):
         handled = await handle_learner_callback("learner:unban:14", self.update, self.ctx)
         self.assertTrue(handled)
         self.assertNotIn(14, self.test_brain.knowledge.banned_hours)
+
+        # Test callback learner:unban_wd:0
+        self.test_brain.knowledge.banned_weekdays = [0]
+        handled_wd = await handle_learner_callback("learner:unban_wd:0", self.update, self.ctx)
+        self.assertTrue(handled_wd)
+        self.assertNotIn(0, self.test_brain.knowledge.banned_weekdays)
 
         # Test callback learner:on
         handled = await handle_learner_callback("learner:on", self.update, self.ctx)
@@ -201,6 +257,21 @@ class TestLearnerTelegramHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/learner off", note)
         self.assertIn("/veto off", note)
         self.assertIn("/learner unban 14", note)
+
+    def test_try_paper_execute_weekday_veto_message(self):
+        engine_mock = MagicMock()
+        sig = {
+            "symbol": "BTCUSDT",
+            "direction": "LONG",
+            "entry": 85000.0,
+            "vetoed": True,
+            "veto_reason": "AUTO: banned weekday 0 (learned)",
+        }
+        ok, note = signal_pipeline.try_paper_execute(engine_mock, sig)
+        self.assertFalse(ok)
+        self.assertIn("Trade execution blocked by Autonomous Learner: AUTO: banned weekday 0 (learned)", note)
+        self.assertIn("/learner unban monday", note)
+        self.assertIn("/learner off", note)
 
     async def test_autotrade_command_learner_subcommands(self):
         from main import autotrade_command

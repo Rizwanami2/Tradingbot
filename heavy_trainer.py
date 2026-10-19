@@ -280,6 +280,7 @@ class HeavyTrainer:
         # Synchronize risk persona and safeguards
         state["risk_persona"] = "med"
         state["learn_frozen"] = False
+        suite.enabled = True
         state["suite_enabled"] = True
         state["last_trained"] = datetime.now(timezone.utc).isoformat()
         suite._save()

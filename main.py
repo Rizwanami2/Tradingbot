@@ -1995,8 +1995,19 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return
         elif sub in ("unban", "allow"):
-            target = args[2] if len(args) > 2 else ""
-            if target.isdigit():
+            target = args[2].lower() if len(args) > 2 else ""
+            wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+            if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+                brain.unban_weekday(w)
+                await update.message.reply_text(f"🔓 **Unbanned {wd_names[w]} (weekday {w})** from Autonomous Learner.", parse_mode="Markdown")
+            elif target in ("weekdays", "weekday", "allweekdays"):
+                c = brain.clear_banned_weekdays()
+                await update.message.reply_text(f"🔓 **Cleared all {c} banned weekdays** from Autonomous Learner.", parse_mode="Markdown")
+            elif target in ("all", "allbans", "everything"):
+                res = brain.clear_bans()
+                await update.message.reply_text(f"🔓 **Cleared all active bans** (Hours: {res['hours']}, Weekdays: {res['weekdays']}, Setups: {res['setups']}).", parse_mode="Markdown")
+            elif target.isdigit():
                 h = int(target) % 24
                 brain.unban_hour(h)
                 await update.message.reply_text(f"🔓 **Unbanned UTC hour {h:02d}:00** from Autonomous Learner.", parse_mode="Markdown")
@@ -2013,11 +2024,22 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             st_text = "🟢 **ACTIVATED**" if new_st else "🔴 **PAUSED**"
             await update.message.reply_text(f"🧠 **Autotrade Learner Veto:** {st_text}", parse_mode="Markdown")
             return
-    elif args and args[0] in ("unban", "unbanhour"):
+    elif args and args[0] in ("unban", "unbanhour", "unbanweekday"):
         from autonomous_learner import get_brain
         brain = get_brain(auto_bootstrap=False)
-        target = args[1] if len(args) > 1 else ""
-        if target.isdigit():
+        target = args[1].lower() if len(args) > 1 else ""
+        wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+        if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+            brain.unban_weekday(w)
+            await update.message.reply_text(f"🔓 **Unbanned {wd_names[w]} (weekday {w})** from Autonomous Learner.", parse_mode="Markdown")
+        elif target in ("weekdays", "weekday", "allweekdays"):
+            c = brain.clear_banned_weekdays()
+            await update.message.reply_text(f"🔓 **Cleared all {c} banned weekdays** from Autonomous Learner.", parse_mode="Markdown")
+        elif target in ("all", "allbans", "everything"):
+            res = brain.clear_bans()
+            await update.message.reply_text(f"🔓 **Cleared all active bans** (Hours: {res['hours']}, Weekdays: {res['weekdays']}, Setups: {res['setups']}).", parse_mode="Markdown")
+        elif target.isdigit():
             h = int(target) % 24
             brain.unban_hour(h)
             await update.message.reply_text(f"🔓 **Unbanned UTC hour {h:02d}:00** from Autonomous Learner.", parse_mode="Markdown")
@@ -5418,24 +5440,49 @@ def run_cli_interactive():
                     print("Autonomous Learner signal filtering: PAUSED")
                 elif sub in ("unban", "allow"):
                     target = parts[2].lower() if len(parts) > 2 else ""
-                    if target.isdigit():
+                    wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                    w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+                    if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+                        ok = brain.unban_weekday(w)
+                        print(f"Unbanned {wd_names[w]} (weekday {w})." if ok else f"{wd_names[w]} was not banned.")
+                    elif target in ("weekdays", "weekday", "allweekdays"):
+                        cnt = brain.clear_banned_weekdays()
+                        print(f"Cleared all {cnt} banned weekdays.")
+                    elif target.isdigit():
                         h = int(target) % 24
                         ok = brain.unban_hour(h)
                         print(f"Unbanned UTC hour {h:02d}:00" if ok else f"Hour {h:02d}:00 was not banned.")
-                    elif target in ("all", "hours"):
+                    elif target in ("all", "allbans", "everything"):
+                        res = brain.clear_bans()
+                        print(f"Cleared all learned bans: {res}")
+                    elif target in ("hours", "allhours"):
                         cnt = brain.clear_banned_hours()
                         print(f"Cleared all {cnt} banned UTC hours.")
                     elif target:
                         rem = brain.unban_setup(target)
                         print(f"Unbanned setups: {rem}" if rem else f"No setups matching {target}")
                     else:
-                        print("Usage: learner unban <hour|hours|setup_name>")
+                        print("Usage: learner unban <monday|hour|weekdays|all|setup_name>")
+                elif sub in ("clearweekdays", "clearweekday"):
+                    cnt = brain.clear_banned_weekdays()
+                    print(f"Cleared all {cnt} banned weekdays.")
                 elif sub in ("clearhours", "clearhour"):
                     cnt = brain.clear_banned_hours()
                     print(f"Cleared all {cnt} banned UTC hours.")
-                elif sub in ("clearbans", "clearallbans"):
+                elif sub in ("clearbans", "clearallbans", "unbanall"):
                     res = brain.clear_bans()
                     print(f"Cleared all learned bans: {res}")
+                elif sub in ("weekdaybans", "weekdayban"):
+                    opt = parts[2].lower() if len(parts) > 2 else "status"
+                    if opt in ("on", "1", "true", "enable"):
+                        brain.set_allow_weekday_bans(True)
+                        print("Weekday Bans Policy: ENABLED")
+                    elif opt in ("off", "0", "false", "disable"):
+                        brain.set_allow_weekday_bans(False)
+                        print("Weekday Bans Policy: DISABLED (Full week trading)")
+                    else:
+                        cur = getattr(brain.knowledge, "allow_weekday_bans", False)
+                        print(f"Weekday Bans Policy: {'ENABLED' if cur else 'DISABLED (Full week trading)'}")
                 elif sub in ("relearn", "train"):
                     sym = parts[2].upper() if len(parts) > 2 else "XAUUSD"
                     years = float(parts[3]) if len(parts) > 3 and parts[3].replace('.', '', 1).isdigit() else 5.0
@@ -5443,7 +5490,7 @@ def run_cli_interactive():
                     summary = brain.bootstrap(symbol=sym, years=years)
                     print(f"Bootstrap complete: {summary}")
                 elif sub in ("help", "commands"):
-                    print("learner/brain [status|rules|flaws|unban <hour>|clearhours|relearn [SYM] [YEARS]|reset|on|off]")
+                    print("learner/brain [status|rules|flaws|unban <mon|hour|all>|clearweekdays|clearhours|clearbans|weekdaybans [on|off]|relearn [SYM] [YEARS]|reset|on|off]")
                 else:
                     print(brain.summary())
             except Exception as e:

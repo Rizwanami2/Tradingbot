@@ -416,8 +416,17 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
     if sig.get("vetoed"):
         vr = sig.get("veto_reason", "Vetoed")
         import re
-        m = re.search(r"banned hour (\d+)", str(vr), re.IGNORECASE)
-        unban_note = f" | Unban: `/learner unban {m.group(1)}`" if m else ""
+        m_hr = re.search(r"banned hour (\d+)", str(vr), re.IGNORECASE)
+        m_wd = re.search(r"banned weekday (\d+)", str(vr), re.IGNORECASE)
+        wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        if m_wd:
+            w_idx = int(m_wd.group(1)) % 7
+            w_name = wd_names[w_idx]
+            unban_note = f" | Unban: `/learner unban {w_name.lower()}`"
+        elif m_hr:
+            unban_note = f" | Unban: `/learner unban {m_hr.group(1)}`"
+        else:
+            unban_note = ""
         return False, f"Trade execution blocked by Autonomous Learner: {vr}\n💡 _Toggle filter: `/learner off` or `/veto off`{unban_note}_"
     if getattr(engine, "execution_halted", False):
         if not getattr(engine, "active_positions", None) and not getattr(engine, "pending_setups", None):

@@ -96,13 +96,27 @@ def build_learner_block_keyboard(note: str = ""):
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         import re
         note_str = str(note or "")
-        m = re.search(r"banned hour (\d+)", note_str, re.IGNORECASE)
+        m_hr = re.search(r"banned hour (\d+)", note_str, re.IGNORECASE)
+        m_wd = re.search(r"banned weekday (\d+)", note_str, re.IGNORECASE)
+        wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         buttons = []
-        if m:
-            h = int(m.group(1))
+
+        if m_wd:
+            w = int(m_wd.group(1)) % 7
+            w_name = wd_names[w]
             buttons.append([
+                InlineKeyboardButton(f"🔓 Unban {w_name}", callback_data=f"learner:unban_wd:{w}"),
                 InlineKeyboardButton("🔴 Turn Veto OFF", callback_data="learner:off"),
+            ])
+            buttons.append([
+                InlineKeyboardButton("📜 View Rules", callback_data="learner:rules"),
+                InlineKeyboardButton("🔓 Clear All Bans", callback_data="learner:clearbans"),
+            ])
+        elif m_hr:
+            h = int(m_hr.group(1)) % 24
+            buttons.append([
                 InlineKeyboardButton(f"🔓 Unban Hour {h:02d}:00", callback_data=f"learner:unban:{h}"),
+                InlineKeyboardButton("🔴 Turn Veto OFF", callback_data="learner:off"),
             ])
             buttons.append([
                 InlineKeyboardButton("📜 View Rules", callback_data="learner:rules"),
@@ -115,7 +129,7 @@ def build_learner_block_keyboard(note: str = ""):
             ])
             buttons.append([
                 InlineKeyboardButton("🟢 Turn Veto ON", callback_data="learner:on"),
-                InlineKeyboardButton("🔓 Clear Hour Bans", callback_data="learner:clearhours"),
+                InlineKeyboardButton("🔓 Clear All Bans", callback_data="learner:clearbans"),
             ])
         return InlineKeyboardMarkup(buttons)
     except Exception as e:
@@ -205,6 +219,29 @@ async def handle_learner_callback(data: str, update: Update, ctx: ContextTypes.D
             await safe_reply(update, f"Unban error: {e}", parse_mode=None)
         return True
 
+    elif action.startswith("unban_wd:") or action.startswith("unban_weekday:"):
+        w_str = action.split(":", 1)[1]
+        try:
+            w = int(w_str) % 7
+            wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            w_name = wd_names[w]
+            brain.unban_weekday(w)
+            msg = (
+                f"🔓 *Unbanned {w_name} (Weekday {w})*\n"
+                f"• Trades on {w_name}s will now execute freely without autonomous veto.\n"
+                f"• Weekday bans disabled by policy to maintain continuous trading."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        except Exception as e:
+            await safe_reply(update, f"Unban weekday error: {e}", parse_mode=None)
+        return True
+
+    elif action in ("clearweekdays", "clearweekday", "clear_weekdays"):
+        cnt = brain.clear_banned_weekdays()
+        msg = f"🔓 *Cleared all {cnt} banned weekdays*\n• All days of the week are now completely unblocked."
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        return True
+
     elif action in ("clearhours", "clearhour"):
         cnt = brain.clear_banned_hours()
         msg = f"🔓 *Cleared all {cnt} banned UTC hours*\n• All trading hours are now unblocked."
@@ -288,17 +325,51 @@ async def learner_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         elif subcmd in ("unban", "allow"):
             target = args[1].lower() if len(args) > 1 else ""
-            if target in ("hour", "hours") and len(args) > 2 and args[2].isdigit():
+            wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+            # Handle: /learner unban weekday 0 or /learner unban wd mon
+            if target in ("weekday", "wd", "day") and len(args) > 2:
+                target = args[2].lower()
+            elif target in ("hour", "hours") and len(args) > 2 and args[2].isdigit():
                 target = args[2]
-            if target.isdigit():
-                h = int(target) % 24
-                ok = brain.unban_hour(h)
+
+            w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+            # If target explicitly named a day or matches weekday map
+            if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+                ok = brain.unban_weekday(w)
+                w_name = wd_names[w]
                 if ok:
-                    msg = f"🔓 *Unbanned UTC Hour {h:02d}:00*\n• Trades during hour {h:02d}:00 UTC will no longer be blocked."
+                    msg = f"🔓 *Unbanned {w_name} (Weekday {w})*\n• Trades on {w_name}s will no longer be blocked by Autonomous Learner."
                 else:
-                    msg = f"ℹ️ *UTC Hour {h:02d}:00 was not in the banned list.*"
+                    msg = f"ℹ️ *{w_name} (Weekday {w}) was not in the banned weekdays list.*"
                 await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
-            elif target in ("all", "hours", "allhours"):
+            elif target.isdigit():
+                h = int(target) % 24
+                if h in brain.knowledge.banned_weekdays and h not in brain.knowledge.banned_hours:
+                    ok = brain.unban_weekday(h)
+                    w_name = wd_names[h % 7]
+                    msg = f"🔓 *Unbanned {w_name} (Weekday {h})*\n• Trades on {w_name}s will no longer be blocked."
+                else:
+                    ok = brain.unban_hour(h)
+                    if ok:
+                        msg = f"🔓 *Unbanned UTC Hour {h:02d}:00*\n• Trades during hour {h:02d}:00 UTC will no longer be blocked."
+                    else:
+                        msg = f"ℹ️ *UTC Hour {h:02d}:00 was not in the banned list.*"
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target in ("weekdays", "allweekdays", "weekday"):
+                cnt = brain.clear_banned_weekdays()
+                msg = f"🔓 *Cleared all {cnt} banned weekdays*\n• All days of the week are now completely unblocked."
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target in ("all", "allbans", "everything"):
+                res = brain.clear_bans()
+                msg = (
+                    f"🔓 *Cleared all active learned bans*\n"
+                    f"• Hours cleared: `{res['hours']}`\n"
+                    f"• Weekdays cleared: `{res['weekdays']}`\n"
+                    f"• Setups cleared: `{res['setups']}`"
+                )
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target in ("hours", "allhours"):
                 cnt = brain.clear_banned_hours()
                 msg = f"🔓 *Cleared all {cnt} banned UTC hours*\n• All trading hours are now unblocked."
                 await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
@@ -312,12 +383,20 @@ async def learner_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 msg = (
                     "ℹ️ *Usage for unbanning:*\n"
+                    "• `/learner unban monday` (or `mon`, `tue`, `wed`, etc.)\n"
+                    "• `/learner unban weekday 0`\n"
+                    "• `/learner unban weekdays` (clears all weekday bans)\n"
                     "• `/learner unban <hour>` (e.g. `/learner unban 14`)\n"
                     "• `/learner unban hours` (clears all hour bans)\n"
                     "• `/learner unban <setup_name>`\n"
-                    "• `/learner clearbans` (clears all active bans)"
+                    "• `/learner clearbans` or `/learner unban all`"
                 )
                 await safe_reply(update, msg, parse_mode="Markdown")
+
+        elif subcmd in ("clearweekdays", "clearweekday", "unbanweekdays"):
+            cnt = brain.clear_banned_weekdays()
+            msg = f"🔓 *Cleared all {cnt} banned weekdays*\n• All days of the week are now completely unblocked."
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
 
         elif subcmd in ("clearhours", "clearhour"):
             cnt = brain.clear_banned_hours()
@@ -332,6 +411,20 @@ async def learner_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"• Weekdays cleared: `{res['weekdays']}`\n"
                 f"• Setups cleared: `{res['setups']}`"
             )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("weekdaybans", "weekdayban"):
+            opt = args[1].lower() if len(args) > 1 else "status"
+            if opt in ("on", "1", "true", "enable"):
+                brain.set_allow_weekday_bans(True)
+                msg = "⚠️ *Weekday Bans Policy ENABLED*\n• Autonomous learner may veto signals on historically weak weekdays."
+            elif opt in ("off", "0", "false", "disable"):
+                brain.set_allow_weekday_bans(False)
+                msg = "🟢 *Weekday Bans Policy DISABLED*\n• Autonomous learner will NEVER veto signals based on the day of the week."
+            else:
+                cur = getattr(brain.knowledge, "allow_weekday_bans", False)
+                st = "🟢 DISABLED (Never ban days)" if not cur else "🔴 ENABLED"
+                msg = f"📅 *Learner Weekday Ban Policy:* `{st}`\n• Use `/learner weekdaybans off` or `/learner weekdaybans on`."
             await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
 
         elif subcmd in ("rules", "filters", "rule"):

@@ -69,6 +69,7 @@ class Knowledge:
     total_history_trades: int = 0
     total_live_trades: int = 0
     enabled: bool = True
+    allow_weekday_bans: bool = False   # Default False: never hard-ban entire weekdays from autotrade
     last_bootstrap: str = ""
     last_correction: str = ""
     improvement_log: List[str] = field(default_factory=list)
@@ -131,10 +132,13 @@ class AutonomousLearner:
                     total_history_trades=int(k.get("total_history_trades", 0)),
                     total_live_trades=int(k.get("total_live_trades", 0)),
                     enabled=bool(k.get("enabled", True)),
+                    allow_weekday_bans=bool(k.get("allow_weekday_bans", False)),
                     last_bootstrap=k.get("last_bootstrap", ""),
                     last_correction=k.get("last_correction", ""),
                     improvement_log=k.get("improvement_log", [])[-50:],
                 )
+                if not self.knowledge.allow_weekday_bans and self.knowledge.banned_weekdays:
+                    self.knowledge.banned_weekdays = []
                 self._trade_log = raw.get("trade_log", [])[-2000:]
             except Exception as e:
                 logger.warning("memory load: %s", e)
@@ -383,8 +387,13 @@ class AutonomousLearner:
                     pass
             elif f.kind == "weekday" and f.action == "ban":
                 try:
-                    new_banned_wd.add(int(f.key))
-                    self._log_improve(f"BAN weekday {f.key} ({f.detail})")
+                    wd_int = int(f.key)
+                    if getattr(k, "allow_weekday_bans", False):
+                        new_banned_wd.add(wd_int)
+                        self._log_improve(f"BAN weekday {wd_int} ({f.detail})")
+                    else:
+                        k.weak_regimes[f"weekday_{wd_int}"] = f.expectancy
+                        self._log_improve(f"Caution on weekday {wd_int} ({f.detail}) — hard ban suppressed by policy")
                 except ValueError:
                     pass
             elif f.kind == "regime":
@@ -396,8 +405,10 @@ class AutonomousLearner:
 
         if new_banned_hours:
             k.banned_hours = sorted(new_banned_hours)
-        if new_banned_wd:
+        if getattr(k, "allow_weekday_bans", False):
             k.banned_weekdays = sorted(new_banned_wd)
+        else:
+            k.banned_weekdays = []
 
         # Global threshold nudge from overall expectancy
         if trades:
@@ -618,7 +629,12 @@ class AutonomousLearner:
         if hour in k.banned_hours:
             return False, f"AUTO: banned hour {hour} UTC (learned)", 0.0
         if weekday in k.banned_weekdays:
-            return False, f"AUTO: banned weekday {weekday} (learned)", 0.0
+            if getattr(k, "allow_weekday_bans", False):
+                return False, f"AUTO: banned weekday {weekday} (learned)", 0.0
+            else:
+                # Weekday bans suppressed by policy: auto-purge and allow trade
+                k.banned_weekdays = [w for w in k.banned_weekdays if w != weekday]
+                self._save()
         if setup and setup in k.banned_setups:
             return False, f"AUTO: banned setup ({k.banned_setups[setup]})", 0.0
 
@@ -711,11 +727,32 @@ class AutonomousLearner:
             self._save()
         return count
 
-    def unban_weekday(self, weekday: int) -> bool:
-        """Unban a specific weekday (0=Mon)."""
+    WEEKDAY_MAP: Dict[str, int] = {
+        "mon": 0, "monday": 0,
+        "tue": 1, "tues": 1, "tuesday": 1,
+        "wed": 2, "wednesday": 2,
+        "thu": 3, "thur": 3, "thurs": 3, "thursday": 3,
+        "fri": 4, "friday": 4,
+        "sat": 5, "saturday": 5,
+        "sun": 6, "sunday": 6,
+    }
+
+    def parse_weekday(self, val: Any) -> Optional[int]:
+        """Parse a weekday name or integer (0-6). Returns int or None."""
+        if val is None:
+            return None
+        s = str(val).strip().lower()
+        if s.isdigit():
+            v = int(s)
+            if 0 <= v <= 6:
+                return v
+        return self.WEEKDAY_MAP.get(s)
+
+    def unban_weekday(self, weekday: Any) -> bool:
+        """Unban a specific weekday by int (0=Mon) or name ('monday', 'mon')."""
         try:
-            w = int(weekday) % 7
-            if w in self.knowledge.banned_weekdays:
+            w = self.parse_weekday(weekday)
+            if w is not None and w in self.knowledge.banned_weekdays:
                 self.knowledge.banned_weekdays = [x for x in self.knowledge.banned_weekdays if x != w]
                 self._log_improve(f"Unbanned weekday {w}")
                 self._save()
@@ -732,6 +769,15 @@ class AutonomousLearner:
             self._log_improve(f"Cleared all {count} banned weekdays")
             self._save()
         return count
+
+    def set_allow_weekday_bans(self, allow: bool) -> bool:
+        """Enable or disable hard-banning entire weekdays."""
+        self.knowledge.allow_weekday_bans = bool(allow)
+        if not allow and self.knowledge.banned_weekdays:
+            self.clear_banned_weekdays()
+        self._log_improve(f"Learner allow_weekday_bans set to {allow}")
+        self._save()
+        return self.knowledge.allow_weekday_bans
 
     def unban_setup(self, setup_pattern: str) -> List[str]:
         """Unban setups matching pattern."""
@@ -807,6 +853,7 @@ class AutonomousLearner:
             "min_rr": k.min_rr,
             "min_agreement": k.min_agreement,
             "conviction_floor": k.conviction_floor,
+            "allow_weekday_bans": getattr(k, "allow_weekday_bans", False),
             "banned_hours": list(k.banned_hours),
             "banned_weekdays": list(k.banned_weekdays),
             "banned_setups": dict(k.banned_setups),
@@ -820,12 +867,14 @@ class AutonomousLearner:
         k = self.knowledge
         status_icon = "🟢 ACTIVE" if getattr(k, "enabled", True) else "🔴 PAUSED"
         weekday_map = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
-        banned_wd_str = ", ".join(f"{d} ({weekday_map.get(d, '?')})" for d in k.banned_weekdays) or "None"
-        banned_hrs_str = ", ".join(f"{h:02d}:00 UTC" for h in k.banned_hours) or "None"
+        banned_wd_str = ", ".join(f"{d} ({weekday_map.get(d, '?')})" for d in k.banned_weekdays) or "None (All days allowed)"
+        banned_hrs_str = ", ".join(f"{h:02d}:00 UTC" for h in k.banned_hours) or "None (All hours allowed)"
+        wd_policy = "🟢 Disabled (Full week trading)" if not getattr(k, "allow_weekday_bans", False) else "🔴 Enabled"
 
         lines = [
             "📜 *Autonomous Learner Rules & Active Filters*",
             f"• Filter Gate: `{status_icon}`",
+            f"• Weekday Ban Policy: `{wd_policy}`",
             "",
             "🎯 *Learned Thresholds:*",
             f"• Min Score: `{k.min_score:.2f}`",
