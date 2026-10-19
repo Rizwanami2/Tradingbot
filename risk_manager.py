@@ -837,8 +837,22 @@ class RiskManager:
         new_stop = current_stop
         reason = ""
 
+        # Stage 3: secure profit lock when MFE >= 1.4R (approaching or reaching TP1)
+        if mfe >= 1.4:
+            lock_profit_r = max(0.5, cfg.be_buffer_r + 0.25)
+            if is_long:
+                target = entry + initial_risk * lock_profit_r
+                if target > new_stop:
+                    new_stop = target
+                    reason = f"Auto BE profit lock @ {mfe:.2f}R (+{lock_profit_r}R)"
+            else:
+                target = entry - initial_risk * lock_profit_r
+                if target < new_stop:
+                    new_stop = target
+                    reason = f"Auto BE profit lock @ {mfe:.2f}R (+{lock_profit_r}R)"
+
         # Stage 2: full breakeven (+ buffer) when MFE >= be_at (RF-adjusted)
-        if mfe >= be_at:
+        elif mfe >= be_at:
             if is_long:
                 target = entry + initial_risk * cfg.be_buffer_r
                 if target > new_stop:
@@ -883,11 +897,11 @@ class RiskManager:
         dist = (atr * cfg.trail_atr_mult) if (atr and atr > 0) else (initial_risk * cfg.trail_r_mult)
         if direction.lower() in ("long", "buy", "1"):
             new_stop = highest - dist
-            # After TP1, also respect BE level
-            floor = entry if tp1_hit else current_stop
+            # After TP1, guarantee floor is at least full BE with buffer
+            floor = (entry + initial_risk * cfg.be_buffer_r) if tp1_hit else current_stop
             return max(current_stop, floor, new_stop)
         new_stop = lowest + dist
-        ceiling = entry if tp1_hit else current_stop
+        ceiling = (entry - initial_risk * cfg.be_buffer_r) if tp1_hit else current_stop
         return min(current_stop, ceiling, new_stop)
 
     def manage_position(

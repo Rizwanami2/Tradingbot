@@ -39,6 +39,8 @@ class EntryPlan:
     tp1: float
     tp2: float
     confidence: float
+    tp3: Optional[float] = None
+    rr: float = 0.0
     levels: Dict[str, float] = field(default_factory=dict)
     reasons: List[str] = field(default_factory=list)
     invalid_above: Optional[float] = None
@@ -160,12 +162,36 @@ def plan_best_entry(
     all_levels.update(daily)
     all_levels.update(swings)
     all_levels.update(emas)
+
+    # 1. SMC Order Blocks, Fair Value Gaps & Liquidity Pools
+    try:
+        from smc_liquidity import detect_order_blocks, detect_fair_value_gaps, detect_equal_highs_lows
+        if df is not None and len(df) >= 10:
+            for ob in detect_order_blocks(df):
+                all_levels[f"ob_{ob.direction.name.lower()}"] = ob.price
+            for fvg in detect_fair_value_gaps(df):
+                all_levels[f"fvg_{fvg.direction.name.lower()}"] = fvg.price
+            for eq in detect_equal_highs_lows(df):
+                all_levels[f"liq_{eq.kind.lower()}"] = eq.price
+    except Exception:
+        pass
+
     try:
         from historical_2y import analyze_2y, history_levels_for_planner
         h2 = analyze_2y(symbol)
         all_levels.update(history_levels_for_planner(h2))
     except Exception:
         pass
+
+    sym_u = str(symbol or "").upper()
+    is_gold = any(x in sym_u for x in ("XAU", "GOLD", "PAXG"))
+    is_btc = any(x in sym_u for x in ("BTC", "BITCOIN", "XBT"))
+    if is_gold:
+        spread_buf = max(atr * 0.20, 0.35)
+    elif is_btc:
+        spread_buf = max(atr * 0.20, 10.0)
+    else:
+        spread_buf = max(atr * 0.20, mark * 0.0003)
 
     for name, px in list(all_levels.items()):
         if name in ("mark", "atr") or px <= 0:
@@ -193,6 +219,8 @@ def plan_best_entry(
             stop=mark - atr,
             tp1=mark + atr * risk_r,
             tp2=mark + atr * risk_r * 1.6,
+            tp3=mark + atr * risk_r * 2.5,
+            rr=round(risk_r * 1.6, 2),
             confidence=0.0,
             levels=all_levels,
             reasons=["No directional consensus — range around mark only"],
@@ -205,35 +233,73 @@ def plan_best_entry(
     wsum = sum(weights) or 1.0
     best = sum(p * w for p, w in zip(prices, weights)) / wsum
 
+    sw_h = swings.get("swing_high")
+    sw_l = swings.get("swing_low")
+
     if direction == "LONG":
         entry_low = min(prices + [best, mark - atr * 0.25])
         entry_high = min(mark, best + atr * 0.15)
         if entry_high < entry_low:
             entry_low, entry_high = mark - atr * 0.4, mark
         best_entry = (entry_low + entry_high) / 2
-        stop = stop_hint if stop_hint and stop_hint < entry_low else entry_low - atr * 1.0
+
+        # Structure-based Stop Loss: below swing low / OB anchor with volatility/spread buffer
+        anchor_l = sw_l if (sw_l and sw_l < entry_low) else entry_low
+        struct_stop = anchor_l - spread_buf
+        if stop_hint and stop_hint < entry_low:
+            stop = min(stop_hint, struct_stop)
+        else:
+            stop = struct_stop
+        # Guarantee minimum stop distance
+        stop = min(stop, best_entry - max(atr * 0.8, spread_buf * 2.0))
+
         risk = abs(best_entry - stop) or atr
-        tp1 = best_entry + risk * risk_r
-        tp2 = best_entry + risk * risk_r * 1.6
+        min_tp1 = best_entry + risk * max(risk_r, 1.5)
+        # Target structural resistance if favorable
+        if sw_h and sw_h >= best_entry + risk * 1.2:
+            tp1 = max(min_tp1, sw_h)
+        else:
+            tp1 = min_tp1
+
+        tp2 = max(tp1 + risk * 0.8, best_entry + risk * 2.5)
+        tp3 = best_entry + risk * 4.0
         invalid_below = stop
-        invalid_above = None
+        invalid_above = best_entry + risk * 1.5
     else:
         entry_high = max(prices + [best, mark + atr * 0.25])
         entry_low = max(mark, best - atr * 0.15)
         if entry_high < entry_low:
             entry_low, entry_high = mark, mark + atr * 0.4
         best_entry = (entry_low + entry_high) / 2
-        stop = stop_hint if stop_hint and stop_hint > entry_high else entry_high + atr * 1.0
+
+        # Structure-based Stop Loss: above swing high / OB anchor with volatility/spread buffer
+        anchor_h = sw_h if (sw_h and sw_h > entry_high) else entry_high
+        struct_stop = anchor_h + spread_buf
+        if stop_hint and stop_hint > entry_high:
+            stop = max(stop_hint, struct_stop)
+        else:
+            stop = struct_stop
+        # Guarantee minimum stop distance
+        stop = max(stop, best_entry + max(atr * 0.8, spread_buf * 2.0))
+
         risk = abs(stop - best_entry) or atr
-        tp1 = best_entry - risk * risk_r
-        tp2 = best_entry - risk * risk_r * 1.6
+        min_tp1 = best_entry - risk * max(risk_r, 1.5)
+        # Target structural support if favorable
+        if sw_l and sw_l <= best_entry - risk * 1.2:
+            tp1 = min(min_tp1, sw_l)
+        else:
+            tp1 = min_tp1
+
+        tp2 = min(tp1 - risk * 0.8, best_entry - risk * 2.5)
+        tp3 = best_entry - risk * 4.0
         invalid_above = stop
-        invalid_below = None
+        invalid_below = best_entry - risk * 1.5
 
     for name, px, sc in top[:3]:
         reasons.append(f"{name}@{px:,.2f} (score {sc:.2f})")
 
     conf = min(0.95, 0.45 + 0.12 * len(top) + 0.15 * (top[0][2] if top else 0))
+    eff_rr = round(abs(tp2 - best_entry) / max(risk, 1e-9), 2)
 
     return EntryPlan(
         direction=direction,
@@ -244,6 +310,8 @@ def plan_best_entry(
         stop=round(stop, 6),
         tp1=round(tp1, 6),
         tp2=round(tp2, 6),
+        tp3=round(tp3, 6),
+        rr=eff_rr,
         confidence=round(conf, 3),
         levels={k: round(v, 6) for k, v in all_levels.items() if v},
         reasons=reasons,
@@ -266,15 +334,16 @@ def format_entry_plan(plan: EntryPlan) -> str:
         inv = f"• Invalid if above `${plan.invalid_above:,.2f}`\n"
     why = ", ".join(plan.reasons[:3]) if plan.reasons else "multi-level confluence"
     key_lv = []
-    for k in ("day_open", "pdh", "pdl", "ema21", "ema50", "swing_high", "swing_low"):
+    for k in ("day_open", "pdh", "pdl", "ema21", "ema50", "swing_high", "swing_low", "ob_bullish", "ob_bearish", "fvg_bullish", "fvg_bearish"):
         if k in plan.levels and plan.levels[k]:
             key_lv.append(f"{k} `${plan.levels[k]:,.2f}`")
     lv_line = ("• Levels: " + " | ".join(key_lv[:5]) + "\n") if key_lv else ""
+    tp3_line = f" | **TP3:** `${plan.tp3:,.2f}`" if plan.tp3 else ""
     return (
-        f"\n📐 **Best Entry Plan ({plan.direction})** conf `{plan.confidence:.0%}`\n"
+        f"\n📐 **Best Entry Plan ({plan.direction})** conf `{plan.confidence:.0%}` | R:R `1:{plan.rr:.1f}`\n"
         f"• **Entry zone:** `${plan.entry_low:,.2f}` – `${plan.entry_high:,.2f}`\n"
         f"• **Best entry:** `${plan.best_entry:,.2f}` (mark `${plan.mark:,.2f}`)\n"
-        f"• **Stop:** `${plan.stop:,.2f}` | **TP1:** `${plan.tp1:,.2f}` | **TP2:** `${plan.tp2:,.2f}`\n"
+        f"• **Stop:** `${plan.stop:,.2f}` | **TP1:** `${plan.tp1:,.2f}` | **TP2:** `${plan.tp2:,.2f}`{tp3_line}\n"
         f"{inv}"
         f"{lv_line}"
         f"• Why: _{why}_\n"
@@ -291,18 +360,45 @@ def attach_plan_to_signal(sig: Dict[str, Any], plan: EntryPlan) -> Dict[str, Any
     try:
         mark = float(plan.mark)
         best = float(plan.best_entry)
-        if sig.get("is_scalp") or sig.get("fast_market_fill"):
+        is_scalp = bool(sig.get("is_scalp") or sig.get("fast_market_fill"))
+
+        if is_scalp:
             out["entry"] = mark or float(out.get("entry") or best)
-        elif abs(best - mark) / max(mark, 1e-9) < 0.01:
+        elif abs(best - mark) / max(mark, 1e-9) < 0.02:
             out["entry"] = best
         else:
             out["entry"] = float(out.get("entry") or mark)
+
         out["entry_low"] = plan.entry_low
         out["entry_high"] = plan.entry_high
         out["best_entry"] = plan.best_entry
         out["plan_stop"] = plan.stop
         out["plan_tp1"] = plan.tp1
         out["plan_tp2"] = plan.tp2
+
+        # In standard consensus setups, adopt the refined structural TP/SL and RR
+        if not is_scalp:
+            old_entry = float(out.get("entry") or best)
+            old_stop = float(out.get("stop") or plan.stop)
+            old_risk = abs(old_entry - old_stop) or 1.0
+
+            out["stop"] = plan.stop
+            out["tp1"] = plan.tp1
+            out["tp2"] = plan.tp2
+            if plan.tp3:
+                out["tp3"] = plan.tp3
+
+            new_risk = abs(float(out["entry"]) - float(out["stop"]))
+            if new_risk > 0:
+                out["rr"] = round(abs(float(out["tp2"]) - float(out["entry"])) / new_risk, 2)
+                # Adjust lot size proportionally so dollar risk remains constant
+                ratio = old_risk / new_risk
+                if 0.5 <= ratio <= 2.0 and "size" in out:
+                    out["size"] = round(float(out["size"]) * ratio, 4)
+                    if "lots" in out:
+                        out["lots"] = round(float(out["lots"]) * ratio, 4)
+                    if "margin_required" in out:
+                        out["margin_required"] = round(float(out["margin_required"]) * ratio, 2)
     except Exception:
         pass
     return out

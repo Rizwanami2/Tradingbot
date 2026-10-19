@@ -83,6 +83,9 @@ class TradeOrder:
     ticket: Optional[Any] = None
     trailing_sl_active: bool = False
     highest_profit_usd: float = 0.0
+    last_broker_sl: float = 0.0
+    recent_highs: List[float] = field(default_factory=list)
+    recent_lows: List[float] = field(default_factory=list)
 
 
     def to_dict(self) -> Dict:
@@ -946,6 +949,32 @@ class ExecutionEngine:
                 self._dispatch_event(ev["event"], setup, ev["message"])
                 continue
 
+            # Invalidate front-run setup if market reaches TP1 before touching entry level
+            front_run = False
+            if setup.direction == "LONG" and not (low <= setup.entry_level) and high >= setup.tp1:
+                front_run = True
+            elif setup.direction == "SHORT" and not (high >= setup.entry_level) and low <= setup.tp1:
+                front_run = True
+
+            if front_run:
+                setup.status = OrderStatus.CANCELLED
+                setup.close_reason = f"Setup front-run: TP1 ({setup.tp1:.2f}) reached before entry was filled."
+                setup.closed_at = datetime.now(timezone.utc).isoformat()
+                self.trade_history.append(setup)
+                self.pending_setups.pop(setup.id, None)
+                ev = {
+                    "event": "SETUP_INVALIDATED",
+                    "order": setup,
+                    "price": curr_price,
+                    "message": (
+                        f"⚠️ **SETUP CANCELLED (FRONT-RUN)** ({setup.symbol})\n"
+                        f"Target 1 (`${setup.tp1:,.2f}`) reached before entry fill. Order cancelled to prevent chasing."
+                    ),
+                }
+                events.append(ev)
+                self._dispatch_event(ev["event"], setup, ev["message"])
+                continue
+
             should_execute = False
             exec_price = setup.entry_level
 
@@ -954,13 +983,13 @@ class ExecutionEngine:
                 exec_price = curr_price
             # LONG TRIGGER: Price trades at or touches entry level
             elif setup.direction == "LONG":
-                if low <= setup.entry_level <= high or curr_price <= setup.entry_level * 1.0008:
+                if low <= setup.entry_level <= high or (curr_price <= setup.entry_level * 1.0008 and curr_price >= setup.stop_loss):
                     should_execute = True
                     exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
 
             # SHORT TRIGGER: Price trades at or touches entry level
             elif setup.direction == "SHORT":
-                if low <= setup.entry_level <= high or curr_price >= setup.entry_level * 0.9992:
+                if low <= setup.entry_level <= high or (curr_price >= setup.entry_level * 0.9992 and curr_price <= setup.stop_loss):
                     should_execute = True
                     exec_price = setup.entry_level if low <= setup.entry_level <= high else curr_price
 
@@ -1010,6 +1039,9 @@ class ExecutionEngine:
                     setup.lowest_price = exec_price
                     setup.remaining_size = setup.size
                     setup.remaining_lots = setup.lots
+                    setup.last_broker_sl = setup.stop_loss
+                    setup.recent_highs = [exec_price]
+                    setup.recent_lows = [exec_price]
                     setup.ticket = (
                         getattr(broker_order, "ticket", None)
                         or getattr(broker_order, "order_id", None)
@@ -1106,6 +1138,18 @@ class ExecutionEngine:
             else:
                 pos.highest_price = max(pos.highest_price, curr_price)
                 pos.lowest_price = min(pos.lowest_price, curr_price)
+
+            # Rolling window of recent highs/lows for structure trailing
+            if not hasattr(pos, "recent_highs") or pos.recent_highs is None:
+                pos.recent_highs = []
+            if not hasattr(pos, "recent_lows") or pos.recent_lows is None:
+                pos.recent_lows = []
+            pos.recent_highs.append(high if not just_executed else curr_price)
+            pos.recent_lows.append(low if not just_executed else curr_price)
+            if len(pos.recent_highs) > 30:
+                pos.recent_highs = pos.recent_highs[-30:]
+            if len(pos.recent_lows) > 30:
+                pos.recent_lows = pos.recent_lows[-30:]
 
             # Calculate live unrealized PnL
             if is_long:
@@ -1396,11 +1440,17 @@ class ExecutionEngine:
             )
             if be_stop != pos.stop_loss:
                 pos.stop_loss = be_stop
-                stage = 2 if "full" in be_reason.lower() else 1
+                stage = 3 if "profit lock" in be_reason.lower() else (2 if "full" in be_reason.lower() else 1)
                 if stage > pos.be_stage:
                     pos.be_stage = stage
                     try:
                         self._broker_modify(pos.symbol, stop_loss=be_stop, ticket=getattr(pos, "ticket", None) or pos.id)
+                        pos.last_broker_sl = be_stop
+                    except Exception:
+                        pass
+                    try:
+                        from virtual_stops import get_virtual_stop_manager
+                        get_virtual_stop_manager().update_stop(getattr(pos, "ticket", None) or pos.id, be_stop)
                     except Exception:
                         pass
                     ev = {
@@ -1443,6 +1493,12 @@ class ExecutionEngine:
                     print(f"[ExecutionEngine] Broker TP1 close: {ex}")
                 try:
                     self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, take_profit=pos.tp2, ticket=getattr(pos, "ticket", None) or pos.id)
+                    pos.last_broker_sl = pos.stop_loss
+                except Exception:
+                    pass
+                try:
+                    from virtual_stops import get_virtual_stop_manager
+                    get_virtual_stop_manager().update_stop(getattr(pos, "ticket", None) or pos.id, pos.stop_loss)
                 except Exception:
                     pass
 
@@ -1466,22 +1522,19 @@ class ExecutionEngine:
                 try:
                     from execution_enhancements import apply_structure_trail
                     atr_proxy = abs((pos.executed_price or pos.entry_level) - pos.stop_loss) / 1.2
-                    import pandas as _pd
-                    _df = _pd.DataFrame({
-                        "high": [pos.highest_price, high],
-                        "low": [pos.lowest_price, low],
-                        "close": [curr_price, curr_price],
-                        "open": [curr_price, curr_price],
-                    })
                     hist = candle.get("_history") if isinstance(candle, dict) else None
-                    if hist is not None and len(hist) >= 20:
-                        _df = hist
-                    trail_ev = apply_structure_trail(pos, _df, atr_value=float(atr_proxy or 0))
+                    trail_ev = apply_structure_trail(pos, df=hist, atr_value=float(atr_proxy or 0), current_price=curr_price)
                     if trail_ev:
                         events.append(trail_ev)
                         self._dispatch_event(trail_ev["event"], pos, trail_ev["message"])
                         try:
                             self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=getattr(pos, "ticket", None) or pos.id)
+                            pos.last_broker_sl = pos.stop_loss
+                        except Exception:
+                            pass
+                        try:
+                            from virtual_stops import get_virtual_stop_manager
+                            get_virtual_stop_manager().update_stop(getattr(pos, "ticket", None) or pos.id, pos.stop_loss)
                         except Exception:
                             pass
                 except Exception:
@@ -1510,6 +1563,12 @@ class ExecutionEngine:
                     print(f"[ExecutionEngine] Broker TP2 close: {ex}")
                 try:
                     self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=getattr(pos, "ticket", None) or pos.id)
+                    pos.last_broker_sl = pos.stop_loss
+                except Exception:
+                    pass
+                try:
+                    from virtual_stops import get_virtual_stop_manager
+                    get_virtual_stop_manager().update_stop(getattr(pos, "ticket", None) or pos.id, pos.stop_loss)
                 except Exception:
                     pass
 
@@ -1533,7 +1592,33 @@ class ExecutionEngine:
                     pos.direction.lower(), entry, pos.stop_loss, pos.highest_price, pos.lowest_price, initial_risk, tp1_hit=True
                 )
                 if (is_long and trail_stop > pos.stop_loss) or (not is_long and trail_stop < pos.stop_loss):
+                    old_trail = pos.stop_loss
                     pos.stop_loss = trail_stop
+                    min_step = max(initial_risk * 0.1, abs(entry) * 0.0003)
+                    last_b = getattr(pos, "last_broker_sl", 0.0) or 0.0
+                    if abs(pos.stop_loss - last_b) >= min_step:
+                        try:
+                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=getattr(pos, "ticket", None) or pos.id)
+                            pos.last_broker_sl = pos.stop_loss
+                        except Exception:
+                            pass
+                        try:
+                            from virtual_stops import get_virtual_stop_manager
+                            get_virtual_stop_manager().update_stop(getattr(pos, "ticket", None) or pos.id, pos.stop_loss)
+                        except Exception:
+                            pass
+                        ev_trail = {
+                            "event": "TRAILING_STOP_ADVANCED",
+                            "order": pos,
+                            "new_stop": pos.stop_loss,
+                            "message": (
+                                f"📈 **TRAILING STOP ADVANCED** ({pos.symbol} [#{pos.id}])\n"
+                                f"Stop Loss ratcheted: `${old_trail:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                                f"Peak: `${pos.highest_price if is_long else pos.lowest_price:,.2f}`"
+                            ),
+                        }
+                        events.append(ev_trail)
+                        self._dispatch_event(ev_trail["event"], pos, ev_trail["message"])
 
             # (F) Stop Loss / Break-Even / Exit Hit / Virtual Stop Hit
             v_hit = False

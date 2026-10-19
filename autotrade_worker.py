@@ -250,6 +250,7 @@ async def live_monitoring_worker(
                         "high": float(candle["high"]),
                         "low": float(candle["low"]),
                         "close": float(candle["close"]),
+                        "_history": df1,
                     }
 
                     try:
