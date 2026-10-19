@@ -320,7 +320,7 @@ def apply_profile(
             f"  - Micro SL: `{p.scalp_sl_pct:.2f}%` move or `${p.scalp_sl_usd:.2f}` USD loss\n"
             f"  - 🛡️ Dynamic Trailing SL: ACTIVE (Trigger `${getattr(p, 'scalp_trail_activation_usd', 1.0):.2f}` / Trail `${getattr(p, 'scalp_trail_distance_usd', 0.8):.2f}` | Min Floor `+${getattr(p, 'scalp_min_trail_profit_usd', 1.5):.2f}`)\n"
             f"  - 🚀 Run-to-TP Expansion: `{'ACTIVE (holds on strong momentum)' if getattr(p, 'scalp_let_profit_run', True) else 'DISABLED'}`\n"
-            f"  - ⏳ Anti-Spam Cooldown: `{getattr(p, 'scalp_entry_cooldown_sec', 45.0):.0f}s` entry | `{getattr(p, 'scalp_loss_cooldown_sec', 90.0):.0f}s` loss cooldown\n"
+            f"  - 🎯 High-Accuracy Scalp Filters: MTF trend alignment & structure confirmation enabled\n"
             f"  - Polling: `{p.poll_interval}s` fast frequency | Market Fills: `Instant`\n"
             f"  - Max Open Slots: `{p.max_open_trades}` concurrent trades (Multi-position Gold & BTC)"
         )

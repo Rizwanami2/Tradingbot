@@ -424,7 +424,7 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-                InlineKeyboardButton("⚡ Anti-Spam", callback_data="cmd:run:cooldown"),
+                InlineKeyboardButton("🎯 Sizing & Risk", callback_data="cmd:run:risk"),
             ],
         ])
     elif cat in ("ai", "brain", "learner"):
@@ -586,8 +586,6 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
-            "• `/cooldown [active|deactivate|reset]` — Anti-spam cooldown toggle & timer reset\n"
-            "• `/spam [on|off]` — Spam trade mode (max 6 trades without cooldown)\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
@@ -681,8 +679,6 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
-            "• `/cooldown [active|deactivate|reset]` — Anti-spam cooldown toggle & timer reset\n"
-            "• `/spam [on|off]` — Spam trade mode (max 6 trades without cooldown)\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
             "• `/kelly [SYM]` — Fractional Kelly lot sizing & portfolio VaR 99%\n"
             "• `/session` — End-of-session performance report & killzones\n"
@@ -5762,9 +5758,6 @@ def main():
                 # Risk & Safety
                 BotCommand("status", "Portfolio equity & margin capacity"),
                 BotCommand("health", "System health & background worker telemetry"),
-                BotCommand("cooldown", "Anti-spam rate limiting & cooldown status (active/deactivate)"),
-                BotCommand("antispam", "Anti-spam concurrency & cooldown controls (auto/on/off)"),
-                BotCommand("spam", "Spam trade mode (max 6 trades without cooldown, on/off)"),
                 BotCommand("risk", "Risk tier report, sizing & reset"),
                 BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
                 BotCommand("leverage", "Set or view leverage (1-200x, manual/auto)"),
@@ -5866,8 +5859,6 @@ def main():
     # Risk & Safety
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("health", health_command))
-    app.add_handler(CommandHandler(["antispam", "Antyspam", "cooldown", "cooldowns"], cooldown_command))
-    app.add_handler(CommandHandler(["spam", "spamtrade", "burst"], spam_command))
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler(["resetrisk", "riskreset"], resetrisk_command))
     app.add_handler(CommandHandler("leverage", leverage_command))
@@ -5890,15 +5881,12 @@ def main():
         logger.exception("Failed to register performance_command: %s", e)
 
     try:
-        from telegram_advanced import abacktest_command, profile_command, scalp_command, trail_command, handle_trail_callback
-        from telegram.ext import CallbackQueryHandler
+        from telegram_advanced import abacktest_command, profile_command, scalp_command
         app.add_handler(CommandHandler(["abacktest", "backtestall"], abacktest_command))
         app.add_handler(CommandHandler("profile", profile_command))
         app.add_handler(CommandHandler(["scalp", "microscalp"], scalp_command))
-        app.add_handler(CommandHandler(["trail", "trailing", "trailsl"], trail_command))
-        app.add_handler(CallbackQueryHandler(handle_trail_callback, pattern=r"^trail:"))
     except Exception as e:
-        logger.exception("Failed to register abacktest/profile/scalp/trail handlers: %s", e)
+        logger.exception("Failed to register abacktest/profile/scalp handlers: %s", e)
 
     # Autonomous AI & Feature Packs
     try:

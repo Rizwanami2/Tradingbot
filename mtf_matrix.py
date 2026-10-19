@@ -467,18 +467,38 @@ def check_mtf_confluence(
     symbol: str,
     direction: str,
     force_refresh: bool = False,
+    is_scalp: bool = False,
 ) -> Tuple[bool, str, float]:
     """
     Evaluate multi-timeframe matrix confluence for an autotrade signal.
     Returns (allowed, reason, score_mult):
-    - allowed: False if fighting severe MTF counter-trend
+    - allowed: False if fighting severe MTF counter-trend (or any negative bias for high-accuracy scalps)
     - reason: explanation of MTF structure
-    - score_mult: 1.20x for strong alignment, 1.0x normal
+    - score_mult: 1.20x for strong alignment, 1.0x normal (1.25x for scalp confluence)
     """
     snap = analyze_symbol_mtf(symbol, force_refresh=force_refresh)
     d = direction.upper()
     is_long = "BUY" in d or "LONG" in d
     is_short = "SELL" in d or "SHORT" in d
+
+    if is_scalp:
+        # High-accuracy scalp requirement: NEVER fight opposing MTF momentum
+        if is_long:
+            if snap.overall_score <= -20.0:
+                return False, f"Scalp counter-trend veto: MTF bearish bias ({snap.overall_score:+.1f}/100)", 0.0
+            if "DIVERGENT" in snap.ltf_htf_alignment and snap.overall_score <= -10.0:
+                return False, f"Scalp divergent veto: HTF resistance against Long ({snap.overall_score:+.1f}/100)", 0.0
+            if snap.overall_score >= 25.0 and "ALIGNED" in snap.ltf_htf_alignment:
+                return True, f"Scalp high-accuracy MTF confluence ({snap.overall_score:+.1f}/100)", 1.25
+            return True, f"Scalp MTF structure OK ({snap.overall_score:+.1f}/100)", 1.05
+        if is_short:
+            if snap.overall_score >= 20.0:
+                return False, f"Scalp counter-trend veto: MTF bullish bias ({snap.overall_score:+.1f}/100)", 0.0
+            if "DIVERGENT" in snap.ltf_htf_alignment and snap.overall_score >= 10.0:
+                return False, f"Scalp divergent veto: HTF support against Short ({snap.overall_score:+.1f}/100)", 0.0
+            if snap.overall_score <= -25.0 and "ALIGNED" in snap.ltf_htf_alignment:
+                return True, f"Scalp high-accuracy MTF confluence ({snap.overall_score:+.1f}/100)", 1.25
+            return True, f"Scalp MTF structure OK ({snap.overall_score:+.1f}/100)", 1.05
 
     if is_long:
         if snap.overall_score <= -60.0:

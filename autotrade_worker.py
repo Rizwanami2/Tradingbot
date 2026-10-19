@@ -311,12 +311,10 @@ async def live_monitoring_worker(
 
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
-                    eff_max_open = max(max_open, getattr(limiter, "spam_trade_max_trades", 6)) if getattr(limiter, "spam_trade_enabled", False) else max_open
                     if not autotrade_active:
                         can_open = False
-                    elif getattr(limiter, "spam_trade_enabled", False):
-                        can_open, spam_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=eff_max_open)
                     elif is_scalping:
+                        # Deterministic scalp slot management: total capacity, per-currency limit, minimum price distance
                         can_open, spam_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
                     else:
                         can_open = open_n < max_open and symbol not in engine.active_positions and symbol not in engine.pending_setups
@@ -380,7 +378,7 @@ async def live_monitoring_worker(
                             # Multi-Timeframe Trend & Volatility Confluence Matrix check
                             try:
                                 from mtf_matrix import check_mtf_confluence
-                                mtf_ok, mtf_reason, mtf_mult = check_mtf_confluence(symbol, dname)
+                                mtf_ok, mtf_reason, mtf_mult = check_mtf_confluence(symbol, dname, is_scalp=is_scalp_sig)
                                 if not mtf_ok:
                                     logger.info("Autotrade %s: vetoed by MTF Confluence Matrix — %s", symbol, mtf_reason)
                                     continue
@@ -388,6 +386,22 @@ async def live_monitoring_worker(
                                     sig["score"] = float(sig["score"]) * mtf_mult
                             except Exception as _mtf_err:
                                 logger.debug("Autotrade MTF check note: %s", _mtf_err)
+
+                            # MT5 live chart micro-trend bias check for scalps (reject counter-trend scalps)
+                            if is_scalp_sig:
+                                try:
+                                    from mt5_chart import get_mt5_live_chart
+                                    _cdata = get_mt5_live_chart(symbol, timeframe="1m")
+                                    if _cdata and _cdata.get("ok", True):
+                                        _tbias = str(_cdata.get("technicals", {}).get("trend_bias", "")).upper()
+                                        if "BEARISH" in _tbias and ("BUY" in dname.upper() or "LONG" in dname.upper()):
+                                            logger.info("Autotrade %s: scalp vetoed by opposing MT5 live chart trend (%s)", symbol, _tbias)
+                                            continue
+                                        elif "BULLISH" in _tbias and ("SELL" in dname.upper() or "SHORT" in dname.upper()):
+                                            logger.info("Autotrade %s: scalp vetoed by opposing MT5 live chart trend (%s)", symbol, _tbias)
+                                            continue
+                                except Exception as _mt5_err:
+                                    logger.debug("Autotrade scalp MT5 chart check note: %s", _mt5_err)
 
                             # Signal Quality Filter (candle shape, wicks, volume profile)
                             try:

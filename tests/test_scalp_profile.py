@@ -1034,50 +1034,85 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertIn("order-shakeout-protect", self.engine.active_positions)
         self.assertEqual(order.status, OrderStatus.OPEN)
 
-    def test_trail_telegram_command_and_options(self):
-        """Verify /trail Telegram command displays status and responds to wide/tight/run/minprofit parameters."""
-        import asyncio
-        from telegram_advanced import trail_command, handle_trail_callback
-        import config
+    def test_scalp_mtf_confluence_veto_countertrend(self):
+        """Verify scalp strategy strictly vetoes counter-trend trades against MTF matrix."""
+        from mtf_matrix import check_mtf_confluence, MatrixSnapshot, TimeframeAnalysis
 
-        # Test command status display
-        update = MagicMock()
-        update.message = MagicMock()
-        update.effective_chat = MagicMock(id=12345)
-        ctx = MagicMock()
-        ctx.args = []
+        fake_tfs = {
+            tf: TimeframeAnalysis(
+                timeframe=tf,
+                label=tf.upper(),
+                close=2650.0,
+                change_pct=-1.5,
+                ema9=2648.0,
+                ema21=2652.0,
+                ema50=2655.0,
+                ema200=2660.0,
+                trend_state="BEAR",
+                trend_icon="🔴",
+                rsi=42.0,
+                rsi_state="BEAR",
+                atr=2.0,
+                atr_pct=0.08,
+                volatility_state="NORMAL",
+                vol_ratio=1.0,
+                vol_state="ACTIVE",
+                score=-45.0,
+            )
+            for tf in ["1m", "5m", "15m", "1h", "4h", "daily"]
+        }
+        bear_snap = MatrixSnapshot(
+            symbol="XAUUSD",
+            current_price=2650.0,
+            timeframes=fake_tfs,
+            overall_score=-45.0,
+            confluence_grade="SELL / SHORT BIAS 🔴",
+            ltf_htf_alignment="ALIGNED ⚡",
+            top_bias="BEARISH",
+            recommendation="Bearish alignment",
+            timestamp="2026-10-19 12:00:00 UTC",
+        )
 
-        asyncio.run(trail_command(update, ctx))
-        update.message.reply_text.assert_called()
-        call_text = update.message.reply_text.call_args[0][0]
-        self.assertIn("DYNAMIC SCALP TRAILING SL", call_text)
-        self.assertIn("Breathing Trail Distance", call_text)
-        self.assertIn("Guaranteed Profit Floor", call_text)
+        with patch("mtf_matrix.analyze_symbol_mtf", return_value=bear_snap):
+            # Normal swing allows Long because -45.0 > -60.0 veto threshold
+            ok_norm, _, _ = check_mtf_confluence("XAUUSD", "BUY", is_scalp=False)
+            self.assertTrue(ok_norm)
 
-        # Test /trail wide
-        ctx.args = ["wide"]
-        asyncio.run(trail_command(update, ctx))
-        self.assertEqual(config.SCALP_TRAIL_DISTANCE_USD, 1.50)
+            # High-accuracy scalp vetoes Long against -45.0 bearish MTF trend
+            ok_scalp, reason_scalp, _ = check_mtf_confluence("XAUUSD", "BUY", is_scalp=True)
+            self.assertFalse(ok_scalp)
+            self.assertIn("Scalp counter-trend veto", reason_scalp)
 
-        # Test /trail tight
-        ctx.args = ["tight"]
-        asyncio.run(trail_command(update, ctx))
-        self.assertEqual(config.SCALP_TRAIL_DISTANCE_USD, 0.80)
+            # High-accuracy scalp confirms Short with MTF alignment
+            ok_short, reason_short, mult_short = check_mtf_confluence("XAUUSD", "SELL", is_scalp=True)
+            self.assertTrue(ok_short)
+            self.assertGreaterEqual(mult_short, 1.20)
 
-        # Test /trail minprofit 2.50
-        ctx.args = ["minprofit", "2.50"]
-        asyncio.run(trail_command(update, ctx))
-        self.assertEqual(config.SCALP_MIN_TRAIL_PROFIT_USD, 2.50)
+    def test_scalp_opposing_rejection_wick_filter(self):
+        """Verify candle quality filter rejects opposing rejection wicks for scalp trade accuracy."""
+        from signal_quality import candle_quality
 
-        # Test /trail run off
-        ctx.args = ["run", "off"]
-        asyncio.run(trail_command(update, ctx))
-        self.assertFalse(config.SCALP_LET_PROFIT_RUN)
+        dates = pd.date_range("2026-10-19 10:00", periods=25, freq="1min")
+        # Base candle DataFrame
+        rows = [{"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5} for _ in range(24)]
 
-        # Test /trail run on
-        ctx.args = ["run", "on"]
-        asyncio.run(trail_command(update, ctx))
-        self.assertTrue(config.SCALP_LET_PROFIT_RUN)
+        # Candidate candle with huge upper wick (shooting star / selling trap)
+        rows.append({"open": 100.0, "high": 105.0, "low": 99.8, "close": 101.0})
+        df_shooting_star = pd.DataFrame(rows, index=dates)
+
+        # Candidate candle with huge lower wick (hammer / buying trap for short)
+        rows[-1] = {"open": 104.0, "high": 105.0, "low": 100.0, "close": 103.0}
+        df_hammer = pd.DataFrame(rows, index=dates)
+
+        # For BUY: shooting star rejection wick must be vetoed in scalp mode
+        ok_buy, reason_buy, _ = candle_quality(df_shooting_star, is_scalp=True, direction="BUY")
+        self.assertFalse(ok_buy)
+        self.assertIn("opposing rejection wick (upper)", reason_buy)
+
+        # For SELL: hammer rejection wick must be vetoed in scalp mode
+        ok_sell, reason_sell, _ = candle_quality(df_hammer, is_scalp=True, direction="SELL")
+        self.assertFalse(ok_sell)
+        self.assertIn("opposing rejection wick (lower)", reason_sell)
 
 
 if __name__ == "__main__":

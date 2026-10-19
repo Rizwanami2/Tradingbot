@@ -121,9 +121,15 @@ def relative_strength_rank(
     return ranks
 
 
-def candle_quality(df: pd.DataFrame, is_scalp: bool = False) -> Tuple[bool, str, float]:
+def candle_quality(
+    df: pd.DataFrame,
+    is_scalp: bool = False,
+    direction: Optional[str] = None,
+) -> Tuple[bool, str, float]:
     """
     Reject poor candles: doji, excessive wick, abnormal range.
+    In scalp mode with direction specified, rejects opposing rejection wicks (shooting star against BUY, hammer against SELL)
+    to boost trade accuracy.
     Returns (ok, reason, quality_score 0..1)
     """
     if df is None or len(df) < 5:
@@ -144,6 +150,18 @@ def candle_quality(df: pd.DataFrame, is_scalp: bool = False) -> Tuple[bool, str,
     min_body = 0.06 if is_scalp else 0.12
     max_wick = 0.80 if is_scalp else 0.65
     range_mult = 4.5 if is_scalp else 3.5
+
+    # Scalp accuracy enhancement: reject opposing rejection wicks
+    if is_scalp and direction:
+        d = str(direction).upper()
+        if "BUY" in d or "LONG" in d:
+            # For BUY scalp, huge upper wick (selling pressure / shooting star rejection) kills accuracy
+            if upper_wick / rng > 0.45 and upper_wick > body * 1.4:
+                return False, "scalp opposing rejection wick (upper)", 0.25
+        elif "SELL" in d or "SHORT" in d:
+            # For SELL scalp, huge lower wick (buying pressure / hammer rejection) kills accuracy
+            if lower_wick / rng > 0.45 and lower_wick > body * 1.4:
+                return False, "scalp opposing rejection wick (lower)", 0.25
 
     if body_ratio < min_body:
         return False, "doji / tiny body", 0.2
@@ -174,7 +192,7 @@ def evaluate_signal_quality(
         return QualityResult(False, 0.0, [msg_s])
     reasons.append(msg_s)
 
-    ok_c, msg_c, sc_c = candle_quality(df, is_scalp=is_scalp)
+    ok_c, msg_c, sc_c = candle_quality(df, is_scalp=is_scalp, direction=direction)
     if not ok_c:
         return QualityResult(False, sc_c, [msg_c])
     reasons.append(msg_c)
