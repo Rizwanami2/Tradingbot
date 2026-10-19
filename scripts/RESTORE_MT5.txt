@@ -1,22 +1,22 @@
-Restore ORIGINAL mt5_broker.py (hybrid REMOVED)
-================================================
-
-Hybrid mode is cancelled. Use the normal EA-bridge backend only.
+HYBRID CANCELLED — restore original mt5_broker.py
+==================================================
 
 cd C:\Tradingbot
 git fetch origin
 git pull origin main
+
+python scripts/restore_mt5_original.py
+
+# If that fails:
 git show 575aba1aa62a9e9ae6b48d212438a956b8ae6e62:mt5_broker.py > mt5_broker.py
 
-# Confirm no hybrid:
-findstr /C:"Hybrid ON" mt5_broker.py
-# (should find nothing)
+Check:
+  findstr "class MT5Broker" mt5_broker.py
+  findstr "Hybrid ON" mt5_broker.py
+  (Hybrid should find NOTHING)
 
-findstr /C:"class MT5Broker" mt5_broker.py
-# (should find the class)
+.env (normal, no hybrid):
+  MT5_BACKEND=ea_bridge
+  EA_BRIDGE_DIR=
 
-.env:
-MT5_BACKEND=ea_bridge
-EA_BRIDGE_DIR=
-
-Restart bot. Orders go through EA_Bridge.mq5 as before.
+Restart bot.
