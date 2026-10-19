@@ -47,8 +47,18 @@ else:
 brain.on_trade_closed(r_multiple=r, won=won, setup=setup_tag, regime=regime, agents=[...])
 ```
 
-## Optional Telegram (read-only)
+## Telegram Controls & On/Off Toggle
 
-- `/brain` — show what it learned (does not control learning)
+While learning runs automatically, you can control signal vetoing anytime:
 
-Learning itself is **automatic**.
+- `/learner on` or `/veto on` — Activate learned signal filtering & vetoing
+- `/learner off` or `/veto off` — Pause signal filtering (all trades execute unblocked)
+- `/learner unban <hour>` — Unban a specific UTC hour (e.g. `/learner unban 14`)
+- `/learner clearhours` — Unban all hours
+- `/learner clearbans` — Clear all hour, weekday, and setup bans
+- `/learner rules` — View active thresholds, bans, and agent weights
+- `/learner flaws` — View detected statistical flaws & sanctions
+- `/autotrade veto on|off` — Toggle veto filtering directly via Autotrade
+- `/brain [status|on|off|unban|rules|relearn|reset]` — Complete brain console
+
+Interactive buttons (`[🔴 Turn Veto OFF]`, `[🔓 Unban Hour XX]`) are also attached directly to trade block notifications and the watchlist dashboard.

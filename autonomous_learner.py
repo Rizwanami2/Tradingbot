@@ -677,6 +677,98 @@ class AutonomousLearner:
         self._save()
         return self.knowledge.enabled
 
+    def enable(self) -> bool:
+        """Enable autonomous learned signal filtering."""
+        return self.set_enabled(True)
+
+    def disable(self) -> bool:
+        """Pause autonomous learned signal filtering."""
+        return self.set_enabled(False)
+
+    def is_enabled(self) -> bool:
+        """Check if autonomous learned signal filtering is enabled."""
+        return bool(getattr(self.knowledge, "enabled", True))
+
+    def unban_hour(self, hour: int) -> bool:
+        """Unban a specific UTC hour."""
+        try:
+            h = int(hour) % 24
+            if h in self.knowledge.banned_hours:
+                self.knowledge.banned_hours = [x for x in self.knowledge.banned_hours if x != h]
+                self._log_improve(f"Unbanned UTC hour {h:02d}:00")
+                self._save()
+                return True
+        except Exception as e:
+            logger.warning("unban_hour failed: %s", e)
+        return False
+
+    def clear_banned_hours(self) -> int:
+        """Clear all banned UTC hours."""
+        count = len(self.knowledge.banned_hours)
+        self.knowledge.banned_hours = []
+        if count:
+            self._log_improve(f"Cleared all {count} banned UTC hours")
+            self._save()
+        return count
+
+    def unban_weekday(self, weekday: int) -> bool:
+        """Unban a specific weekday (0=Mon)."""
+        try:
+            w = int(weekday) % 7
+            if w in self.knowledge.banned_weekdays:
+                self.knowledge.banned_weekdays = [x for x in self.knowledge.banned_weekdays if x != w]
+                self._log_improve(f"Unbanned weekday {w}")
+                self._save()
+                return True
+        except Exception as e:
+            logger.warning("unban_weekday failed: %s", e)
+        return False
+
+    def clear_banned_weekdays(self) -> int:
+        """Clear all banned weekdays."""
+        count = len(self.knowledge.banned_weekdays)
+        self.knowledge.banned_weekdays = []
+        if count:
+            self._log_improve(f"Cleared all {count} banned weekdays")
+            self._save()
+        return count
+
+    def unban_setup(self, setup_pattern: str) -> List[str]:
+        """Unban setups matching pattern."""
+        pat = str(setup_pattern).lower().strip()
+        removed = []
+        for k in list(self.knowledge.banned_setups.keys()):
+            if pat in k.lower():
+                del self.knowledge.banned_setups[k]
+                removed.append(k)
+        if removed:
+            self._log_improve(f"Unbanned setups: {', '.join(removed)}")
+            self._save()
+        return removed
+
+    def clear_banned_setups(self) -> int:
+        """Clear all banned setups."""
+        count = len(self.knowledge.banned_setups)
+        self.knowledge.banned_setups = {}
+        if count:
+            self._log_improve(f"Cleared all {count} banned setups")
+            self._save()
+        return count
+
+    def clear_bans(self) -> Dict[str, int]:
+        """Clear all learned bans (hours, weekdays, setups)."""
+        res = {
+            "hours": len(self.knowledge.banned_hours),
+            "weekdays": len(self.knowledge.banned_weekdays),
+            "setups": len(self.knowledge.banned_setups),
+        }
+        self.knowledge.banned_hours = []
+        self.knowledge.banned_weekdays = []
+        self.knowledge.banned_setups = {}
+        self._log_improve("Cleared all learned bans (hours, weekdays, setups)")
+        self._save()
+        return res
+
     def reset_memory(self) -> Dict[str, Any]:
         """Reset learned memory, filters, and bans back to clean default baseline."""
         self.knowledge = Knowledge(

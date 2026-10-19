@@ -426,6 +426,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/tiers` — Risk tier allocations\n"
             "• `/digest` — Daily market performance digest\n"
             "• `/brain` — Autonomous learner knowledge & win rates\n"
+            "• `/learner [on|off|unban|rules]` — Toggle learner veto filter & unban hours\n"
+            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
             "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
             "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
             "• `/reset` — Clear conversation context\n"
@@ -493,6 +495,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/tiers` — Risk tier allocations\n"
             "• `/digest` — Daily market performance digest\n"
             "• `/brain` — Autonomous learner knowledge & win rates\n"
+            "• `/learner [on|off]` — Autonomous learner veto toggle & unban\n"
+            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
             "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
             "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
             "• `/reset` — Clear conversation context\n"
@@ -586,10 +590,17 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if sig and autotrade_active:
             ok, note = try_paper_execute(engine, sig, candle_price=res.get("price") or sig.get("entry"))
             tag = "✅" if ok else "⚠️"
+            block_kb = None
+            if not ok and "Autonomous Learner" in str(note):
+                try:
+                    from telegram_brain import build_learner_block_keyboard
+                    block_kb = build_learner_block_keyboard(note)
+                except Exception:
+                    block_kb = None
             try:
-                await update.message.reply_text(f"{tag} Autotrade: {note}", parse_mode="Markdown")
+                await update.message.reply_text(f"{tag} Autotrade: {note}", parse_mode="Markdown", reply_markup=block_kb)
             except Exception:
-                await update.message.reply_text(f"{tag} Autotrade: {note}")
+                await update.message.reply_text(f"{tag} Autotrade: {note}", reply_markup=block_kb)
     except Exception as e:
         logger.exception("signal_command failed")
         await update.message.reply_text(f"Signal error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
@@ -1553,12 +1564,28 @@ def build_watchlist_dashboard() -> tuple:
         f"• **Active Selection:** `{sel_label}`\n"
         f"• **Execution Mode:** `{broker_mode}` | **Profile:** `{profile}`\n"
         f"• **Lot Sizing:** `{'AUTO (Dynamic)' if getattr(risk_mgr.config, 'lot_mode', 'auto') == 'auto' else f'MANUAL ({risk_mgr.get_manual_lot():.2f} lots)'}`\n"
-        f"• **Slots:** `{open_count}/{max_trades}` active (`{slots}` free)\n\n"
-        f"💡 **Switch Selection:**\n"
+        f"• **Slots:** `{open_count}/{max_trades}` active (`{slots}` free)\n"
+    )
+
+    learner_active = True
+    try:
+        from autonomous_learner import get_brain
+        _b = get_brain(auto_bootstrap=False)
+        learner_active = getattr(_b.knowledge, "enabled", True)
+        l_icon = "🟢 ACTIVE" if learner_active else "🔴 PAUSED (/learner on)"
+        b_cnt = len(_b.knowledge.banned_hours)
+        b_info = f" ({b_cnt} banned hours)" if b_cnt and learner_active else ""
+        text += f"• **Learner Veto:** {l_icon}{b_info}\n"
+    except Exception:
+        pass
+
+    text += (
+        f"\n💡 **Switch Selection:**\n"
         f"• `/watchlist btc` — Trade BTC only\n"
         f"• `/watchlist gold` — Trade Gold only\n"
         f"• `/watchlist both` — Trade both BTC + Gold\n"
         f"• `/autotrade on [btc|gold|both]`\n"
+        f"• `/learner on|off` — Toggle Autonomous Learner veto\n"
     )
 
     markup = InlineKeyboardMarkup([
@@ -1576,6 +1603,11 @@ def build_watchlist_dashboard() -> tuple:
             InlineKeyboardButton("🔄 Refresh Watchlist", callback_data="wl:refresh"),
             InlineKeyboardButton("📊 Positions", callback_data="wl:positions"),
             InlineKeyboardButton("📦 Lot Size", callback_data="lot:info"),
+        ],
+        [
+            InlineKeyboardButton("🔴 Pause Veto" if learner_active else "🟢 Enable Veto", callback_data="learner:toggle"),
+            InlineKeyboardButton("📜 Rules", callback_data="learner:rules"),
+            InlineKeyboardButton("🔓 Clear Bans", callback_data="learner:clearhours"),
         ],
     ])
     return text, markup
@@ -1634,6 +1666,61 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global autotrade_active
     args = [a.lower() for a in (ctx.args or [])]
     arg = args[0] if args else ""
+
+    if args and args[0] in ("learner", "veto", "brain", "autobrain"):
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        sub = args[1].lower() if len(args) > 1 else "toggle"
+        if sub in ("on", "1", "true", "enable", "start"):
+            brain.set_enabled(True)
+            await update.message.reply_text(
+                "🟢 **Autotrade: Autonomous Learner Veto ACTIVATED**\n"
+                "• Live signals are checked against learned rules and flaw bans.\n"
+                "• Use `/learner off` or `/veto off` to pause vetoing.",
+                parse_mode="Markdown",
+            )
+            return
+        elif sub in ("off", "0", "false", "disable", "pause", "stop"):
+            brain.set_enabled(False)
+            await update.message.reply_text(
+                "🔴 **Autotrade: Autonomous Learner Veto PAUSED**\n"
+                "• All autotrade signals will execute unblocked by learner bans.\n"
+                "• Use `/learner on` or `/veto on` to re-enable vetoing.",
+                parse_mode="Markdown",
+            )
+            return
+        elif sub in ("unban", "allow"):
+            target = args[2] if len(args) > 2 else ""
+            if target.isdigit():
+                h = int(target) % 24
+                brain.unban_hour(h)
+                await update.message.reply_text(f"🔓 **Unbanned UTC hour {h:02d}:00** from Autonomous Learner.", parse_mode="Markdown")
+            else:
+                c = brain.clear_banned_hours()
+                await update.message.reply_text(f"🔓 **Cleared all {c} banned hours** from Autonomous Learner.", parse_mode="Markdown")
+            return
+        elif sub in ("rules", "filters"):
+            await update.message.reply_text(brain.format_rules(), parse_mode="Markdown")
+            return
+        else:
+            new_st = not getattr(brain.knowledge, "enabled", True)
+            brain.set_enabled(new_st)
+            st_text = "🟢 **ACTIVATED**" if new_st else "🔴 **PAUSED**"
+            await update.message.reply_text(f"🧠 **Autotrade Learner Veto:** {st_text}", parse_mode="Markdown")
+            return
+    elif args and args[0] in ("unban", "unbanhour"):
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        target = args[1] if len(args) > 1 else ""
+        if target.isdigit():
+            h = int(target) % 24
+            brain.unban_hour(h)
+            await update.message.reply_text(f"🔓 **Unbanned UTC hour {h:02d}:00** from Autonomous Learner.", parse_mode="Markdown")
+        else:
+            c = brain.clear_banned_hours()
+            await update.message.reply_text(f"🔓 **Cleared all {c} banned hours** from Autonomous Learner.", parse_mode="Markdown")
+        return
+
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
     max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
 
@@ -1741,6 +1828,15 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
     except Exception:
         pass
     data = str(query.data or "")
+
+    if data.startswith("learner:") or data.startswith("brain:"):
+        try:
+            from telegram_brain import handle_learner_callback
+            handled = await handle_learner_callback(data, update, ctx)
+            if handled:
+                return
+        except Exception as _cb_err:
+            logger.warning("learner callback error: %s", _cb_err)
 
     if data in ("auto:on", "auto:scalp"):
         broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
@@ -4869,7 +4965,7 @@ def run_cli_interactive():
                     print(h.status())
             except Exception as e:
                 print(f"Heal error: {e}")
-        elif name == "brain":
+        elif name in ("brain", "learner", "veto"):
             try:
                 from autonomous_learner import get_brain
                 brain = get_brain(auto_bootstrap=False)
@@ -4889,6 +4985,26 @@ def run_cli_interactive():
                 elif sub in ("off", "disable", "pause", "stop", "0", "false"):
                     brain.set_enabled(False)
                     print("Autonomous Learner signal filtering: PAUSED")
+                elif sub in ("unban", "allow"):
+                    target = parts[2].lower() if len(parts) > 2 else ""
+                    if target.isdigit():
+                        h = int(target) % 24
+                        ok = brain.unban_hour(h)
+                        print(f"Unbanned UTC hour {h:02d}:00" if ok else f"Hour {h:02d}:00 was not banned.")
+                    elif target in ("all", "hours"):
+                        cnt = brain.clear_banned_hours()
+                        print(f"Cleared all {cnt} banned UTC hours.")
+                    elif target:
+                        rem = brain.unban_setup(target)
+                        print(f"Unbanned setups: {rem}" if rem else f"No setups matching {target}")
+                    else:
+                        print("Usage: learner unban <hour|hours|setup_name>")
+                elif sub in ("clearhours", "clearhour"):
+                    cnt = brain.clear_banned_hours()
+                    print(f"Cleared all {cnt} banned UTC hours.")
+                elif sub in ("clearbans", "clearallbans"):
+                    res = brain.clear_bans()
+                    print(f"Cleared all learned bans: {res}")
                 elif sub in ("relearn", "train"):
                     sym = parts[2].upper() if len(parts) > 2 else "XAUUSD"
                     years = float(parts[3]) if len(parts) > 3 and parts[3].replace('.', '', 1).isdigit() else 5.0
@@ -4896,11 +5012,11 @@ def run_cli_interactive():
                     summary = brain.bootstrap(symbol=sym, years=years)
                     print(f"Bootstrap complete: {summary}")
                 elif sub in ("help", "commands"):
-                    print("brain [status|rules|flaws|relearn [SYM] [YEARS]|reset|on|off]")
+                    print("learner/brain [status|rules|flaws|unban <hour>|clearhours|relearn [SYM] [YEARS]|reset|on|off]")
                 else:
                     print(brain.summary())
             except Exception as e:
-                print(f"Brain error: {e}")
+                print(f"Learner/Brain error: {e}")
         elif name == "train":
             try:
                 sub = parts[1].lower() if len(parts) > 1 else "heavy"
@@ -5129,6 +5245,8 @@ def main():
                 BotCommand("abooks", "A/B paper books comparison"),
                 BotCommand("heal", "System health counter reset & self-healing"),
                 BotCommand("brain", "Autonomous learner intelligence & state"),
+                BotCommand("learner", "Autonomous learner veto toggle (on/off/unban)"),
+                BotCommand("veto", "Quick toggle for trade veto filtering (on/off)"),
                 BotCommand("train", "Deep heavy multi-asset AI & autonomous training"),
                 BotCommand("relearn", "Retrain autonomous learner on 5Y data"),
                 BotCommand("ask", "AI trading assistant with live MT5 market context"),
@@ -5252,10 +5370,12 @@ def main():
     except Exception:
         pass
     try:
-        from telegram_brain import brain_command, relearn_command, train_command
+        from telegram_brain import brain_command, relearn_command, train_command, learner_command, veto_command
         app.add_handler(CommandHandler("brain", brain_command))
         app.add_handler(CommandHandler("relearn", relearn_command))
         app.add_handler(CommandHandler("train", train_command))
+        app.add_handler(CommandHandler(["learner", "autonomous"], learner_command))
+        app.add_handler(CommandHandler(["veto", "learnerveto"], veto_command))
     except Exception:
         pass
 
