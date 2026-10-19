@@ -1,0 +1,4 @@
+cd C:\Tradingbot
+git pull origin main
+python scripts/restore_mt5_hybrid.py
+# Then restart bot. Log should show: Hybrid ON: native quotes/candles + EA Bridge orders
