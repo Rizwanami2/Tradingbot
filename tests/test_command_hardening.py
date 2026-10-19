@@ -270,6 +270,7 @@ class TestCommandHardening(unittest.TestCase):
             relearn_command,
             train_command,
         )
+        from telegram_ai import ai_command
 
         all_handlers = [
             ("start", start_command, []),
@@ -335,6 +336,10 @@ class TestCommandHardening(unittest.TestCase):
             ("relearn", relearn_command, ["XAUUSD", "0.01"]),
             ("ask", ask_command, ["trend?"]),
             ("reset", reset_command, []),
+            ("ai", ai_command, []),
+            ("ai_manual", ai_command, ["manual"]),
+            ("ai_reset", ai_command, ["reset"]),
+            ("ai_help", ai_command, ["help"]),
             ("unknown", unknown_command, []),
         ]
 
@@ -419,6 +424,11 @@ class TestCommandHardening(unittest.TestCase):
             "relearn XAUUSD 0.01",
             "ask market status?",
             "reset",
+            "ai status",
+            "ai manual",
+            "ai auto",
+            "ai override",
+            "ai reset",
             "unknown_command_fallback_test",
             "exit",
         ]
