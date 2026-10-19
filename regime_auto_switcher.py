@@ -131,10 +131,10 @@ class RegimeAutoSwitcher:
 
         # Determine target profile based on asset & volatility dynamics
         if "XAU" in sym or "GOLD" in sym:
-            if current_prof == "scalp" and adx < 32:
+            if current_prof == "scalp":
                 target_profile = "scalp"
                 regime = "SCALP_CONCESSION"
-                reason = "Scalp profile active with concession (ADX < 32) -> Micro-scalp mode preserved"
+                reason = "Scalp profile active with concessions -> Micro-scalp mode preserved"
             elif adx < 22:
                 target_profile = "scalp"
                 regime = "CONSOLIDATION_CHOP"
@@ -144,7 +144,11 @@ class RegimeAutoSwitcher:
                 regime = "EXPANSION_TREND"
                 reason = "Gold in active trend expansion -> Gold Optimized Profile"
         elif any(c in sym for c in ("BTC", "ETH", "CRYPTO")):
-            if adx < 20:
+            if current_prof == "scalp":
+                target_profile = "scalp"
+                regime = "SCALP_CONCESSION"
+                reason = "Scalp profile active -> Micro-scalp mode preserved"
+            elif adx < 20:
                 target_profile = "scalp"
                 regime = "LOW_VOLATILITY_RANGE"
                 reason = "Crypto range-bound -> Rapid micro-scalp mode"
@@ -165,6 +169,13 @@ class RegimeAutoSwitcher:
                 target_profile = "balanced"
                 regime = "BALANCED"
                 reason = "Moderate conditions -> Balanced Profile"
+
+        # Multi-asset protection: do not switch to single-asset profiles if both Gold and BTC are active
+        active_symbols = getattr(config, "get_autotrade_symbols", lambda: getattr(config, "AUTOTRADE_SYMBOLS", []))()
+        has_multi_assets = len(active_symbols) > 1 and any("BTC" in s for s in active_symbols) and any(any(g in s for g in ("XAU", "GOLD", "PAXG")) for s in active_symbols)
+        if has_multi_assets and target_profile in ("gold_only", "crypto"):
+            target_profile = "scalp" if current_prof == "scalp" else "balanced"
+            reason = f"Multi-asset autotrade active ({', '.join(active_symbols)}) -> unified {target_profile} profile"
 
         now = time.time()
         # Cooldown prevents rapid thrashing
@@ -195,7 +206,7 @@ class RegimeAutoSwitcher:
             switched=False,
             previous_profile=current_prof,
             current_profile=current_prof,
-            reason="Holding current profile (within bounds or in cooldown)",
+            reason=f"Holding current profile '{current_prof}' ({reason})" if reason else "Holding current profile (within bounds or in cooldown)",
             regime_detected=regime,
             metrics=metrics,
         )

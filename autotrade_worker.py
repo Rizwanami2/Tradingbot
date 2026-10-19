@@ -165,6 +165,19 @@ async def live_monitoring_worker(
             arbiter.MIN_AGREEMENT = _active_prof.min_agreement
             arbiter.min_rr = getattr(_active_prof, "min_rr", 1.9)
             arbiter.strict_htf = getattr(_active_prof, "strict_htf", False)
+            arbiter.allow_asian = getattr(_active_prof, "allow_asian", True)
+            arbiter.require_killzone = getattr(_active_prof, "require_killzone", False)
+            arbiter.is_scalp = getattr(_active_prof, "is_scalp", False)
+            arbiter.fast_market_fill = getattr(_active_prof, "fast_market_fill", False)
+            arbiter.scalp_sl_pct = getattr(_active_prof, "scalp_sl_pct", 0.12)
+            arbiter.scalp_tp_pct = getattr(_active_prof, "scalp_tp_pct", 0.10)
+            arbiter.scalp_tp_usd = getattr(_active_prof, "scalp_tp_usd", 2.50)
+            arbiter.scalp_sl_usd = getattr(_active_prof, "scalp_sl_usd", 3.00)
+            arbiter.min_effective_rr = 0.85 if getattr(_active_prof, "is_scalp", False) else 1.4
+            if hasattr(engine, "scalp_mode"):
+                engine.scalp_mode = getattr(_active_prof, "is_scalp", False)
+            if hasattr(engine, "fast_market_fill"):
+                engine.fast_market_fill = getattr(_active_prof, "fast_market_fill", False)
         except Exception:
             pass
 
@@ -254,16 +267,21 @@ async def live_monitoring_worker(
                         engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
                     try:
-                        from regime_auto_switcher import RegimeAutoSwitcher
-                        if not hasattr(arbiter, "_regime_switcher") or arbiter._regime_switcher is None:
-                            arbiter._regime_switcher = RegimeAutoSwitcher(cooldown_seconds=300.0)
-                        switch_res = arbiter._regime_switcher.evaluate_and_switch(
-                            df1, symbol=symbol, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config
+                        profile_locked = bool(
+                            getattr(config, "PROFILE_LOCKED", False)
+                            or getattr(arbiter, "profile_locked", False)
                         )
-                        if switch_res.switched:
-                            await _send_alert(
-                                f"REGIME AUTO-SWITCH: {symbol} {switch_res.previous_profile} -> {switch_res.current_profile} ({switch_res.reason})"
+                        if not profile_locked and len(watchlist) == 1:
+                            from regime_auto_switcher import RegimeAutoSwitcher
+                            if not hasattr(arbiter, "_regime_switcher") or arbiter._regime_switcher is None:
+                                arbiter._regime_switcher = RegimeAutoSwitcher(cooldown_seconds=300.0)
+                            switch_res = arbiter._regime_switcher.evaluate_and_switch(
+                                df1, symbol=symbol, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config
                             )
+                            if switch_res.switched:
+                                await _send_alert(
+                                    f"REGIME AUTO-SWITCH: {symbol} {switch_res.previous_profile} -> {switch_res.current_profile} ({switch_res.reason})"
+                                )
                     except Exception:
                         pass
 
@@ -308,7 +326,9 @@ async def live_monitoring_worker(
                         )
                         if not sig:
                             logger.info("Autotrade %s: no setup — %s", symbol, why)
+                            monitoring_health[f"{symbol}_eval"] = f"Waiting: {why}"
                         else:
+                            monitoring_health[f"{symbol}_eval"] = f"Setup: {getattr(sig.get('direction'), 'name', str(sig.get('direction')))}"
                             dname = ""
                             agree = 0
                             conv_val = 0.6

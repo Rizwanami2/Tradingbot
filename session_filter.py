@@ -50,7 +50,7 @@ def _in_window(t: time, window: Tuple[time, time]) -> bool:
 
 def get_session_info(
     ts: Optional[datetime] = None,
-    allow_asian: bool = False,
+    allow_asian: bool = True,
     symbol: Optional[str] = None,
 ) -> SessionInfo:
     if ts is None:
@@ -81,13 +81,15 @@ def get_session_info(
         return SessionInfo("ASIAN", False, False, "Asian range – low liquidity (blocked)")
     if is_crypto_symbol(symbol):
         return SessionInfo("CRYPTO_24_7", False, True, "Crypto 24/7 session active")
+    if allow_asian and weekday < 5:
+        return SessionInfo("SYDNEY_ASIA", False, True, "Sydney / Asian transition session (allowed)")
     return SessionInfo("OFF_HOURS", False, False, "Outside major sessions")
 
 
 def is_tradeable_session(
     ts: Optional[datetime] = None,
     require_killzone: bool = False,
-    allow_asian: bool = False,
+    allow_asian: bool = True,
     symbol: Optional[str] = None,
 ) -> Tuple[bool, str]:
     info = get_session_info(ts, allow_asian=allow_asian, symbol=symbol)

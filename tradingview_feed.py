@@ -187,11 +187,14 @@ def fetch_tradingview_quote(symbol: str = "XAUUSD") -> Dict:
     }
 
 
-def _fetch_real_ohlcv(symbol: str, limit: int = 600) -> Optional[pd.DataFrame]:
+def _fetch_real_ohlcv(symbol: str, timeframe: str = "1m", limit: int = 600) -> Optional[pd.DataFrame]:
     """
     Fetches real live market OHLCV bars from public exchange REST endpoints
     (Binance public API / CCXT) without requiring API keys.
     """
+    if isinstance(timeframe, int):
+        limit = timeframe
+        timeframe = "1m"
     sym = symbol.upper().replace("/", "").replace(":", "")
     binance_sym = None
     if sym in ("BTCUSD", "BTCUSDT", "BTC"):
@@ -203,10 +206,14 @@ def _fetch_real_ohlcv(symbol: str, limit: int = 600) -> Optional[pd.DataFrame]:
     elif sym.endswith("USD"):
         binance_sym = sym.replace("USD", "USDT")
 
+    tf_clean = str(timeframe or "1m").lower().replace("min", "m").replace("hour", "h").replace("day", "d")
+    tf_map = {"1": "1m", "1m": "1m", "5": "5m", "5m": "5m", "15": "15m", "15m": "15m", "60": "1h", "1h": "1h", "1d": "1d", "d": "1d"}
+    binance_interval = tf_map.get(tf_clean, "1m")
+
     if binance_sym:
         try:
             url = "https://api.binance.com/api/v3/klines"
-            params = {"symbol": binance_sym, "interval": "1m", "limit": min(limit, 1000)}
+            params = {"symbol": binance_sym, "interval": binance_interval, "limit": min(limit, 1000)}
             r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
             if r.status_code == 200:
                 raw = r.json()
@@ -232,7 +239,7 @@ def _fetch_real_ohlcv(symbol: str, limit: int = 600) -> Optional[pd.DataFrame]:
         import ccxt
         ex = ccxt.binance({"enableRateLimit": True, "timeout": 6000})
         ccxt_sym = f"{sym[:-4]}/{sym[-4:]}" if "/" not in sym and sym.endswith("USDT") else f"{sym}/USDT"
-        raw_bars = ex.fetch_ohlcv(ccxt_sym, timeframe="1m", limit=min(limit, 1000))
+        raw_bars = ex.fetch_ohlcv(ccxt_sym, timeframe=binance_interval, limit=min(limit, 1000))
         if raw_bars and len(raw_bars) > 0:
             df = pd.DataFrame(raw_bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
@@ -246,16 +253,22 @@ def _fetch_real_ohlcv(symbol: str, limit: int = 600) -> Optional[pd.DataFrame]:
     return None
 
 
-def fetch_tradingview_bars(symbol: str = "XAUUSD", limit: int = 600) -> pd.DataFrame:
+def fetch_tradingview_bars(symbol: str = "XAUUSD", timeframe: str = "1m", limit: int = 600, *args, **kwargs) -> pd.DataFrame:
     """
     Fetches real live multi-timeframe candles when available, anchored to
     the live ticker quote. Falls back to realistic anchored generator if offline.
     """
+    if isinstance(timeframe, int):
+        limit = timeframe
+        timeframe = "1m"
+    if args and len(args) > 0 and isinstance(args[0], int):
+        limit = args[0]
+
     quote = fetch_tradingview_quote(symbol)
     base_price = float(quote.get("mark", 2650.0))
 
     # 1. Try real live market candles from public exchange
-    real_df = _fetch_real_ohlcv(symbol, limit=limit)
+    real_df = _fetch_real_ohlcv(symbol, timeframe=timeframe, limit=limit)
     if real_df is not None and len(real_df) >= 10:
         # Align most recent candle close to live mark if quote is verified
         if quote.get("ok"):

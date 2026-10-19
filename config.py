@@ -399,6 +399,8 @@ SCALP_STOP_LOSS_USD = _safe_float(os.getenv("BOT_SCALP_SL_USD"), 3.0)
 SCALP_STOP_LOSS_PCT = _safe_float(os.getenv("BOT_SCALP_SL_PCT"), 0.12)
 SCALP_ENABLED = os.getenv("BOT_SCALP", "true").lower() in ("true", "1", "yes", "on")
 CURRENT_PROFILE = os.getenv("BOT_PROFILE", "scalp").lower()
+PROFILE_LOCKED = os.getenv("BOT_PROFILE_LOCKED", "true" if os.getenv("BOT_PROFILE", "scalp").lower() == "scalp" else "false").lower() in ("true", "1", "yes", "on")
+REGIME_AUTO_UNLOCKED = os.getenv("BOT_REGIME_AUTO_UNLOCKED", "false").lower() in ("true", "1", "yes", "on")
 
 # Scalp Trailing Stop Loss Configuration
 SCALP_TRAIL_ENABLED = os.getenv("BOT_SCALP_TRAIL_ENABLED", "true").lower() in ("true", "1", "yes", "on")

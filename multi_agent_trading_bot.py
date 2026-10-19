@@ -200,7 +200,9 @@ class MarketDataFeed:
             return self._demo(limit)
         try:
             from tradingview_feed import fetch_tradingview_bars
-            raw = fetch_tradingview_bars(self.symbol, timeframe or "1", limit)
+            raw = fetch_tradingview_bars(self.symbol, timeframe or "1m", limit)
+            if isinstance(raw, pd.DataFrame) and not raw.empty:
+                return raw
             if raw:
                 df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)

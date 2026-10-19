@@ -121,7 +121,7 @@ def _safe_f(x: Any, default: float = 0.0) -> float:
 def resolve_mt5_symbol(symbol: str, available_symbols: Optional[List[str]] = None) -> str:
     """
     Resolve unified symbol to broker-specific MT5 symbol.
-    Handles broker suffixes (.m, .raw, _i) and aliases (GOLD -> XAUUSD).
+    Handles broker suffixes (.m, .raw, _i) and aliases (GOLD -> XAUUSD and reverse).
     """
     s = str(symbol or "").strip().upper().replace("/", "").replace("-", "")
     aliases = {
@@ -143,11 +143,24 @@ def resolve_mt5_symbol(symbol: str, available_symbols: Optional[List[str]] = Non
             return avail_upper[normalized]
         if s in avail_upper:
             return avail_upper[s]
+        # Match reverse aliases
+        if normalized == "XAUUSD":
+            for gold_alias in ("GOLD", "XAUUSD", "XAU"):
+                if gold_alias in avail_upper:
+                    return avail_upper[gold_alias]
+        elif normalized in ("BTCUSD", "BTCUSDT"):
+            for btc_alias in ("BTCUSD", "BTCUSDT", "BITCOIN", "BTC"):
+                if btc_alias in avail_upper:
+                    return avail_upper[btc_alias]
         # Match with common broker suffixes
-        for suffix in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn"):
+        for suffix in (".m", "m", ".raw", "_i", ".pro", ".c", ".ecn", "_sb"):
             cand = f"{normalized}{suffix.upper()}"
             if cand in avail_upper:
                 return avail_upper[cand]
+            if normalized == "XAUUSD":
+                gold_cand = f"GOLD{suffix.upper()}"
+                if gold_cand in avail_upper:
+                    return avail_upper[gold_cand]
 
     return normalized
 

@@ -101,24 +101,59 @@ async def profile_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def scalp_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Direct shortcut to activate and pin the Scalp profile with concessions."""
+    """Direct shortcut to activate autotrade and pin the Scalp profile with concessions."""
     try:
+        args = [str(a).lower().strip() for a in (ctx.args or [])]
+        if any(a in ("off", "stop", "disable", "pause") for a in args):
+            try:
+                import main
+                main.autotrade_active = False
+            except Exception:
+                pass
+            await safe_reply(update, "⚪ **Scalp autotrade stopped.** (Profile remains configured as Scalp)", parse_mode="Markdown")
+            return
+
+        import config
         from strategy_profiles import apply_profile
+
+        for a in args:
+            if a in ("gold", "xau", "xauusd", "xaut", "paxg"):
+                config.set_autotrade_symbols(["XAUUSD"])
+                break
+            elif a in ("btc", "bitcoin", "btcusdt", "btcusd", "xbt"):
+                config.set_autotrade_symbols(["BTCUSDT"])
+                break
+            elif a in ("both", "all", "btc,gold", "gold,btc", "btcusdt,xauusd"):
+                config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"])
+                break
+
         try:
             from main import arbiter, risk_mgr, engine
-            import config
+            import main
+            main.autotrade_active = True
+            if engine is not None and hasattr(engine, "reset_halt"):
+                engine.reset_halt()
             config.PROFILE_LOCKED = True
             if arbiter is not None:
                 arbiter.profile_locked = True
             p, summary = apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
         except Exception:
             p, summary = apply_profile("scalp", lock=True)
+            try:
+                import main
+                main.autotrade_active = True
+            except Exception:
+                pass
+
+        active_syms = ", ".join(getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)())
         concession_note = (
-            "\n\n🎯 **Scalp Profile Concessions Active:**\n"
-            "• **R:R Gate Concession:** Expected R:R threshold relaxed to `1.0:1` (micro-scalp)\n"
-            "• **Spread / Slippage Concession:** Veto tolerance widened to `0.85` effective R:R\n"
-            "• **Candle / Volume Concession:** Adaptive 1M bar filters for high-frequency setups\n"
-            "• **Profile Pinned:** Regime auto-switcher locked to Scalp (run `/regime auto` to unlock)"
+            f"\n\n🟢 **Autotrade Status: ACTIVE**\n"
+            f"• **Active Watchlist:** `{active_syms}`\n"
+            f"• **Asian Session:** `Allowed` (Gold 24/5 + BTC 24/7)\n"
+            f"• **R:R Gate Concession:** Expected R:R threshold relaxed to `1.0:1` (micro-scalp)\n"
+            f"• **Spread / Slippage Concession:** Veto tolerance widened to `0.85` effective R:R\n"
+            f"• **Candle / Volume Concession:** Adaptive 1M bar filters for high-frequency setups\n"
+            f"• **Profile Pinned:** Regime auto-switcher locked to Scalp (run `/regime auto` to unlock)"
         )
         await safe_reply(update, summary + concession_note, parse_mode="Markdown")
     except Exception as e:

@@ -4152,12 +4152,31 @@ def run_cli_interactive():
         elif name in ("scalp", "microscalp"):
             try:
                 from strategy_profiles import apply_profile
-                config.PROFILE_LOCKED = True
-                if arbiter is not None:
-                    arbiter.profile_locked = True
-                p, summary = apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
-                clean_summary = summary.replace("**", "").replace("*", "").replace("`", "").replace("_", "")
-                print(f"⚡ SCALP PROFILE ACTIVATED WITH CONCESSIONS (PINNED):\n{clean_summary}\n• Min R:R relaxed to 1.0:1 | Slippage veto relaxed to 0.85 effective R:R")
+                args_sub = [p.lower() for p in parts[1:]]
+                if any(a in ("off", "stop", "disable", "pause") for a in args_sub):
+                    autotrade_active = False
+                    print("⚪ Scalp autotrade stopped.")
+                else:
+                    for a in args_sub:
+                        if a in ("gold", "xau", "xauusd", "xaut", "paxg"):
+                            config.set_autotrade_symbols(["XAUUSD"])
+                            break
+                        elif a in ("btc", "bitcoin", "btcusdt", "btcusd", "xbt"):
+                            config.set_autotrade_symbols(["BTCUSDT"])
+                            break
+                        elif a in ("both", "all", "btc,gold", "gold,btc", "btcusdt,xauusd"):
+                            config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"])
+                            break
+                    autotrade_active = True
+                    if engine is not None and hasattr(engine, "reset_halt"):
+                        engine.reset_halt()
+                    config.PROFILE_LOCKED = True
+                    if arbiter is not None:
+                        arbiter.profile_locked = True
+                    p, summary = apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
+                    clean_summary = summary.replace("**", "").replace("*", "").replace("`", "").replace("_", "")
+                    active_syms = ", ".join(config.get_autotrade_symbols())
+                    print(f"⚡ SCALP PROFILE & AUTOTRADE ACTIVATED (PINNED):\nWatchlist: {active_syms} | Status: 🟢 ACTIVE\n{clean_summary}\n• Min R:R relaxed to 1.0:1 | Asian Session: Allowed | Slippage veto relaxed to 0.85 effective R:R")
             except Exception as e:
                 print(f"Scalp activation error: {e}")
         elif name in ("ask", "chat"):
