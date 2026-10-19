@@ -33,6 +33,9 @@ from main import (
     set_paper_wallet_balance,
     bridge_command,
     mt5_command,
+    settings_command,
+    handle_command_menu_callback,
+    build_settings_dashboard,
 )
 from execution_engine import TradeOrder, OrderStatus
 
@@ -610,6 +613,46 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
             self.assertIn("ea_bridge", msg)
             self.assertEqual(config.MT5_BACKEND, "ea_bridge")
 
+    async def test_settings_command(self):
+        await settings_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        msg = self.message.reply_text.call_args[0][0]
+        markup = self.message.reply_text.call_args[1].get("reply_markup")
+        self.assertIn("TradingBot System Configuration & Settings", msg)
+        self.assertIn("Execution Broker", msg)
+        self.assertIn("Strategy Profile", msg)
+        self.assertIsNotNone(markup)
+
+    async def test_command_menu_callbacks(self):
+        query_mock = MagicMock()
+        query_mock.answer = AsyncMock()
+        query_mock.edit_message_text = AsyncMock()
+        update_mock = MagicMock(spec=Update)
+        update_mock.callback_query = query_mock
+
+        # Test category navigation
+        query_mock.data = "cmd:cat:signals"
+        handled = await handle_command_menu_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+        query_mock.edit_message_text.assert_called()
+        self.assertIn("Signals & Strategy Confluence", query_mock.edit_message_text.call_args[0][0])
+
+        # Test settings refresh callback
+        query_mock.data = "settings:refresh"
+        handled = await handle_command_menu_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+        self.assertIn("TradingBot System Configuration & Settings", query_mock.edit_message_text.call_args[0][0])
+
+    async def test_unknown_command_with_smart_suggestions(self):
+        self.message.text = "/signals"
+        await unknown_command(self.update, self.ctx)
+        msg = self.message.reply_text.call_args[0][0]
+        markup = self.message.reply_text.call_args[1].get("reply_markup")
+        self.assertIn("Did you mean", msg)
+        self.assertIn("/signal", msg)
+        self.assertIsNotNone(markup)
+
 
 if __name__ == "__main__":
     unittest.main()
+

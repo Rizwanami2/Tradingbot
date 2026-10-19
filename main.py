@@ -326,26 +326,207 @@ def format_price_string(info: Dict) -> str:
     )
 
 
-async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    welcome = (
-        "🤖 **TradingBot — Multi-Agent Paper & MT5 Assistant**\n\n"
-        "Welcome! Institutional crypto & gold algorithmic trading assistant powered by 7 autonomous strategy agents, dynamic entry planning, and safe paper/MT5 execution.\n\n"
-        "⚡ **Quick Start:**\n"
-        "• `/signal btc` — Multi-agent consensus & best entry zone\n"
-        "• `/autotrade on` — Automated trading (up to 6 active trades)\n"
-        "• `/positions` — Monitor open trades, PnL & dynamic trailing stops\n"
-        "• `/status` — Portfolio equity & system health\n"
-        "• `/commands` or `/help` — Full categorized command catalog\n\n"
-        "🛡️ _Default paper equity: $1,000 | Max concurrent active trades: 6_"
-    )
+def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
+    """Build modern interactive category navigation keyboard for commands."""
+    cat = (active_cat or "main").lower().strip()
+    if cat in ("main", "all", "menu", ""):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📊 Market Data", callback_data="cmd:cat:market"),
+                InlineKeyboardButton("🎯 Signals", callback_data="cmd:cat:signals"),
+            ],
+            [
+                InlineKeyboardButton("⚡ Execution", callback_data="cmd:cat:execution"),
+                InlineKeyboardButton("🏦 MT5 & Brokers", callback_data="cmd:cat:mt5"),
+            ],
+            [
+                InlineKeyboardButton("🛡️ Risk & Safety", callback_data="cmd:cat:risk"),
+                InlineKeyboardButton("🧠 Autonomous AI", callback_data="cmd:cat:ai"),
+            ],
+            [
+                InlineKeyboardButton("📈 Backtest & Research", callback_data="cmd:cat:research"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
+            ],
+            [
+                InlineKeyboardButton("⚡ Quick Start", callback_data="cmd:cat:quick"),
+                InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+            ],
+        ])
+    elif cat in ("market", "quotes"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🪙 BTC Live Price", callback_data="cmd:run:price_btc"),
+                InlineKeyboardButton("🟡 Gold Live Price", callback_data="cmd:run:price_gold"),
+            ],
+            [
+                InlineKeyboardButton("📈 BTC Chart", callback_data="chart:btc"),
+                InlineKeyboardButton("📈 Gold Chart", callback_data="chart:gold"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+            ],
+        ])
+    elif cat in ("signals", "signal"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ Signal BTC", callback_data="cmd:run:signal_btc"),
+                InlineKeyboardButton("🟡 Signal Gold", callback_data="cmd:run:signal_gold"),
+            ],
+            [
+                InlineKeyboardButton("🔥 Multi-TF Matrix", callback_data="cmd:run:matrix"),
+                InlineKeyboardButton("🔍 Quality Score", callback_data="cmd:run:quality"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("⚡ Execution Menu", callback_data="cmd:cat:execution"),
+            ],
+        ])
+    elif cat in ("execution", "orders", "trades"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🟢 Start Autotrade", callback_data="auto:on"),
+                InlineKeyboardButton("⚪ Pause Autotrade", callback_data="auto:off"),
+            ],
+            [
+                InlineKeyboardButton("📊 Positions", callback_data="wl:positions"),
+                InlineKeyboardButton("📜 Closed History", callback_data="cmd:run:closed"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("🛡️ Risk Menu", callback_data="cmd:cat:risk"),
+            ],
+        ])
+    elif cat in ("mt5", "broker", "delta"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🏦 MT5 Dashboard", callback_data="mt5:refresh"),
+                InlineKeyboardButton("⚡ Delta India", callback_data="cmd:run:delta"),
+            ],
+            [
+                InlineKeyboardButton("💰 Balance", callback_data="cmd:run:balance"),
+                InlineKeyboardButton("🔌 EA Bridge Test", callback_data="cmd:run:bridge"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
+            ],
+        ])
+    elif cat in ("risk", "safety"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🛡️ Portfolio Status", callback_data="cmd:run:status"),
+                InlineKeyboardButton("❤️ Health Telemetry", callback_data="cmd:run:health"),
+            ],
+            [
+                InlineKeyboardButton("🔴 Pause Veto", callback_data="learner:off"),
+                InlineKeyboardButton("🟢 Activate Veto", callback_data="learner:on"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("⚡ Anti-Spam", callback_data="cmd:run:cooldown"),
+            ],
+        ])
+    elif cat in ("ai", "brain", "learner"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🧠 Brain Status", callback_data="learner:status"),
+                InlineKeyboardButton("📜 Learned Rules", callback_data="learner:rules"),
+            ],
+            [
+                InlineKeyboardButton("🔍 Mined Flaws", callback_data="learner:flaws"),
+                InlineKeyboardButton("🔓 Clear Hour Bans", callback_data="learner:clearhours"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("🧹 Reset Baseline", callback_data="learner:reset"),
+            ],
+        ])
+    elif cat in ("research", "backtest"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📈 Performance", callback_data="cmd:run:performance"),
+                InlineKeyboardButton("⚡ Scalp Profile", callback_data="auto:scalp"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+            ],
+        ])
+    else:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
+            ],
+        ])
+
+
+def build_settings_dashboard() -> Tuple[str, InlineKeyboardMarkup]:
+    """Build interactive modern system settings and configuration dashboard."""
+    broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
+    prof_name = getattr(config, "CURRENT_PROFILE", "scalp").upper()
+    lot_mode = getattr(risk_mgr.config, "lot_mode", "auto").upper()
+    lot_val = f"{risk_mgr.get_manual_lot():.4f} lots" if lot_mode == "MANUAL" else "Dynamic"
+    lev = risk_mgr.get_leverage()
+    max_slots = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
+    symbols = ", ".join(getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)())
+
+    learner_st = "🟢 Active"
     try:
-        await update.message.reply_text(welcome, parse_mode="Markdown")
+        from autonomous_learner import get_brain
+        b = get_brain(auto_bootstrap=False)
+        learner_st = "🟢 Active" if getattr(b.knowledge, "enabled", True) else "🔴 Paused"
     except Exception:
-        await update.message.reply_text(welcome.replace("*", "").replace("_", "").replace("`", ""))
+        pass
+
+    text = (
+        "⚙️ **TradingBot System Configuration & Settings**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"• **Execution Broker:** `{broker_mode}`\n"
+        f"• **Strategy Profile:** `{prof_name}`\n"
+        f"• **Autotrade State:** `{'🟢 ACTIVE' if autotrade_active else '⚪ STOPPED'}`\n"
+        f"• **Active Watchlist:** `{symbols}`\n"
+        f"• **Lot Sizing:** `{lot_mode} ({lot_val})`\n"
+        f"• **Account Leverage:** `{lev:.0f}x`\n"
+        f"• **Active Slot Limit:** `{max_slots} trades max`\n"
+        f"• **Learner Veto:** `{learner_st}`\n"
+        f"• **Virtual Stops:** `{'🟢 Active' if getattr(engine, 'virtual_stops_enabled', True) else '⚪ Off'}`\n\n"
+        "💡 _Tap buttons below for instant configuration:_"
+    )
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ Autotrade ON/OFF", callback_data="auto:on" if not autotrade_active else "auto:off"),
+            InlineKeyboardButton("🎯 Switch Profile", callback_data="cmd:cat:research"),
+        ],
+        [
+            InlineKeyboardButton("📦 Lot Size Mode", callback_data="lot:info"),
+            InlineKeyboardButton("🏦 Switch Broker", callback_data="mt5:refresh"),
+        ],
+        [
+            InlineKeyboardButton("🧠 Learner Veto Toggle", callback_data="learner:toggle"),
+            InlineKeyboardButton("🔄 Refresh Settings", callback_data="settings:refresh"),
+        ],
+        [
+            InlineKeyboardButton("📖 Main Menu", callback_data="cmd:cat:main"),
+        ],
+    ])
+    return text, markup
 
 
-async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    cat = (ctx.args[0].lower() if ctx.args else "").strip()
+async def settings_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View and configure bot runtime settings: /settings or /config"""
+    text, markup = build_settings_dashboard()
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+    except Exception:
+        await update.message.reply_text(text.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
+
+
+def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
+    """Generate categorized command catalog text with interactive inline keyboard."""
+    cat = (cat or "main").lower().strip()
+
     if cat in ("market", "price", "quotes", "levels", "chart", "charts", "matrix", "heatmap"):
         text = (
             "📊 **Market Data & Live Quotes:**\n"
@@ -355,6 +536,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
             "• `/news [SYM]` — Macro calendar & economic sentiment"
         )
+        return text, build_help_keyboard("market")
+
     elif cat in ("signal", "signals", "setup", "confluence"):
         text = (
             "🎯 **Signals & Strategy Confluence:**\n"
@@ -363,6 +546,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n"
             "• `/matrix [SYM]` — Multi-Timeframe Trend & Volatility Confluence Matrix"
         )
+        return text, build_help_keyboard("signals")
+
     elif cat in ("execution", "orders", "trades", "pos", "positions", "slots", "slot", "dashboard", "dash", "web"):
         text = (
             "⚡ **Execution & Positions (Active Limit: Max 6):**\n"
@@ -376,6 +561,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/vstops [clear]` — Client-side anti-stop-hunt virtual hidden stops\n"
             "• `/slippage` — Broker execution latency, slippage USD & grade (A+ to F)"
         )
+        return text, build_help_keyboard("execution")
+
     elif cat in ("mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca", "switch", "live", "delta", "bridge"):
         text = (
             "🏦 **MetaTrader 5 & Broker Accounts:**\n"
@@ -392,6 +579,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/broker` — View active broker environment & telemetry\n"
             "• `/broker [mt5|delta]` — Switch active execution broker engine"
         )
+        return text, build_help_keyboard("mt5")
+
     elif cat in ("risk", "safety", "limits"):
         text = (
             "🛡️ **Risk & Safety Management:**\n"
@@ -408,6 +597,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/session [asian|london|ny]` — End-of-session performance report & killzones\n"
             "• `/kill [on|off]` — Emergency execution stop circuit breaker"
         )
+        return text, build_help_keyboard("risk")
+
     elif cat in ("backtest", "research", "abacktest", "regime"):
         text = (
             "📈 **Backtesting & Research:**\n"
@@ -417,6 +608,8 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
             "• `/regime [auto|calibrate|switch]` — Real-time regime detector & Sharpe calibrator"
         )
+        return text, build_help_keyboard("research")
+
     elif cat in ("ai", "brain", "learner", "agent", "agents"):
         text = (
             "🧠 **Autonomous AI & Standings:**\n"
@@ -433,6 +626,21 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/reset` — Clear conversation context\n"
             "• `/ask [question]` — Conversational assistant with Gemini AI"
         )
+        return text, build_help_keyboard("ai")
+
+    elif cat in ("quick", "start"):
+        text = (
+            "⚡ **TradingBot Quick Start Guide**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "1️⃣ **Analyze Setups:** Run `/signal btc` or `/signal gold` for multi-agent confluence\n"
+            "2️⃣ **Automate Trading:** Run `/autotrade on` (trades BTC & Gold automatically)\n"
+            "3️⃣ **Monitor PnL:** Check `/positions` for live profit and dynamic trailing stops\n"
+            "4️⃣ **Control Veto:** Use `/learner on|off` or `/veto on|off` to toggle AI vetoing\n"
+            "5️⃣ **Connect Broker:** Use `/mt5` for MT5 Live or `/delta` for Delta India\n\n"
+            "💡 _Tap any button below to jump straight in:_"
+        )
+        return text, build_help_keyboard("quick")
+
     else:
         text = (
             "📖 **TradingBot Command Center**\n"
@@ -503,10 +711,48 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• `/ask [question]` — Conversational assistant with Gemini AI\n\n"
             "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`, `/commands ai`_"
         )
+        return text, build_help_keyboard("main")
+
+
+async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    welcome = (
+        "🤖 **TradingBot — Multi-Agent Paper & MT5 Assistant**\n\n"
+        "Welcome! Institutional crypto & gold algorithmic trading assistant powered by 7 autonomous strategy agents, dynamic entry planning, and safe paper/MT5 execution.\n\n"
+        "⚡ **Quick Start:**\n"
+        "• `/signal btc` — Multi-agent consensus & best entry zone\n"
+        "• `/autotrade on` — Automated trading (up to 6 active trades)\n"
+        "• `/positions` — Monitor open trades, PnL & dynamic trailing stops\n"
+        "• `/status` — Portfolio equity & system health\n"
+        "• `/commands` or `/help` — Full categorized command catalog\n\n"
+        "🛡️ _Default paper equity: $1,000 | Max concurrent active trades: 6_"
+    )
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ Signal BTC", callback_data="cmd:run:signal_btc"),
+            InlineKeyboardButton("🟡 Signal Gold", callback_data="cmd:run:signal_gold"),
+        ],
+        [
+            InlineKeyboardButton("🟢 Start Autotrade", callback_data="auto:on"),
+            InlineKeyboardButton("📊 Positions", callback_data="wl:positions"),
+        ],
+        [
+            InlineKeyboardButton("🛡️ System Status", callback_data="cmd:run:status"),
+            InlineKeyboardButton("📖 Command Center", callback_data="cmd:cat:main"),
+        ],
+    ])
     try:
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await update.message.reply_text(welcome, parse_mode="Markdown", reply_markup=markup)
     except Exception:
-        await update.message.reply_text(text.replace("*", "").replace("_", "").replace("`", ""))
+        await update.message.reply_text(welcome.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
+
+
+async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    cat = (ctx.args[0].lower() if ctx.args else "").strip()
+    text, markup = format_command_menu(cat)
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+    except Exception:
+        await update.message.reply_text(text.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
 
 
 async def levels_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1463,13 +1709,66 @@ async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Friendly fallback when an unrecognized command is typed."""
     text = getattr(update.message, "text", "") if (getattr(update, "message", None) and update.message.text) else "/command"
-    cmd = text.split()[0] if text else "/command"
-    await safe_reply(
-        update,
-        f"❓ Unknown command: `{cmd}`\n\n"
-        "Use `/commands` or `/help` to view all available commands.",
-        parse_mode="Markdown",
+    cmd_raw = text.split()[0] if text else "/command"
+    cmd_clean = cmd_raw.lower().lstrip("/")
+
+    suggestions = {
+        "signals": "/signal",
+        "trade": "/positions",
+        "trades": "/positions",
+        "pos": "/positions",
+        "orders": "/positions",
+        "order": "/positions",
+        "pnl": "/positions",
+        "profit": "/closed",
+        "profits": "/closed",
+        "history": "/closed",
+        "stop": "/kill on or /autotrade off",
+        "pause": "/autotrade off",
+        "starttrade": "/autotrade on",
+        "buy": "/signal",
+        "sell": "/signal",
+        "btc": "/signal btc",
+        "gold": "/signal gold",
+        "xau": "/signal gold",
+        "chartbtc": "/chart btc",
+        "chartgold": "/chart gold",
+        "setting": "/settings",
+        "config": "/settings",
+        "conf": "/settings",
+        "setup": "/settings",
+        "helpme": "/help",
+        "commandslist": "/commands",
+        "bot": "/status",
+    }
+
+    suggested = suggestions.get(cmd_clean)
+    if not suggested:
+        for k, v in suggestions.items():
+            if cmd_clean.startswith(k) or k.startswith(cmd_clean):
+                suggested = v
+                break
+
+    hint_line = f"💡 *Did you mean:* `{suggested}`?\n\n" if suggested else ""
+    msg = (
+        f"❓ Unknown command: `{cmd_raw}`\n\n"
+        f"{hint_line}"
+        "Use `/commands` or `/help` to view all available commands, or tap a category below:"
     )
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 Market Data", callback_data="cmd:cat:market"),
+            InlineKeyboardButton("🎯 Signals", callback_data="cmd:cat:signals"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Execution", callback_data="cmd:cat:execution"),
+            InlineKeyboardButton("🛡️ Risk & Safety", callback_data="cmd:cat:risk"),
+        ],
+        [
+            InlineKeyboardButton("📖 Full Command Menu", callback_data="cmd:cat:main"),
+        ],
+    ])
+    await safe_reply(update, msg, parse_mode="Markdown", reply_markup=markup)
 
 
 async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1817,6 +2116,108 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text.replace("*", "").replace("`", ""), reply_markup=markup)
 
 
+async def handle_command_menu_callback(data: Any, update: Optional[Update] = None, ctx: Optional[ContextTypes.DEFAULT_TYPE] = None) -> bool:
+    """Handle interactive inline buttons for command catalog, quick run, and settings."""
+    if isinstance(data, Update):
+        if update is not None and not isinstance(update, Update):
+            ctx = update
+        update = data
+        data = str(getattr(getattr(update, "callback_query", None), "data", "") or "")
+    else:
+        data = str(data or "")
+
+    query = getattr(update, "callback_query", None)
+    if not query:
+        return False
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    # Ensure update.message is available for handlers that reference it
+    if not getattr(update, "message", None) and getattr(query, "message", None):
+        update.message = query.message
+
+    if data.startswith("cmd:cat:"):
+        cat = data.split(":", 2)[2]
+        text, markup = format_command_menu(cat)
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            try:
+                await query.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+            except Exception:
+                await query.message.reply_text(text.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
+        return True
+
+    elif data in ("settings:refresh", "settings:view"):
+        text, markup = build_settings_dashboard()
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            try:
+                await query.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+            except Exception:
+                await query.message.reply_text(text.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
+        return True
+
+    elif data.startswith("cmd:run:"):
+        action = data.split(":", 2)[2]
+        if action == "signal_btc":
+            ctx.args = ["BTCUSDT"]
+            await signal_command(update, ctx)
+        elif action == "signal_gold":
+            ctx.args = ["XAUUSD"]
+            await signal_command(update, ctx)
+        elif action == "price_btc":
+            ctx.args = ["BTCUSDT"]
+            await price_command(update, ctx)
+        elif action == "price_gold":
+            ctx.args = ["XAUUSD"]
+            await price_command(update, ctx)
+        elif action == "matrix":
+            ctx.args = []
+            await matrix_command(update, ctx)
+        elif action == "quality":
+            ctx.args = []
+            try:
+                from telegram_feature_pack_v4 import quality_command
+                await quality_command(update, ctx)
+            except Exception as e:
+                await query.message.reply_text(f"Quality error: {e}")
+        elif action == "status":
+            ctx.args = []
+            await status_command(update, ctx)
+        elif action == "health":
+            ctx.args = []
+            await health_command(update, ctx)
+        elif action == "closed":
+            ctx.args = []
+            await closed_command(update, ctx)
+        elif action == "balance":
+            ctx.args = []
+            await balance_command(update, ctx)
+        elif action == "delta":
+            ctx.args = []
+            await delta_command(update, ctx)
+        elif action == "bridge":
+            ctx.args = []
+            await bridge_command(update, ctx)
+        elif action == "cooldown":
+            ctx.args = []
+            await cooldown_command(update, ctx)
+        elif action == "performance":
+            ctx.args = []
+            try:
+                from telegram_advanced import performance_command
+                await performance_command(update, ctx)
+            except Exception as e:
+                await query.message.reply_text(f"Performance error: {e}")
+        return True
+
+    return False
+
+
 async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Handle interactive inline buttons for Watchlist & Autotrade."""
     global autotrade_active
@@ -1828,6 +2229,14 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
     except Exception:
         pass
     data = str(query.data or "")
+
+    if data.startswith("cmd:") or data.startswith("settings:"):
+        try:
+            handled = await handle_command_menu_callback(data, update, ctx)
+            if handled:
+                return
+        except Exception as _cb_err:
+            logger.warning("cmd callback error: %s", _cb_err)
 
     if data.startswith("learner:") or data.startswith("brain:"):
         try:
@@ -4857,9 +5266,15 @@ def run_cli_interactive():
                 print(f"Active broker: {bname} ({getattr(config, 'BROKER_MODE', 'mt5_live')})")
         elif name in ("oanda", "alpaca", "ccxt"):
             print(f"⚠️ Native live broker '{name.upper()}' has been removed. MetaTrader 5 Live is the sole exclusive broker.")
+        elif name in ("settings", "config", "setup"):
+            try:
+                txt, _ = build_settings_dashboard()
+                print(txt.replace("**", "").replace("*", "").replace("`", "").replace("━━━━━━━━━━━━━━━━━━━━", "--------------------"))
+            except Exception as e:
+                print(f"Settings error: {e}")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, train [heavy|quick], relearn [SYM], ask [TEXT], reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, train [heavy|quick], relearn [SYM], ask [TEXT], settings, reset, exit\n\n"
                 "Commands by category:\n"
                 "📊 Market: price [SYM], chart [SYM], levels [SYM], news [SYM]\n"
                 "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
@@ -4867,6 +5282,7 @@ def run_cli_interactive():
                 "🛡️ Risk: status, health, cooldown [CMD], spam [on|off], risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], replay [ID], export, setups, abooks, heal\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, train [heavy|quick], relearn [SYM|ALL]\n"
+                "⚙️ Settings: settings, config (view & configure active system settings)\n"
                 "💬 Assistant: ask [TEXT], reset, exit"
             )
         elif name == "asignal":
@@ -5185,6 +5601,8 @@ def main():
                 BotCommand("start", "Start bot & interactive overview"),
                 BotCommand("help", "Full command center & user guide"),
                 BotCommand("commands", "Interactive catalog of all bot commands"),
+                BotCommand("menu", "Interactive command hub & category navigator"),
+                BotCommand("settings", "System configuration, profile & risk dashboard"),
                 # Market Data & Charts
                 BotCommand("chart", "Institutional MT5 Live Candlestick Chart (BTC & Gold)"),
                 BotCommand("price", "Live mark price & 24h market stats"),
@@ -5270,6 +5688,7 @@ def main():
     # Core Navigation & Help
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler(["help", "commands", "cmd", "menu", "list", "all", "command"], help_command))
+    app.add_handler(CommandHandler(["settings", "config", "setup", "preferences"], settings_command))
 
     # Market Data
     app.add_handler(CommandHandler("levels", levels_command))
@@ -5278,7 +5697,7 @@ def main():
     app.add_handler(CommandHandler("news", news_command))
 
     # Signals & Confluence
-    app.add_handler(CommandHandler(["signal", "single"], signal_command))
+    app.add_handler(CommandHandler(["signal", "single", "signals"], signal_command))
     try:
         from telegram_advanced import asignal_command
         app.add_handler(CommandHandler("asignal", asignal_command))
@@ -5291,14 +5710,14 @@ def main():
         pass
 
     # Execution & Trades
-    app.add_handler(CommandHandler("positions", positions_command))
+    app.add_handler(CommandHandler(["positions", "pos", "trades", "pnl", "orders"], positions_command))
     app.add_handler(CommandHandler(["slots", "maxpositions", "slot"], slots_command))
     app.add_handler(CommandHandler(["matrix", "heatmap", "mtf"], matrix_command))
     app.add_handler(CommandHandler(["dashboard", "web", "dash"], dashboard_command))
     app.add_handler(CommandHandler("autotrade", autotrade_command))
     app.add_handler(CommandHandler(["watchlist", "wl", "symbols", "assets"], watchlist_command))
     app.add_handler(CommandHandler(["close", "closeall"], close_command))
-    app.add_handler(CommandHandler("closed", closed_command))
+    app.add_handler(CommandHandler(["closed", "history", "profit", "profits"], closed_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CallbackQueryHandler(autotrade_callback_handler))
 
