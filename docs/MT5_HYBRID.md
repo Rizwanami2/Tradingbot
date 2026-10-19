@@ -1,36 +1,17 @@
-# MT5 Hybrid Mode
+# MT5 Hybrid Mode — CANCELLED
 
-When `MT5_BACKEND=ea_bridge`:
+Hybrid mode (native quotes + EA orders) was requested and then **removed**.
 
-| Function | Channel |
-|----------|---------|
-| Buy / Sell / Close / Modify | **EA Bridge** (`EA_Bridge.mq5`) |
-| Candles / ticks / marks | **Native** `MetaTrader5` Python package (when available) |
-| Fallback data | EA rates/ticks, then last mark |
-
-## Setup
+Use normal mode:
 
 ```env
 MT5_BACKEND=ea_bridge
-MT5_LOGIN=...
-MT5_PASSWORD=...
-MT5_SERVER=...
-MT5_PATH=C:\\Program Files\\MetaTrader 5\\terminal64.exe
-EA_BRIDGE_DIR=
 ```
 
-1. `pip install MetaTrader5`
-2. MT5 terminal open and logged in
-3. EA_Bridge on chart, AutoTrading green
-4. Restart bot — look for: `Hybrid ON: native quotes/candles + EA Bridge orders`
+All execution via EA Bridge. For quotes, the bot may still use whatever data source is configured (EA ticks, feeds, etc.).
 
-If native init fails, **orders still work via EA**; quotes fall back to EA files.
-
-## Apply on existing clone
+To restore the broker module if it is a stub:
 
 ```powershell
-cd C:\Tradingbot
-git pull origin main
-python scripts/apply_mt5_hybrid.py
-# or pull if mt5_broker.py already includes Hybrid ON
+git show 575aba1aa62a9e9ae6b48d212438a956b8ae6e62:mt5_broker.py > mt5_broker.py
 ```
