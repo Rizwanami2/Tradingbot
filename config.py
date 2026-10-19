@@ -409,6 +409,9 @@ SCALP_TRAIL_DISTANCE_USD = _safe_float(os.getenv("BOT_SCALP_TRAIL_DISTANCE_USD")
 SCALP_TRAIL_ACTIVATION_PCT = _safe_float(os.getenv("BOT_SCALP_TRAIL_ACTIVATION_PCT"), 0.04)
 SCALP_TRAIL_DISTANCE_PCT = _safe_float(os.getenv("BOT_SCALP_TRAIL_DISTANCE_PCT"), 0.03)
 SCALP_BE_LOCK_USD = _safe_float(os.getenv("BOT_SCALP_BE_LOCK_USD"), 0.50)
+SCALP_MIN_TRAIL_PROFIT_USD = _safe_float(os.getenv("BOT_SCALP_MIN_TRAIL_PROFIT_USD"), 1.50)
+SCALP_PROFIT_RETENTION_PCT = _safe_float(os.getenv("BOT_SCALP_PROFIT_RETENTION_PCT"), 0.50)
+SCALP_LET_PROFIT_RUN = os.getenv("BOT_SCALP_LET_PROFIT_RUN", "true").lower() in ("true", "1", "yes", "on")
 
 # Scalp Anti-Spam & Rate-Limiting Cooldown Controls
 SCALP_ENTRY_COOLDOWN_SEC = _safe_float(os.getenv("BOT_SCALP_ENTRY_COOLDOWN_SEC"), 45.0)

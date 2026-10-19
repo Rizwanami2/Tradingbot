@@ -353,6 +353,9 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Leverage set to `15x`", text2)
 
     async def test_close_command(self):
+        engine.active_positions.clear()
+        if hasattr(engine.broker, "positions"):
+            engine.broker.positions.clear()
         self.ctx.args = ["all"]
         await close_command(self.update, self.ctx)
         self.message.reply_text.assert_called()

@@ -48,6 +48,9 @@ class StrategyProfile:
     scalp_trail_activation_pct: float = 0.04
     scalp_trail_distance_pct: float = 0.03
     scalp_be_lock_usd: float = 0.50
+    scalp_min_trail_profit_usd: float = 1.50
+    scalp_profit_retention_pct: float = 0.50
+    scalp_let_profit_run: bool = True
     scalp_entry_cooldown_sec: float = 45.0
     scalp_loss_cooldown_sec: float = 90.0
     scalp_global_cooldown_sec: float = 10.0
@@ -106,6 +109,9 @@ DEFAULT_PROFILES = {
         scalp_trail_activation_pct=0.04,
         scalp_trail_distance_pct=0.03,
         scalp_be_lock_usd=0.50,
+        scalp_min_trail_profit_usd=1.50,
+        scalp_profit_retention_pct=0.50,
+        scalp_let_profit_run=True,
         scalp_entry_cooldown_sec=45.0,
         scalp_loss_cooldown_sec=90.0,
         scalp_global_cooldown_sec=10.0,
@@ -260,6 +266,9 @@ def apply_profile(
             engine.scalp_trail_activation_pct = getattr(p, "scalp_trail_activation_pct", 0.04)
             engine.scalp_trail_distance_pct = getattr(p, "scalp_trail_distance_pct", 0.03)
             engine.scalp_be_lock_usd = getattr(p, "scalp_be_lock_usd", 0.50)
+            engine.scalp_min_trail_profit_usd = getattr(p, "scalp_min_trail_profit_usd", 1.50)
+            engine.scalp_profit_retention_pct = getattr(p, "scalp_profit_retention_pct", 0.50)
+            engine.scalp_let_profit_run = getattr(p, "scalp_let_profit_run", True)
 
     if config is not None:
         config.CURRENT_PROFILE = p.name
@@ -277,6 +286,9 @@ def apply_profile(
             config.SCALP_TRAIL_ACTIVATION_PCT = getattr(p, "scalp_trail_activation_pct", 0.04)
             config.SCALP_TRAIL_DISTANCE_PCT = getattr(p, "scalp_trail_distance_pct", 0.03)
             config.SCALP_BE_LOCK_USD = getattr(p, "scalp_be_lock_usd", 0.50)
+            config.SCALP_MIN_TRAIL_PROFIT_USD = getattr(p, "scalp_min_trail_profit_usd", 1.50)
+            config.SCALP_PROFIT_RETENTION_PCT = getattr(p, "scalp_profit_retention_pct", 0.50)
+            config.SCALP_LET_PROFIT_RUN = getattr(p, "scalp_let_profit_run", True)
             config.SCALP_ENTRY_COOLDOWN_SEC = getattr(p, "scalp_entry_cooldown_sec", 45.0)
             config.SCALP_LOSS_COOLDOWN_SEC = getattr(p, "scalp_loss_cooldown_sec", 90.0)
             config.SCALP_GLOBAL_COOLDOWN_SEC = getattr(p, "scalp_global_cooldown_sec", 10.0)
@@ -306,7 +318,8 @@ def apply_profile(
             f"• ⚡ **Rapid Micro-Scalping Mode**: ACTIVE\n"
             f"  - Micro TP: `{p.scalp_tp_pct:.2f}%` move or `${p.scalp_tp_usd:.2f}` USD profit\n"
             f"  - Micro SL: `{p.scalp_sl_pct:.2f}%` move or `${p.scalp_sl_usd:.2f}` USD loss\n"
-            f"  - 🛡️ Dynamic Trailing SL: ACTIVE (Trigger `${getattr(p, 'scalp_trail_activation_usd', 1.0):.2f}` / Trail `${getattr(p, 'scalp_trail_distance_usd', 0.8):.2f}`)\n"
+            f"  - 🛡️ Dynamic Trailing SL: ACTIVE (Trigger `${getattr(p, 'scalp_trail_activation_usd', 1.0):.2f}` / Trail `${getattr(p, 'scalp_trail_distance_usd', 0.8):.2f}` | Min Floor `+${getattr(p, 'scalp_min_trail_profit_usd', 1.5):.2f}`)\n"
+            f"  - 🚀 Run-to-TP Expansion: `{'ACTIVE (holds on strong momentum)' if getattr(p, 'scalp_let_profit_run', True) else 'DISABLED'}`\n"
             f"  - ⏳ Anti-Spam Cooldown: `{getattr(p, 'scalp_entry_cooldown_sec', 45.0):.0f}s` entry | `{getattr(p, 'scalp_loss_cooldown_sec', 90.0):.0f}s` loss cooldown\n"
             f"  - Polling: `{p.poll_interval}s` fast frequency | Market Fills: `Instant`\n"
             f"  - Max Open Slots: `{p.max_open_trades}` concurrent trades (Multi-position Gold & BTC)"

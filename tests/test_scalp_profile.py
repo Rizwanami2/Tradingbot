@@ -894,6 +894,191 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertIn("Daily Range (PDH / PDL)", card)
         self.assertIn("Central Pivot (P)", card)
 
+    def test_scalp_trailing_sl_guaranteed_profit_floor(self):
+        """Verify dynamic trailing stop secures tiered minimum profit floor (50%-70% of peak profit)."""
+        self.engine.scalp_mode = True
+        self.engine.scalp_trail_enabled = True
+        self.engine.scalp_trail_activation_usd = 1.00
+        self.engine.scalp_min_trail_profit_usd = 1.50
+        self.engine.scalp_profit_retention_pct = 0.50
+
+        # Create active scalp position on XAUUSD
+        # 1 lot: size = 1.0. Entry = 2650.0.
+        order = TradeOrder(
+            id="order-profit-floor",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2645.0,
+            tp1=2670.0,
+            tp2=2680.0,
+            tp3=None,
+            lots=0.01,
+            size=1.0,
+            leverage=20.0,
+            margin_required=25.0,
+            liquidation_price=2600.0,
+            risk_amount=5.0,
+            rr_ratio=1.0,
+            setup_reason="Scalp Profit Floor Test",
+            status=OrderStatus.OPEN,
+            executed_price=2650.0,
+            remaining_size=1.0,
+            is_scalp=True,
+        )
+        self.engine.active_positions[order.id] = order
+
+        # Price advances +$6.00 to 2656.0 (peak profit = $6.00)
+        # Tier: peak_usd >= 5.0 -> locks 60% of peak = 6.00 * 0.60 = $3.60.
+        # SL floor = 2650.0 + 3.60 = 2653.60.
+        candle1 = {"open": 2650.0, "high": 2656.0, "low": 2650.0, "close": 2655.8}
+        self.engine.update_market_candle("XAUUSD", candle1)
+        self.assertTrue(order.trailing_sl_active)
+        self.assertGreaterEqual(order.stop_loss, 2653.60)
+
+        # Pullback triggers trailing stop hit
+        candle2 = {"open": 2654.0, "high": 2654.0, "low": 2653.0, "close": 2653.2}
+        events = self.engine.update_market_candle("XAUUSD", candle2)
+        trail_hits = [e for e in events if e["event"] == "SCALP_TRAIL_HIT"]
+        self.assertEqual(len(trail_hits), 1)
+        self.assertEqual(order.status, OrderStatus.CLOSED)
+        # Position closed with substantial profit guaranteed (> $3.50)!
+        self.assertGreaterEqual(order.realized_pnl, 3.50)
+
+    def test_scalp_let_profit_run_on_strong_expanding_momentum(self):
+        """Verify engine waits for TP and holds expanding candles instead of prematurely dumping position."""
+        self.engine.scalp_mode = True
+        self.engine.scalp_tp_usd = 2.50
+        self.engine.scalp_let_profit_run = True
+
+        order = TradeOrder(
+            id="order-run-to-tp",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2645.0,
+            tp1=2665.0,  # Higher target exists
+            tp2=2670.0,
+            tp3=None,
+            lots=0.02,
+            size=2.0,
+            leverage=20.0,
+            margin_required=50.0,
+            liquidation_price=2600.0,
+            risk_amount=10.0,
+            rr_ratio=1.0,
+            setup_reason="Scalp Run to TP Test",
+            status=OrderStatus.OPEN,
+            executed_price=2650.0,
+            remaining_size=2.0,
+            is_scalp=True,
+        )
+        self.engine.active_positions[order.id] = order
+
+        # Price reaches $2.60 profit (2651.30 * 2.0 = +$2.60 >= $2.50)
+        # Candle is strongly expanding at the highs: open 2650.5, high 2651.30, close 2651.30
+        expanding_candle = {"open": 2650.5, "high": 2651.30, "low": 2650.5, "close": 2651.30}
+        events = self.engine.update_market_candle("XAUUSD", expanding_candle)
+
+        # Position should NOT be closed! It should hold and run towards TP1
+        self.assertIn("order-run-to-tp", self.engine.active_positions)
+        self.assertEqual(order.status, OrderStatus.OPEN)
+        run_events = [e for e in events if e["event"] == "SCALP_RUNNING_TO_TP"]
+        self.assertEqual(len(run_events), 1)
+        # Trailing stop was ratcheted to lock in guaranteed profit floor (at least 85% of $2.50 = $2.12 -> +$1.06 on price)
+        self.assertGreaterEqual(order.stop_loss, 2651.06)
+
+    def test_scalp_shakeout_protection_from_old_candle_low(self):
+        """Verify trade does not get stopped out by an old intra-candle low while price is trading high in profit."""
+        self.engine.scalp_mode = True
+        self.engine.scalp_trail_enabled = True
+        self.engine.scalp_trail_activation_usd = 1.00
+        self.engine.scalp_trail_distance_usd = 0.80
+
+        order = TradeOrder(
+            id="order-shakeout-protect",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2645.0,
+            tp1=2665.0,
+            tp2=2670.0,
+            tp3=None,
+            lots=0.01,
+            size=1.0,
+            leverage=20.0,
+            margin_required=25.0,
+            liquidation_price=2600.0,
+            risk_amount=5.0,
+            rr_ratio=1.0,
+            setup_reason="Scalp Shakeout Test",
+            status=OrderStatus.OPEN,
+            executed_price=2650.0,
+            remaining_size=1.0,
+            is_scalp=True,
+        )
+        self.engine.active_positions[order.id] = order
+
+        # Candle 1 establishes trailing stop at 2652.70
+        c1 = {"open": 2650.0, "high": 2653.5, "low": 2649.5, "close": 2653.5}
+        self.engine.update_market_candle("XAUUSD", c1)
+        self.assertAlmostEqual(order.stop_loss, 2652.70, delta=0.05)
+
+        # Candle 2 (still open): has an early wick to 2652.0, but current price rallied to 2654.0
+        # curr_price (2654.0) > stop_loss (2652.70), close (2654.0) > stop_loss (2652.70)
+        c2 = {"open": 2653.0, "high": 2654.0, "low": 2652.0, "close": 2654.0}
+        events2 = self.engine.update_market_candle("XAUUSD", c2)
+        trail_hits = [e for e in events2 if e["event"] == "SCALP_TRAIL_HIT"]
+        # Shakeout was prevented! Trade stayed alive!
+        self.assertEqual(len(trail_hits), 0)
+        self.assertIn("order-shakeout-protect", self.engine.active_positions)
+        self.assertEqual(order.status, OrderStatus.OPEN)
+
+    def test_trail_telegram_command_and_options(self):
+        """Verify /trail Telegram command displays status and responds to wide/tight/run/minprofit parameters."""
+        import asyncio
+        from telegram_advanced import trail_command, handle_trail_callback
+        import config
+
+        # Test command status display
+        update = MagicMock()
+        update.message = MagicMock()
+        update.effective_chat = MagicMock(id=12345)
+        ctx = MagicMock()
+        ctx.args = []
+
+        asyncio.run(trail_command(update, ctx))
+        update.message.reply_text.assert_called()
+        call_text = update.message.reply_text.call_args[0][0]
+        self.assertIn("DYNAMIC SCALP TRAILING SL", call_text)
+        self.assertIn("Breathing Trail Distance", call_text)
+        self.assertIn("Guaranteed Profit Floor", call_text)
+
+        # Test /trail wide
+        ctx.args = ["wide"]
+        asyncio.run(trail_command(update, ctx))
+        self.assertEqual(config.SCALP_TRAIL_DISTANCE_USD, 1.50)
+
+        # Test /trail tight
+        ctx.args = ["tight"]
+        asyncio.run(trail_command(update, ctx))
+        self.assertEqual(config.SCALP_TRAIL_DISTANCE_USD, 0.80)
+
+        # Test /trail minprofit 2.50
+        ctx.args = ["minprofit", "2.50"]
+        asyncio.run(trail_command(update, ctx))
+        self.assertEqual(config.SCALP_MIN_TRAIL_PROFIT_USD, 2.50)
+
+        # Test /trail run off
+        ctx.args = ["run", "off"]
+        asyncio.run(trail_command(update, ctx))
+        self.assertFalse(config.SCALP_LET_PROFIT_RUN)
+
+        # Test /trail run on
+        ctx.args = ["run", "on"]
+        asyncio.run(trail_command(update, ctx))
+        self.assertTrue(config.SCALP_LET_PROFIT_RUN)
+
 
 if __name__ == "__main__":
     unittest.main()

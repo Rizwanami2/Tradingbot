@@ -5890,12 +5890,15 @@ def main():
         logger.exception("Failed to register performance_command: %s", e)
 
     try:
-        from telegram_advanced import abacktest_command, profile_command, scalp_command
+        from telegram_advanced import abacktest_command, profile_command, scalp_command, trail_command, handle_trail_callback
+        from telegram.ext import CallbackQueryHandler
         app.add_handler(CommandHandler(["abacktest", "backtestall"], abacktest_command))
         app.add_handler(CommandHandler("profile", profile_command))
         app.add_handler(CommandHandler(["scalp", "microscalp"], scalp_command))
+        app.add_handler(CommandHandler(["trail", "trailing", "trailsl"], trail_command))
+        app.add_handler(CallbackQueryHandler(handle_trail_callback, pattern=r"^trail:"))
     except Exception as e:
-        logger.exception("Failed to register abacktest/profile/scalp handlers: %s", e)
+        logger.exception("Failed to register abacktest/profile/scalp/trail handlers: %s", e)
 
     # Autonomous AI & Feature Packs
     try:

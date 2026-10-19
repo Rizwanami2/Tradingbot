@@ -289,6 +289,9 @@ class ExecutionEngine:
         self.scalp_trail_activation_pct: float = 0.04
         self.scalp_trail_distance_pct: float = 0.03
         self.scalp_be_lock_usd: float = 0.50
+        self.scalp_min_trail_profit_usd: float = 1.50
+        self.scalp_profit_retention_pct: float = 0.50
+        self.scalp_let_profit_run: bool = True
         try:
             import config as _cfg_tr
             self.scalp_trail_enabled = bool(getattr(_cfg_tr, "SCALP_TRAIL_ENABLED", True))
@@ -297,6 +300,9 @@ class ExecutionEngine:
             self.scalp_trail_activation_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_PCT", 0.04))
             self.scalp_trail_distance_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_PCT", 0.03))
             self.scalp_be_lock_usd = float(getattr(_cfg_tr, "SCALP_BE_LOCK_USD", 0.50))
+            self.scalp_min_trail_profit_usd = float(getattr(_cfg_tr, "SCALP_MIN_TRAIL_PROFIT_USD", 1.50))
+            self.scalp_profit_retention_pct = float(getattr(_cfg_tr, "SCALP_PROFIT_RETENTION_PCT", 0.50))
+            self.scalp_let_profit_run = bool(getattr(_cfg_tr, "SCALP_LET_PROFIT_RUN", True))
         except Exception:
             pass
         if state_file:
@@ -910,6 +916,7 @@ class ExecutionEngine:
         """
         events = []
         sym = symbol.upper()
+        candle_open = float(candle.get("open", candle.get("close", 0.0)))
         high = float(candle["high"])
         low = float(candle["low"])
         close = float(candle["close"])
@@ -1218,16 +1225,32 @@ class ExecutionEngine:
                 trail_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.04))
                 trail_dist_pct = float(getattr(self, "scalp_trail_distance_pct", 0.03))
                 trail_dist_usd = float(getattr(self, "scalp_trail_distance_usd", 0.80))
+                min_trail_profit = float(getattr(self, "scalp_min_trail_profit_usd", 1.50))
+                retention_pct = float(getattr(self, "scalp_profit_retention_pct", 0.50))
 
                 trail_stop_before = pos.stop_loss
 
                 if trail_on and (pos.highest_profit_usd >= trail_act_usd or move_gain_pct >= trail_act_pct):
                     pos.trailing_sl_active = True
+                    peak_usd = pos.highest_profit_usd
+                    # Guaranteed tiered profit retention floor:
+                    if peak_usd >= 10.0:
+                        locked_profit_usd = peak_usd * 0.70
+                    elif peak_usd >= 5.0:
+                        locked_profit_usd = peak_usd * 0.60
+                    elif peak_usd >= 2.50:
+                        locked_profit_usd = max(peak_usd * retention_pct, min_trail_profit)
+                    elif peak_usd >= trail_act_usd:
+                        locked_profit_usd = min(peak_usd * 0.45, min_trail_profit)
+                    else:
+                        locked_profit_usd = 0.0
+
                     if is_long:
                         pct_trail = pos.highest_price * (1.0 - trail_dist_pct / 100.0)
                         usd_trail = (pos.highest_price - (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
-                        new_sl = round(max(pct_trail, usd_trail), 4)
-                        new_sl = max(new_sl, round(entry * 1.0002, 4))
+                        base_sl = round(max(pct_trail, usd_trail), 4)
+                        profit_floor_sl = round(entry + (locked_profit_usd / pos.remaining_size), 4) if pos.remaining_size > 0 else base_sl
+                        new_sl = max(base_sl, profit_floor_sl, round(entry * 1.0002, 4))
                         if new_sl > pos.stop_loss:
                             old_sl = pos.stop_loss
                             pos.stop_loss = new_sl
@@ -1238,15 +1261,16 @@ class ExecutionEngine:
                             tr_msg = (
                                 f"📈 **SCALP TRAIL SL ADVANCED** ({pos.symbol} [#{pos.id}])\n"
                                 f"Trailing Stop: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
-                                f"Peak Profit: `+${pos.highest_profit_usd:,.2f}`"
+                                f"Peak Profit: `+${pos.highest_profit_usd:,.2f}` | Locked Floor: `+${locked_profit_usd:,.2f}`"
                             )
                             events.append({"event": "SCALP_TRAIL_UPDATED", "order": pos, "new_stop": pos.stop_loss, "message": tr_msg})
                             self._dispatch_event("SCALP_TRAIL_UPDATED", pos, tr_msg)
                     else:
                         pct_trail = pos.lowest_price * (1.0 + trail_dist_pct / 100.0)
                         usd_trail = (pos.lowest_price + (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
-                        new_sl = round(min(pct_trail, usd_trail), 4)
-                        new_sl = min(new_sl, round(entry * 0.9998, 4))
+                        base_sl = round(min(pct_trail, usd_trail), 4)
+                        profit_floor_sl = round(entry - (locked_profit_usd / pos.remaining_size), 4) if pos.remaining_size > 0 else base_sl
+                        new_sl = min(base_sl, profit_floor_sl, round(entry * 0.9998, 4))
                         if new_sl < pos.stop_loss:
                             old_sl = pos.stop_loss
                             pos.stop_loss = new_sl
@@ -1257,12 +1281,12 @@ class ExecutionEngine:
                             tr_msg = (
                                 f"📈 **SCALP TRAIL SL ADVANCED** ({pos.symbol} [#{pos.id}])\n"
                                 f"Trailing Stop: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
-                                f"Peak Profit: `+${pos.highest_profit_usd:,.2f}`"
+                                f"Peak Profit: `+${pos.highest_profit_usd:,.2f}` | Locked Floor: `+${locked_profit_usd:,.2f}`"
                             )
                             events.append({"event": "SCALP_TRAIL_UPDATED", "order": pos, "new_stop": pos.stop_loss, "message": tr_msg})
                             self._dispatch_event("SCALP_TRAIL_UPDATED", pos, tr_msg)
 
-                # (3) Micro Scalp Hard Take Profit (Safety Ceiling)
+                # (3) Micro Scalp Hard Take Profit (Safety Ceiling) / Run-to-TP Evaluation
                 if pos.unrealized_pnl > 0:
                     hit_pct = False
                     if scalp_pct > 0 and entry > 0:
@@ -1270,6 +1294,46 @@ class ExecutionEngine:
                         hit_pct = move_pct >= scalp_pct
                     hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= scalp_usd
                     if hit_usd or hit_pct:
+                        # Check if profit momentum is actively expanding ("wait for tp some time and not close positions if profit coming more")
+                        let_run = bool(getattr(self, "scalp_let_profit_run", True))
+                        has_higher_tp = (is_long and pos.tp1 and pos.tp1 > curr_price) or (not is_long and pos.tp1 and pos.tp1 < curr_price)
+                        candle_range = max(high - low, 1e-4)
+                        # Strong expansion bar: price pushing near candle extreme in profit direction
+                        expanding_bar = (is_long and curr_price >= high - 0.10 * candle_range and curr_price > candle_open) or \
+                                        (not is_long and curr_price <= low + 0.10 * candle_range and curr_price < candle_open)
+                        near_peak = (pos.unrealized_pnl >= pos.highest_profit_usd * 0.98)
+
+                        if let_run and has_higher_tp and expanding_bar and near_peak:
+                            # Profit is still expanding! Ratchet stop loss to lock in at least 85% of scalp target and let run towards higher TP
+                            locked_run_profit = scalp_usd * 0.85
+                            if pos.remaining_size > 0:
+                                if is_long:
+                                    run_sl = round(entry + (locked_run_profit / pos.remaining_size), 4)
+                                    if run_sl > pos.stop_loss:
+                                        pos.stop_loss = run_sl
+                                        pos.trailing_sl_active = True
+                                        try:
+                                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                                        except Exception:
+                                            pass
+                                else:
+                                    run_sl = round(entry - (locked_run_profit / pos.remaining_size), 4)
+                                    if run_sl < pos.stop_loss:
+                                        pos.stop_loss = run_sl
+                                        pos.trailing_sl_active = True
+                                        try:
+                                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                                        except Exception:
+                                            pass
+                            run_msg = (
+                                f"🚀 **SCALP PROFIT EXPANDING: HOLDING FOR TP** ({pos.symbol} [#{pos.id}])\n"
+                                f"Target `${scalp_usd:.2f}` reached with strong momentum! SL ratcheted to `${pos.stop_loss:,.2f}` (+${locked_run_profit:.2f} secured).\n"
+                                f"Holding position to run towards higher TP: `${pos.tp1:,.2f}`"
+                            )
+                            events.append({"event": "SCALP_RUNNING_TO_TP", "order": pos, "new_stop": pos.stop_loss, "message": run_msg})
+                            self._dispatch_event("SCALP_RUNNING_TO_TP", pos, run_msg)
+                            continue
+
                         broker_ok = True
                         try:
                             res = self._broker_close(sym, price=curr_price, ticket=pos_ticket)
@@ -1312,7 +1376,12 @@ class ExecutionEngine:
                     if stop_tightened_in_candle:
                         trail_hit = (curr_price <= pos.stop_loss) if is_long else (curr_price >= pos.stop_loss)
                     else:
-                        trail_hit = (low <= pos.stop_loss) if is_long else (high >= pos.stop_loss)
+                        # Prevent intra-candle lower-wick false shakeouts:
+                        # If current price is safely trading above trailing stop, do not stop out on old pre-rally low
+                        if is_long:
+                            trail_hit = (curr_price <= pos.stop_loss) or (low <= pos.stop_loss and close <= pos.stop_loss)
+                        else:
+                            trail_hit = (curr_price >= pos.stop_loss) or (high >= pos.stop_loss and close >= pos.stop_loss)
 
                     if trail_hit:
                         exit_price = pos.stop_loss

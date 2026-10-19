@@ -899,9 +899,15 @@ class RiskManager:
             new_stop = highest - dist
             # After TP1, guarantee floor is at least full BE with buffer
             floor = (entry + initial_risk * cfg.be_buffer_r) if tp1_hit else current_stop
+            mfe_r = (highest - entry) / initial_risk if initial_risk > 0 else 0.0
+            if mfe_r >= 2.0:
+                floor = max(floor, entry + initial_risk * (mfe_r * 0.50))
             return max(current_stop, floor, new_stop)
         new_stop = lowest + dist
         ceiling = (entry - initial_risk * cfg.be_buffer_r) if tp1_hit else current_stop
+        mfe_r = (entry - lowest) / initial_risk if initial_risk > 0 else 0.0
+        if mfe_r >= 2.0:
+            ceiling = min(ceiling, entry - initial_risk * (mfe_r * 0.50))
         return min(current_stop, ceiling, new_stop)
 
     def manage_position(
