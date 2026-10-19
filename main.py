@@ -571,10 +571,17 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         src = config.DEFAULT_DATA_SOURCE
         res = await asyncio.to_thread(run_signal, sym, equity=eq, leverage=lev, source=src)
         msg = format_signal_message(res)
+        kb = None
         try:
-            await update.message.reply_text(msg, parse_mode="Markdown")
+            from mt5_chart import build_chart_keyboard, normalize_mt5_symbol
+            chart_sym = "btc" if normalize_mt5_symbol(sym) == "BTCUSD" else "gold"
+            kb = build_chart_keyboard(active=chart_sym)
         except Exception:
-            await update.message.reply_text(msg.replace("*", "").replace("`", ""))
+            kb = None
+        try:
+            await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb)
+        except Exception:
+            await update.message.reply_text(msg.replace("*", "").replace("`", ""), reply_markup=kb)
         sig = res.get("signal")
         if sig and autotrade_active:
             ok, note = try_paper_execute(engine, sig, candle_price=res.get("price") or sig.get("entry"))
@@ -1798,10 +1805,17 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
             from signal_pipeline import run_signal, format_signal_message
             res = run_signal(sym, equity=float(getattr(risk_mgr.state, "equity", None) or config.INITIAL_EQUITY), leverage=float(risk_mgr.get_leverage()))
             msg = format_signal_message(res)
+            kb = None
             try:
-                await query.message.reply_text(msg, parse_mode="Markdown")
+                from mt5_chart import build_chart_keyboard, normalize_mt5_symbol
+                chart_sym = "btc" if normalize_mt5_symbol(sym) == "BTCUSD" else "gold"
+                kb = build_chart_keyboard(active=chart_sym)
             except Exception:
-                await query.message.reply_text(msg.replace("*", "").replace("`", ""))
+                kb = None
+            try:
+                await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb)
+            except Exception:
+                await query.message.reply_text(msg.replace("*", "").replace("`", ""), reply_markup=kb)
         except Exception as _se:
             await query.message.reply_text(f"Signal failed: {_se}")
         return

@@ -240,15 +240,41 @@ class MarketDataFeed:
     def multi_tf(self, limit_1m: int = 1500) -> Dict[str, pd.DataFrame]:
         df1 = self.fetch(limit=limit_1m, timeframe="1m")
         out = {"1m": df1}
-        for tf, rule in [("5m", "5min"), ("15m", "15min"), ("1h", "1h")]:
-            try:
-                out[tf] = df1.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
-            except Exception:
-                out[tf] = pd.DataFrame()
+        b = None
         try:
-            out["daily"] = df1.resample("1D").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
+            from mt5_broker import get_active_broker
+            b = get_active_broker()
         except Exception:
-            out["daily"] = pd.DataFrame()
+            pass
+
+        for tf, rule in [("5m", "5min"), ("15m", "15min"), ("1h", "1h")]:
+            df_native = None
+            if b is not None and hasattr(b, "get_candles"):
+                try:
+                    df_native = b.get_candles(self.symbol, timeframe=tf, limit=300)
+                except Exception:
+                    pass
+            if df_native is not None and not df_native.empty and len(df_native) >= 5:
+                out[tf] = df_native
+            else:
+                try:
+                    out[tf] = df1.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
+                except Exception:
+                    out[tf] = pd.DataFrame()
+
+        df_daily = None
+        if b is not None and hasattr(b, "get_candles"):
+            try:
+                df_daily = b.get_candles(self.symbol, timeframe="1d", limit=100)
+            except Exception:
+                pass
+        if df_daily is not None and not df_daily.empty and len(df_daily) >= 3:
+            out["daily"] = df_daily
+        else:
+            try:
+                out["daily"] = df1.resample("1D").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
+            except Exception:
+                out["daily"] = pd.DataFrame()
         return out
 
 
@@ -473,6 +499,84 @@ class NewsAgent:
         return Vote(self.name, Dir.FLAT, 0.0, "No high-impact news filter active")
 
 
+class MT5ChartAgent:
+    """
+    Evaluates institutional MT5 candlestick chart structure, moving average stacks,
+    classical floor pivots (R2, R1, Pivot, S1, S2), RSI, and ATR directly from
+    the live MT5 chart engine.
+    """
+    name = "MT5-CHART"
+
+    def vote(self, df1: pd.DataFrame, symbol: str = "XAUUSD", broker: Optional[Any] = None) -> Vote:
+        try:
+            from mt5_chart import get_mt5_live_chart
+            chart = get_mt5_live_chart(symbol=symbol, timeframe="1m", broker=broker)
+            if not chart or not chart.get("ok"):
+                return Vote(self.name, Dir.FLAT, 0.0, "MT5 live chart feed standby")
+
+            t = chart.get("technicals", {})
+            mark = float(chart.get("mark", 0.0))
+            if mark <= 0:
+                return Vote(self.name, Dir.FLAT, 0.0, "MT5 price unavailable")
+
+            ema9 = float(t.get("ema9", mark))
+            ema21 = float(t.get("ema21", mark))
+            rsi = float(t.get("rsi", 50.0))
+            pivot = float(t.get("pivot", mark))
+            r1 = float(t.get("r1", mark * 1.005))
+            r2 = float(t.get("r2", mark * 1.010))
+            s1 = float(t.get("s1", mark * 0.995))
+            s2 = float(t.get("s2", mark * 0.990))
+            bias = str(t.get("trend_bias", "")).upper()
+            ema_sig = str(t.get("ema_signal", ""))
+
+            long_points = 0.0
+            short_points = 0.0
+
+            # 1. MT5 Moving Average Stack
+            if ema9 > ema21:
+                long_points += 0.35
+            elif ema9 < ema21:
+                short_points += 0.35
+
+            # 2. MT5 Candlestick Structure Bias
+            if "BULLISH" in bias:
+                long_points += 0.30
+            elif "BEARISH" in bias:
+                short_points += 0.30
+
+            # 3. MT5 Pivot Level Rebounds and Breakouts
+            if mark > pivot:
+                long_points += 0.20
+            elif mark < pivot:
+                short_points += 0.20
+
+            # Support bounce vs Resistance rejection
+            if mark <= s1 * 1.0015 and rsi <= 45.0:
+                long_points += 0.25
+            elif mark >= r1 * 0.9985 and rsi >= 55.0:
+                short_points += 0.25
+
+            # 4. RSI Momentum confirmation
+            if 52.0 <= rsi <= 75.0:
+                long_points += 0.15
+            elif 25.0 <= rsi <= 48.0:
+                short_points += 0.15
+
+            if long_points > short_points and long_points >= 0.50:
+                strength = min(0.95, round(long_points, 2))
+                reason = f"MT5 Structure: {ema_sig or 'Bullish Stack'} | Above Pivot ${pivot:,.2f} | RSI {rsi:.1f}"
+                return Vote(self.name, Dir.LONG, strength, reason)
+            elif short_points > long_points and short_points >= 0.50:
+                strength = min(0.95, round(short_points, 2))
+                reason = f"MT5 Structure: {ema_sig or 'Bearish Stack'} | Below Pivot ${pivot:,.2f} | RSI {rsi:.1f}"
+                return Vote(self.name, Dir.SHORT, strength, reason)
+            else:
+                return Vote(self.name, Dir.FLAT, 0.35, f"MT5 Structure: Range near Pivot ${pivot:,.2f} | RSI {rsi:.1f}")
+        except Exception as e:
+            return Vote(self.name, Dir.FLAT, 0.0, f"MT5 Chart note: {e}")
+
+
 class Arbiter:
     WEIGHTS = {
         "TREND": 1.25,
@@ -485,6 +589,7 @@ class Arbiter:
         "FAKE-BREAKOUT": 1.35,
         "MTF-CONFLUENCE": 1.40,
         "ASIAN-BREAKOUT": 1.25,
+        "MT5-CHART": 1.35,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -530,6 +635,7 @@ class Arbiter:
         self.fb = FakeBreakoutAgent() if FakeBreakoutAgent is not None else None
         self.mtf = MTFConfluenceAgent() if MTFConfluenceAgent is not None else None
         self.asian = AsianBreakoutAgent() if AsianBreakoutAgent is not None else None
+        self.mt5_chart = MT5ChartAgent()
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -581,6 +687,13 @@ class Arbiter:
                 dname = getattr(av.direction, "name", str(av.direction)).upper()
                 direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
                 votes.append(Vote(av.agent, direction, float(av.strength), av.reason))
+            except Exception:
+                pass
+
+        if getattr(self, "mt5_chart", None) is not None:
+            try:
+                cv = self.mt5_chart.vote(df1, symbol=symbol)
+                votes.append(cv)
             except Exception:
                 pass
 
@@ -687,7 +800,16 @@ class Arbiter:
             "is_scalp": bool(getattr(self, "is_scalp", False)),
             "fast_market_fill": bool(getattr(self, "fast_market_fill", False)),
             "lot_mode": getattr(plan, "lot_mode", "auto"),
+            "mt5_chart": None,
         }
+        try:
+            from mt5_chart import get_mt5_live_chart
+            ch_data = get_mt5_live_chart(symbol=symbol, timeframe="1m")
+            if ch_data and ch_data.get("ok", True):
+                sig["mt5_chart"] = ch_data
+        except Exception:
+            pass
+
         status_msg = (
             f"⚡ SCALP {direction.name} score={score:.2f} (micro SL/TP)"
             if getattr(self, "is_scalp", False)
@@ -734,6 +856,13 @@ def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", lever
         {"agent": v.agent, "direction": v.direction.name, "strength": round(v.strength, 2), "reason": v.reason}
         for v in votes
     ]
+    mt5_ch = (sig.get("mt5_chart") if sig else None)
+    if not mt5_ch:
+        try:
+            from mt5_chart import get_mt5_live_chart
+            mt5_ch = get_mt5_live_chart(symbol=symbol, timeframe="1m")
+        except Exception:
+            mt5_ch = None
     return {
         "symbol": symbol,
         "price": mark,
@@ -741,6 +870,7 @@ def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", lever
         "status": why,
         "votes": votes_out,
         "risk_summary": risk.summary() if hasattr(risk, "summary") else "",
+        "mt5_chart": mt5_ch,
     }
 
 

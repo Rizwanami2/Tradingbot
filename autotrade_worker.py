@@ -427,6 +427,18 @@ async def live_monitoring_worker(
                                 f"{order.setup_reason}"
                             )
                             try:
+                                from mt5_chart import get_mt5_live_chart
+                                _mt5_c = get_mt5_live_chart(symbol, timeframe="1m")
+                                if _mt5_c and _mt5_c.get("ok", True):
+                                    _t = _mt5_c.get("technicals", {})
+                                    alert += (
+                                        f"\n📊 MT5 Chart: {_t.get('trend_bias', 'NEUTRAL')} | "
+                                        f"Pivot ${_t.get('pivot', 0):,.2f} (R1 ${_t.get('r1', 0):,.2f} / S1 ${_t.get('s1', 0):,.2f}) | "
+                                        f"RSI {_t.get('rsi', 50):.1f}"
+                                    )
+                            except Exception:
+                                pass
+                            try:
                                 from gemini_client import GeminiClient
                                 _gem = GeminiClient()
                                 rationale = _gem.generate_trade_rationale({

@@ -240,6 +240,7 @@ def calibrate_rolling_sharpe_weights(
         "FAKE-BREAKOUT": 1.35,
         "MTF-CONFLUENCE": 1.40,
         "ASIAN-BREAKOUT": 1.25,
+        "MT5-CHART": 1.35,
     })
 
     if not os.path.exists(stats_file):

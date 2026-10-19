@@ -9,6 +9,7 @@ from multi_agent_trading_bot import (
     IndicatorAgent,
     AILearnerAgent,
     NewsAgent,
+    MT5ChartAgent,
     MarketDataFeed,
     evaluate_symbol,
     Dir,
@@ -155,18 +156,28 @@ class TestAgentsAndArbiter(unittest.TestCase):
         self.assertEqual(v_col_idx.agent, "ASIAN-BREAKOUT")
         self.assertIn(v_col_idx.direction, (AsianDir.LONG, AsianDir.SHORT, AsianDir.FLAT))
 
+    def test_mt5_chart_agent(self):
+        agent = MT5ChartAgent()
+        vote = agent.vote(self.df1, symbol="XAUUSD")
+        self.assertEqual(vote.agent, "MT5-CHART")
+        self.assertIn(vote.direction, (Dir.LONG, Dir.SHORT, Dir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
     def test_evaluate_symbol(self):
         res = evaluate_symbol("XAUUSD", source="demo")
         self.assertEqual(res["symbol"], "XAUUSD")
         self.assertGreater(res["price"], 0.0)
         self.assertIn("votes", res)
-        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10))
+        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11))
+        self.assertIn("mt5_chart", res)
 
     def test_evaluate_symbol_btc_normalization(self):
         res = evaluate_symbol("BTC", source="demo", on_demand=True)
         self.assertEqual(res["symbol"], "BTCUSDT")
         self.assertGreater(res["price"], 0.0)
-        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10))
+        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11))
+        self.assertIn("mt5_chart", res)
 
 
 if __name__ == "__main__":

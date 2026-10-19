@@ -249,6 +249,15 @@ def run_signal(
     except Exception:
         pass
 
+    if not res.get("mt5_chart"):
+        try:
+            from mt5_chart import get_mt5_live_chart
+            ch_data = get_mt5_live_chart(sym, timeframe="1m")
+            if ch_data and ch_data.get("ok", True):
+                res["mt5_chart"] = ch_data
+        except Exception:
+            pass
+
     res["symbol"] = sym
     res["equity"] = eq
     res["leverage"] = risk.get_leverage()
@@ -359,6 +368,34 @@ def format_signal_message(res: Dict[str, Any]) -> str:
     except Exception:
         pass
 
+    chart_txt = ""
+    ch = res.get("mt5_chart")
+    if ch and isinstance(ch, dict):
+        try:
+            t = ch.get("technicals", {})
+            bias = str(t.get("trend_bias", "NEUTRAL"))
+            ema_sig = str(t.get("ema_signal", ""))
+            rsi = float(t.get("rsi", 50.0))
+            atr_v = float(t.get("atr", 0.0))
+            p = float(t.get("pivot", 0.0))
+            r1 = float(t.get("r1", 0.0))
+            r2 = float(t.get("r2", 0.0))
+            s1 = float(t.get("s1", 0.0))
+            s2 = float(t.get("s2", 0.0))
+            spread = float(ch.get("spread", 0.0))
+            server = str(ch.get("server", "MetaQuotes-Demo"))
+            b_mode = str(ch.get("broker_mode", "LIVE"))
+            chart_txt = (
+                f"\n📈 **MT5 Institutional Chart Telemetry:**\n"
+                f"• **Structure Bias:** {bias}\n"
+                f"• **Moving Averages:** `{ema_sig}` (EMA9 `${t.get('ema9', 0):,.2f}` / EMA21 `${t.get('ema21', 0):,.2f}`)\n"
+                f"• **Floor Pivots:** `R2: ${r2:,.2f}` | `R1: ${r1:,.2f}` | `P: ${p:,.2f}` | `S1: ${s1:,.2f}` | `S2: ${s2:,.2f}`\n"
+                f"• **Oscillators & Vol:** `RSI(14): {rsi:.1f}` | `ATR(14): ${atr_v:,.2f}` | `Spread: ${spread:.2f}`\n"
+                f"• **MT5 Feed:** `{server}` | Mode: `{b_mode}`\n"
+            )
+        except Exception:
+            chart_txt = ""
+
     votes_txt = "\n".join(vote_lines) if vote_lines else "_No votes_"
     votes_section = f"\n{matrix_txt}\n" if matrix_txt else f"\n**Agent Votes:**\n{votes_txt}\n\n⚡ **Consensus:** `{status}`"
 
@@ -367,6 +404,7 @@ def format_signal_message(res: Dict[str, Any]) -> str:
         f"Mark: `${price_val:,.2f}` | Lev `{float(lev):.0f}x`\n"
         f"{votes_section}"
         f"{sig_box}"
+        f"{chart_txt}"
         f"{plan_txt}"
         f"{hist_txt}"
     )
