@@ -283,6 +283,25 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
         self.assertIn("100200300", text)
         self.assertIn("mytestacc", text)
 
+    @patch("mt5_accounts.connect_and_verify")
+    async def test_mt5_command_add_account_auth_failed_shows_diagnostics(self, mock_connect):
+        mock_connect.return_value = (
+            False,
+            "Live MT5 connection error: MT5 Authorization Failed: (-6, 'Terminal: Authorization failed')",
+            None,
+        )
+        self.ctx.args = ["add", "10055086", "Rizwan@123", "Mtrading-Live"]
+        await mt5_command(self.update, self.ctx)
+        self.message.reply_text.assert_called_once()
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Authorization Check Needed", text)
+        self.assertIn("Authorization Failed (-6)", text)
+        self.assertIn("10055086", text)
+        self.assertIn("Mtrading-Live", text)
+        self.assertIn("Server Not Found in MT5 Terminal", text)
+        self.assertIn("Trading Password vs Cabinet Password", text)
+        self.assertIn("Zero-Password EA Bridge", text)
+
     async def test_mt5_command_accounts_list(self):
         mgr = get_account_manager()
         mgr.add_account("100200300", "P@ssw0rd123", "Demo-Server", alias="mytestacc")

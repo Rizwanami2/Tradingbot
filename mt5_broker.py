@@ -354,6 +354,47 @@ def _gateway_request(
         raise ConnectionError(f"MT5 Gateway unreachable at {url}: {exc}") from exc
 
 
+def format_mt5_error(
+    err: Any,
+    login: Optional[Union[int, str]] = None,
+    server: Optional[str] = None,
+) -> str:
+    """
+    Format raw MT5 error into clear, actionable diagnosis with steps to resolve.
+    """
+    raw_str = str(err)
+    err_code = None
+    if isinstance(err, (tuple, list)) and len(err) > 0:
+        try:
+            err_code = int(err[0])
+        except (ValueError, TypeError):
+            pass
+    elif "-6" in raw_str:
+        err_code = -6
+
+    login_label = f"#{login}" if login else "account"
+    srv_label = f"'{server}'" if server else "broker server"
+
+    if err_code == -6 or "Authorization failed" in raw_str:
+        broker_name = server.split("-")[0] if (server and "-" in server) else (server or "your broker")
+        return (
+            f"MT5 Authorization Failed: (-6, 'Terminal: Authorization failed') for {login_label} on {srv_label}.\n"
+            f"Troubleshooting & Solutions:\n"
+            f"1. Broker Server in MT5: Ensure server {srv_label} is loaded in your MT5 terminal. "
+            f"If using standard MetaTrader 5, open MT5 -> click 'File' -> 'Open an Account' -> search '{broker_name}' -> click 'Find your broker' so MT5 downloads the '{server}.srv' server file.\n"
+            f"2. Trade vs Cabinet Password: Confirm you entered the MT5 Trading/Master account password (sent by broker email), NOT your broker website login/cabinet password.\n"
+            f"3. Account Type: Verify account {login_label} is an MT5 account (not an MT4 account).\n"
+            f"4. EA File-Bridge: Trade without storing MT5 credentials in the bot by running /bridge on or /mt5 backend ea_bridge and attaching the EA to any MT5 chart."
+        )
+    if err_code in (-10001, -10004, -10005, -10000) or "IPC" in raw_str:
+        return (
+            f"MT5 Terminal IPC Error ({raw_str}). "
+            f"MetaTrader 5 terminal is not responding or not running. "
+            f"Launch MetaTrader 5 on your Windows machine or verify MT5 Gateway."
+        )
+    return f"MT5 connection failed: {raw_str}"
+
+
 class MT5Broker(Broker):
     """
     MetaTrader 5 broker adapter supporting both Paper / Demo and Live accounts.
@@ -550,18 +591,104 @@ class MT5Broker(Broker):
             if native_mt5 is not None and self.effective_backend != "gateway":
                 try:
                     mt5_exe = self.path or getattr(config, "MT5_PATH", "") or getattr(config, "find_default_mt5_path", lambda: "")()
-                    init_kwargs = {"path": mt5_exe} if mt5_exe else {}
-                    if not native_mt5.initialize(**init_kwargs):
-                        err = native_mt5.last_error()
-                        raise ConnectionError(f"MT5 initialize failed: {err}")
-                    authorized = native_mt5.login(
-                        login=self.login,
-                        password=self.password,
-                        server=self.server,
-                    )
+                    try:
+                        log_num = int(self.login)
+                    except (ValueError, TypeError):
+                        log_num = 0
+                    pass_str = str(self.password or "")
+                    srv_str = str(self.server or "").strip()
+
+                    authorized = False
+                    init_err = None
+                    login_err = None
+
+                    # 1. Check if terminal is already initialized and responsive
+                    already_initialized = False
+                    try:
+                        tinfo = native_mt5.terminal_info()
+                        if tinfo is not None:
+                            already_initialized = True
+                    except Exception:
+                        already_initialized = False
+
+                    # If already running, test if target account is active or login directly
+                    if already_initialized:
+                        try:
+                            ainfo = native_mt5.account_info()
+                            if ainfo is not None and int(getattr(ainfo, "login", 0)) == log_num and log_num > 0:
+                                authorized = True
+                            elif log_num > 0 and pass_str:
+                                authorized = bool(native_mt5.login(
+                                    login=log_num,
+                                    password=pass_str,
+                                    server=srv_str,
+                                    timeout=60000,
+                                ))
+                                if not authorized:
+                                    login_err = native_mt5.last_error()
+                        except Exception as e:
+                            logger.debug("[MT5Broker] Direct login on running terminal failed: %s", e)
+
+                    # 2. If not yet authorized, initialize MT5 with target credentials directly
                     if not authorized:
-                        err = native_mt5.last_error()
-                        raise ConnectionError(f"MT5 login failed: {err}")
+                        init_kwargs = {}
+                        if mt5_exe:
+                            init_kwargs["path"] = mt5_exe
+                        if log_num > 0:
+                            init_kwargs["login"] = log_num
+                        if pass_str:
+                            init_kwargs["password"] = pass_str
+                        if srv_str:
+                            init_kwargs["server"] = srv_str
+                        init_kwargs["timeout"] = 60000
+
+                        init_ok = False
+                        try:
+                            init_ok = bool(native_mt5.initialize(**init_kwargs))
+                            if not init_ok:
+                                init_err = native_mt5.last_error()
+                        except Exception as e:
+                            init_err = str(e)
+
+                        if init_ok:
+                            ainfo = native_mt5.account_info()
+                            if ainfo is not None and int(getattr(ainfo, "login", 0)) == log_num and log_num > 0:
+                                authorized = True
+                            elif log_num > 0 and pass_str:
+                                authorized = bool(native_mt5.login(
+                                    login=log_num,
+                                    password=pass_str,
+                                    server=srv_str,
+                                    timeout=60000,
+                                ))
+                                if not authorized:
+                                    login_err = native_mt5.last_error()
+                        else:
+                            # 3. Fallback: Initialize with path only, then attempt explicit login
+                            fallback_kwargs = {"path": mt5_exe} if mt5_exe else {}
+                            try:
+                                native_mt5.initialize(**fallback_kwargs)
+                            except Exception:
+                                pass
+
+                            if log_num > 0 and pass_str:
+                                try:
+                                    authorized = bool(native_mt5.login(
+                                        login=log_num,
+                                        password=pass_str,
+                                        server=srv_str,
+                                        timeout=60000,
+                                    ))
+                                    if not authorized:
+                                        login_err = native_mt5.last_error()
+                                except Exception as e:
+                                    login_err = str(e)
+
+                    if not authorized:
+                        err = login_err or init_err or native_mt5.last_error()
+                        diag = format_mt5_error(err, login=log_num, server=srv_str)
+                        raise ConnectionError(diag)
+
                     acc = native_mt5.account_info()
                     term = native_mt5.terminal_info()
                     if acc:

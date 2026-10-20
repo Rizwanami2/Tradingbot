@@ -39,6 +39,39 @@ except ImportError:
 
 _GW_RESOLVED_CACHE: Dict[str, str] = {}
 
+
+def format_mt5_error(err: Any, login: Optional[int] = None, server: Optional[str] = None) -> str:
+    """Format raw MT5 error into clear, actionable diagnosis."""
+    raw_str = str(err)
+    err_code = None
+    if isinstance(err, (tuple, list)) and len(err) > 0:
+        try:
+            err_code = int(err[0])
+        except (ValueError, TypeError):
+            pass
+    elif "-6" in raw_str:
+        err_code = -6
+
+    login_label = f"#{login}" if login else "account"
+    srv_label = f"'{server}'" if server else "broker server"
+
+    if err_code == -6 or "Authorization failed" in raw_str:
+        broker_name = server.split("-")[0] if (server and "-" in server) else (server or "your broker")
+        return (
+            f"MT5 Authorization Failed: (-6, 'Terminal: Authorization failed') for {login_label} on {srv_label}.\n"
+            f"Troubleshooting:\n"
+            f"1. In MT5 Desktop: click 'File' > 'Open an Account' > search '{broker_name}' > click 'Find your broker' so MT5 downloads the '{server}.srv' server file.\n"
+            f"2. Password: confirm you entered the MT5 Trading/Master password from broker email (not website login).\n"
+            f"3. Account Type: confirm account #{login} is an MT5 account (not MT4)."
+        )
+    if err_code in (-10001, -10004, -10005, -10000) or "IPC" in raw_str:
+        return (
+            f"MT5 Terminal IPC Error ({raw_str}). "
+            f"MetaTrader 5 terminal is not responding or not running. "
+            f"Launch MetaTrader 5 on your Windows machine."
+        )
+    return f"MT5 connection failed: {raw_str}"
+
 def get_candidate_symbols(symbol: str) -> List[str]:
     s = str(symbol or "").strip().upper().replace("/", "").replace("-", "")
     is_gold = any(x in s for x in ("XAU", "GOLD", "PAXG", "XAUT"))
@@ -367,14 +400,72 @@ class MT5GatewayHandler(BaseHTTPRequestHandler):
                 })
                 return
 
-            init_kwargs = {"path": mt5_path} if mt5_path else {}
-            if not mt5.initialize(**init_kwargs):
-                self._send_json(400, {"ok": False, "error": f"MT5 initialize failed: {mt5.last_error()}"})
+            authorized = False
+            init_err = None
+            login_err = None
+
+            # 1. If terminal is already running, try logging in directly
+            try:
+                if mt5.terminal_info() is not None:
+                    ainfo = mt5.account_info()
+                    if ainfo is not None and int(getattr(ainfo, "login", 0)) == login and login > 0:
+                        authorized = True
+                    elif login and password:
+                        authorized = bool(mt5.login(login=login, password=password, server=server, timeout=60000))
+                        if not authorized:
+                            login_err = mt5.last_error()
+            except Exception as e:
+                logger.debug("Gateway direct login on running terminal failed: %s", e)
+
+            # 2. If not yet authorized, initialize with target credentials
+            if not authorized:
+                init_kwargs = {}
+                if mt5_path:
+                    init_kwargs["path"] = mt5_path
+                if login > 0:
+                    init_kwargs["login"] = login
+                if password:
+                    init_kwargs["password"] = password
+                if server:
+                    init_kwargs["server"] = server
+                init_kwargs["timeout"] = 60000
+
+                init_ok = False
+                try:
+                    init_ok = bool(mt5.initialize(**init_kwargs))
+                    if not init_ok:
+                        init_err = mt5.last_error()
+                except Exception as e:
+                    init_err = str(e)
+
+                if init_ok:
+                    ainfo = mt5.account_info()
+                    if ainfo is not None and int(getattr(ainfo, "login", 0)) == login and login > 0:
+                        authorized = True
+                    elif login and password:
+                        authorized = bool(mt5.login(login=login, password=password, server=server, timeout=60000))
+                        if not authorized:
+                            login_err = mt5.last_error()
+                else:
+                    # 3. Fallback: initialize with path only and attempt login
+                    fallback_kwargs = {"path": mt5_path} if mt5_path else {}
+                    try:
+                        mt5.initialize(**fallback_kwargs)
+                    except Exception:
+                        pass
+                    if login and password:
+                        try:
+                            authorized = bool(mt5.login(login=login, password=password, server=server, timeout=60000))
+                            if not authorized:
+                                login_err = mt5.last_error()
+                        except Exception as e:
+                            login_err = str(e)
+
+            if not authorized and (login > 0 or password):
+                err = login_err or init_err or mt5.last_error()
+                diag = format_mt5_error(err, login=login, server=server)
+                self._send_json(401, {"ok": False, "error": diag})
                 return
-            if login and password:
-                if not mt5.login(login=login, password=password, server=server):
-                    self._send_json(401, {"ok": False, "error": f"MT5 login failed: {mt5.last_error()}"})
-                    return
 
             acc = mt5.account_info()
             if not acc:

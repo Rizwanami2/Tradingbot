@@ -2852,14 +2852,35 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
             )
         else:
-            await update.message.reply_text(
-                f"⚠️ **MT5 Account Saved (Verification Note)**\n"
-                f"• **Account #:** `{acc.login}` (Alias: `{acc.alias}`)\n"
-                f"• **Server:** `{acc.server}`\n"
-                f"• **Connection Error:** `{conn_msg}`\n\n"
-                f"_The account is saved. If MT5 is not yet running, launch your terminal or gateway, then switch with `/mt5 switch live`._",
-                parse_mode="Markdown",
-            )
+            if "Authorization Failed" in conn_msg or "(-6," in conn_msg or "Authorization failed" in conn_msg:
+                broker_brand = acc.server.split("-")[0] if "-" in acc.server else acc.server
+                reply_body = (
+                    f"⚠️ **MT5 Account Saved (Authorization Check Needed)**\n\n"
+                    f"• **Account #:** `{acc.login}` (Alias: `{acc.alias}`)\n"
+                    f"• **Server:** `{acc.server}`\n"
+                    f"• **Status:** 🔴 `Authorization Failed (-6)`\n\n"
+                    f"🔍 **Why MT5 Authorization Failed & How to Fix:**\n"
+                    f"1️⃣ **Server Not Found in MT5 Terminal:**\n"
+                    f"   MetaTrader 5 only includes default servers. If using standard MT5, scan your broker once:\n"
+                    f"   👉 In MT5: Click **File** > **Open an Account** > type `{broker_brand}` > click **Find your broker** > click **Next**. This downloads `{acc.server}.srv` into MT5.\n\n"
+                    f"2️⃣ **Trading Password vs Cabinet Password:**\n"
+                    f"   Make sure you entered your **MT5 Trading Account Password** (from your broker's account creation email), **not** your broker website login/cabinet password.\n\n"
+                    f"3️⃣ **MT5 vs MT4:**\n"
+                    f"   Ensure account `#{acc.login}` was created as MetaTrader 5 (MT4 accounts cannot connect to MT5).\n\n"
+                    f"4️⃣ **Alternative: Zero-Password EA Bridge:**\n"
+                    f"   You can trade without MT5 password entry! Open MT5, attach the bot EA to any chart, and run:\n"
+                    f"   `/bridge on` or `/mt5 backend ea_bridge`\n\n"
+                    f"💡 _Account #{acc.login} is saved. Once verified in MT5, activate with:_ `/mt5 switch live`"
+                )
+            else:
+                reply_body = (
+                    f"⚠️ **MT5 Account Saved (Verification Note)**\n"
+                    f"• **Account #:** `{acc.login}` (Alias: `{acc.alias}`)\n"
+                    f"• **Server:** `{acc.server}`\n"
+                    f"• **Connection Note:** `{conn_msg}`\n\n"
+                    f"_The account is saved. If MT5 is not yet running, launch your terminal or gateway, then switch with `/mt5 switch live`._"
+                )
+            await update.message.reply_text(reply_body, parse_mode="Markdown")
 
     elif sub in ("switch", "select", "use"):
         target = args[1].lower() if len(args) > 1 else "live"

@@ -513,6 +513,61 @@ class TestMT5Broker(unittest.TestCase):
             self.assertEqual(info.company, "EA-Bridge (MetaTrader 5)")
             self.assertTrue(info.connected)
 
+    def test_format_mt5_error_auth_failed(self):
+        from mt5_broker import format_mt5_error
+        err = (-6, "Terminal: Authorization failed")
+        diag = format_mt5_error(err, login=10055086, server="Mtrading-Live")
+        self.assertIn("Authorization Failed", diag)
+        self.assertIn("10055086", diag)
+        self.assertIn("Mtrading-Live", diag)
+        self.assertIn("Open an Account", diag)
+        self.assertIn("Mtrading", diag)
+        self.assertIn("EA File-Bridge", diag)
+
+    def test_format_mt5_error_ipc(self):
+        from mt5_broker import format_mt5_error
+        err = (-10001, "IPC connection failed")
+        diag = format_mt5_error(err, login=10055086, server="Mtrading-Live")
+        self.assertIn("IPC Error", diag)
+        self.assertIn("MetaTrader 5 terminal is not responding", diag)
+
+    def test_mt5_connect_passes_credentials_to_initialize(self):
+        import mt5_broker
+        mock_mt5 = MagicMock()
+        mock_mt5.terminal_info.return_value = None  # Terminal not yet started
+        mock_mt5.initialize.return_value = True
+        mock_acc = MagicMock(login=10055086, balance=15000.0, leverage=100.0, currency="USD", company="MTrading")
+        mock_acc.trade_allowed = True
+        mock_acc.trade_expert = True
+        mock_mt5.account_info.return_value = mock_acc
+
+        with patch.object(mt5_broker, "native_mt5", mock_mt5):
+            broker = MT5Broker(mode="live", login=10055086, password="Password123", server="Mtrading-Live")
+            self.assertTrue(broker.is_connected)
+            # Verify credentials were passed directly to initialize
+            mock_mt5.initialize.assert_called_once()
+            init_kwargs = mock_mt5.initialize.call_args[1]
+            self.assertEqual(init_kwargs.get("login"), 10055086)
+            self.assertEqual(init_kwargs.get("password"), "Password123")
+            self.assertEqual(init_kwargs.get("server"), "Mtrading-Live")
+            self.assertEqual(init_kwargs.get("timeout"), 60000)
+
+    def test_mt5_connect_auth_failure_raises_actionable_error(self):
+        import mt5_broker
+        mock_mt5 = MagicMock()
+        mock_mt5.terminal_info.return_value = None
+        mock_mt5.initialize.return_value = False
+        mock_mt5.last_error.return_value = (-6, "Terminal: Authorization failed")
+        mock_mt5.login.return_value = False
+
+        with patch.object(mt5_broker, "native_mt5", mock_mt5):
+            with self.assertRaises(BrokerConfigurationError) as ctx:
+                MT5Broker(mode="live", login=10055086, password="WrongPassword", server="Mtrading-Live")
+            err_msg = str(ctx.exception)
+            self.assertIn("Authorization Failed", err_msg)
+            self.assertIn("10055086", err_msg)
+            self.assertIn("Mtrading-Live", err_msg)
+
 
 if __name__ == "__main__":
     unittest.main()
