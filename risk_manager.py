@@ -1099,6 +1099,7 @@ class RiskManager:
                     win_rate = float(wr)
             except Exception:
                 pass
+        win_rate = max(0.10, min(win_rate, 0.95))
         payoff = float(getattr(self.config, "tp1_r", 1.80) or 1.80)
         return calculate_kelly_lot_size(
             equity=eq,

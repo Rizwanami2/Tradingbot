@@ -56,8 +56,14 @@ def calculate_kelly_fraction(
     p = float(win_rate)
     b = float(payoff_ratio)
 
-    if p <= 0 or p >= 1.0 or b <= 0:
+    if p > 1.0 and p <= 100.0:
+        p = p / 100.0
+
+    if p <= 0 or b <= 0:
         return 0.0, 0.0
+
+    # Cap probability at 0.99 for finite sample uncertainty
+    p = min(p, 0.99)
 
     raw_f = (p * (b + 1.0) - 1.0) / b
     if raw_f <= 0:
