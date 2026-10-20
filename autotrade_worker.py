@@ -311,7 +311,7 @@ async def live_monitoring_worker(
 
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
-                    cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().lower()
+                    cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "continuous"))().lower()
                     if not autotrade_active:
                         can_open = False
                     elif cur_mode == "signal":

@@ -2193,10 +2193,10 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
     elif arg in ("on", "1", "true", "enable") or (sym_choice and arg in (sym_choice.lower(), "btc", "gold", "both", "all")):
+        config.set_autotrade_mode("continuous")
         autotrade_active = True
         engine.reset_halt()
-        cur_m = config.get_autotrade_mode().upper()
-        mode_str = "SIGNAL-DRIVEN (Trades on /signal)" if cur_m == "SIGNAL" else "CONTINUOUS AUTONOMOUS (24/7 background)"
+        mode_str = "CONTINUOUS AUTONOMOUS (24/7 Multi-Agent chart watching & auto-execution)"
         await update.message.reply_text(
             f"🟢 **Autotrade ACTIVATED**\n"
             f"• **Execution Mode:** `{broker_mode}`\n"

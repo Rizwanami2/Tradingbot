@@ -146,22 +146,22 @@ def _save_persisted_autotrade_mode(mode: str) -> None:
 AUTOTRADE_MODE = (
     _load_persisted_autotrade_mode()
     or os.getenv("BOT_AUTOTRADE_MODE")
-    or "signal"
+    or "continuous"
 ).lower().strip()
 
 
 def get_autotrade_mode() -> str:
     global AUTOTRADE_MODE
-    return str(AUTOTRADE_MODE or "signal").lower()
+    return str(AUTOTRADE_MODE or "continuous").lower()
 
 
 def set_autotrade_mode(mode: str, persist: bool = True) -> str:
     global AUTOTRADE_MODE
     m = str(mode or "").strip().lower()
-    if m in ("continuous", "auto", "all", "background"):
-        AUTOTRADE_MODE = "continuous"
-    else:
+    if m in ("signal", "signal_only", "ondemand"):
         AUTOTRADE_MODE = "signal"
+    else:
+        AUTOTRADE_MODE = "continuous"
     if persist:
         _save_persisted_autotrade_mode(AUTOTRADE_MODE)
     return AUTOTRADE_MODE
