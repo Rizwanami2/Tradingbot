@@ -1,23 +1,36 @@
-# Pending scripts synced (2026-10-20)
+# Sync all pending scripts
 
-Applied into **source** (not only scripts):
-
-| Script / change | Result |
-|-----------------|--------|
-| remove_antispam_cooldowns | Cooldown getters = 0; enter checks return OK |
-| apply_xau_scalp | Scalp profile XAU-optimized (TP 3 / SL 2.5, no Asian) |
-| apply_accuracy_mode | ACCURACY_MODE, scorecard 60, quality min |
-| module risk | Max open 2, daily loss 2%, consec 3, risk_mgr gate |
-| cleanup_unnecessary | Hybrid/restore/changelog clutter removed |
-
-## Pull on server
+## One command (server)
 
 ```powershell
 cd C:\Tradingbot
 git pull origin main
-# restart bot
+python scripts/sync_all_pending.py
 ```
 
-## .env
+Then restart the bot.
 
-See `.env.example` (XAU scalp + accuracy + safety).
+## What it applies
+
+| Patch | Effect |
+|-------|--------|
+| Anti-spam | Cooldowns = 0, no CD/proximity blocks |
+| XAU scalp | Gold-optimized profile (TP 3 / SL 2.5) |
+| Accuracy | Quality min + scorecard 60 |
+| Risk | Max open 2, daily 2%, consec 3, risk_mgr gate |
+| Config | SAFETY_* + ACCURACY_MODE |
+
+## Skip / do not run
+
+- Hybrid scripts (cancelled)
+- Old restore_mt5_* unless mt5_broker is broken
+
+## After sync
+
+```text
+/profile scalp
+/watchlist gold
+/bridge ping
+/ai on
+/autotrade on
+```
