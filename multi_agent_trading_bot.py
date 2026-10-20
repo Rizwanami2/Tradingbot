@@ -87,6 +87,12 @@ except ImportError:
     AsianBreakoutAgent = None
     AsianDir = None
 
+try:
+    from orr_strategy import ORRAgent, ORRDir
+except ImportError:
+    ORRAgent = None
+    ORRDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -590,6 +596,7 @@ class Arbiter:
         "MTF-CONFLUENCE": 1.40,
         "ASIAN-BREAKOUT": 1.25,
         "MT5-CHART": 1.35,
+        "ORR-STRATEGY": 1.50,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -650,6 +657,7 @@ class Arbiter:
         self.mtf = MTFConfluenceAgent() if MTFConfluenceAgent is not None else None
         self.asian = AsianBreakoutAgent() if AsianBreakoutAgent is not None else None
         self.mt5_chart = MT5ChartAgent()
+        self.orr = ORRAgent() if ORRAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -711,6 +719,15 @@ class Arbiter:
             except Exception:
                 pass
 
+        if getattr(self, "orr", None) is not None:
+            try:
+                ov = self.orr.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(ov.direction, "name", str(ov.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                votes.append(Vote(ov.agent, direction, float(ov.strength), ov.reason))
+            except Exception:
+                pass
+
         session_warn = None
         if is_tradeable_session is not None:
             try:
@@ -745,6 +762,21 @@ class Arbiter:
         elif short_n >= self.MIN_AGREEMENT and short_score >= self.MIN_SCORE and short_score > long_score:
             direction = Dir.SHORT
             score = short_score
+
+        # High-Accuracy Clean Directional Check ("straight for more accurate"):
+        # Filters out false signals and whipsaws during conflicting agent deadlock
+        if direction != Dir.FLAT:
+            opposing_score = short_score if direction == Dir.LONG else long_score
+            opposing_n = short_n if direction == Dir.LONG else long_n
+            if opposing_score >= 0.90:
+                if score < opposing_score * 1.30 or (score - opposing_score) < 0.50:
+                    conflict_msg = (
+                        f"Chop / Conflict: L({long_score:.2f}/{long_n}) vs S({short_score:.2f}/{short_n}) "
+                        f"— waiting for clean directional straight consensus"
+                    )
+                    if session_warn:
+                        conflict_msg += f" | {session_warn}"
+                    return None, conflict_msg, votes
 
         if direction == Dir.FLAT:
             msg = f"No consensus (L:{long_score:.2f}/{long_n} S:{short_score:.2f}/{short_n})"

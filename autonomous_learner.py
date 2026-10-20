@@ -95,6 +95,7 @@ class AutonomousLearner:
         "MTF-CONFLUENCE": 1.40,
         "ASIAN-BREAKOUT": 1.25,
         "MT5-CHART": 1.35,
+        "ORR-STRATEGY": 1.45,
     }
 
     def __init__(
