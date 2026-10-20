@@ -1,17 +1,18 @@
-# MT5 Hybrid Mode
+# MT5 Hybrid — fresh features
 
-When `MT5_BACKEND=ea_bridge` and `MT5_HYBRID=true`:
+## Channels
 
 | Function | Channel |
 |----------|---------|
-| Buy / Sell / Close / Modify | **EA Bridge** |
-| Candles / ticks (when available) | **Native** MetaTrader5 Python |
-| Fallback data | EA files / other feeds |
+| Orders (buy/sell/close/modify) | **EA Bridge** |
+| Quotes / candles | **Native** MetaTrader5 (preferred) |
+| Fallback quotes | EA ticks/rates → other feeds |
 
-## .env
+## Enable
 
 ```env
 MT5_BACKEND=ea_bridge
+# or: MT5_BACKEND=hybrid
 MT5_HYBRID=true
 MT5_LOGIN=...
 MT5_PASSWORD=...
@@ -21,20 +22,36 @@ EA_BRIDGE_DIR=
 MT5_MAGIC=112233
 ```
 
-## Setup
-
-1. `pip install MetaTrader5`
-2. MT5 terminal open + logged in
-3. EA_Bridge on chart, AutoTrading green
-4. Apply code if needed:
-
 ```powershell
+pip install MetaTrader5
 git pull origin main
 python scripts/apply_mt5_hybrid.py
+# restart bot
 ```
 
-5. Restart bot — look for: `Hybrid ON: native quotes/candles + EA Bridge orders`
+Log lines:
+- `Hybrid ON: native quotes + EA Bridge orders`
+- `EA ORDERS connected (... hybrid=True, quotes=native)`
 
-If native fails, orders still work via EA.
+## Fresh features
 
-Disable: `MT5_HYBRID=false`
+1. **`MT5_BACKEND=hybrid`** alias (= ea_bridge + hybrid on)
+2. **Native init** when EA connects (login optional)
+3. **Market Watch preselect** XAUUSD / BTCUSD
+4. **`broker.hybrid_status()`** → ea_ok, native_ok, quotes_channel
+5. **Graceful fallback** if native fails — orders still via EA
+6. **Native quote path** not blocked when EA is primary backend
+
+## Disable
+
+```env
+MT5_HYBRID=false
+```
+
+## Checklist
+
+- [ ] `pip install MetaTrader5`
+- [ ] MT5 open + logged in
+- [ ] EA_Bridge on chart, Algo Trading green
+- [ ] Magic matches `.env`
+- [ ] `/bridge ping` OK
