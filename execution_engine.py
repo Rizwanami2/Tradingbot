@@ -284,12 +284,12 @@ class ExecutionEngine:
         self.scalp_tp_pct: float = 0.10
         self.scalp_sl_pct: float = 0.12
         self.scalp_trail_enabled: bool = True
-        self.scalp_trail_activation_usd: float = 1.00
-        self.scalp_trail_distance_usd: float = 0.80
-        self.scalp_trail_activation_pct: float = 0.04
-        self.scalp_trail_distance_pct: float = 0.03
-        self.scalp_trail_buffer_usd: float = 0.40
-        self.scalp_trail_buffer_pct: float = 0.02
+        self.scalp_trail_activation_usd: float = 2.00
+        self.scalp_trail_distance_usd: float = 2.00
+        self.scalp_trail_activation_pct: float = 0.06
+        self.scalp_trail_distance_pct: float = 0.06
+        self.scalp_trail_buffer_usd: float = 1.50
+        self.scalp_trail_buffer_pct: float = 0.05
         self.scalp_be_lock_usd: float = 0.50
         self.scalp_min_trail_profit_usd: float = 1.50
         self.scalp_profit_retention_pct: float = 0.50
@@ -297,12 +297,12 @@ class ExecutionEngine:
         try:
             import config as _cfg_tr
             self.scalp_trail_enabled = bool(getattr(_cfg_tr, "SCALP_TRAIL_ENABLED", True))
-            self.scalp_trail_activation_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_USD", 1.00))
-            self.scalp_trail_distance_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_USD", 0.80))
-            self.scalp_trail_activation_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_PCT", 0.04))
-            self.scalp_trail_distance_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_PCT", 0.03))
-            self.scalp_trail_buffer_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_BUFFER_USD", 0.40))
-            self.scalp_trail_buffer_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_BUFFER_PCT", 0.02))
+            self.scalp_trail_activation_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_USD", 2.00))
+            self.scalp_trail_distance_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_USD", 2.00))
+            self.scalp_trail_activation_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_PCT", 0.06))
+            self.scalp_trail_distance_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_PCT", 0.06))
+            self.scalp_trail_buffer_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_BUFFER_USD", 1.50))
+            self.scalp_trail_buffer_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_BUFFER_PCT", 0.05))
             self.scalp_be_lock_usd = float(getattr(_cfg_tr, "SCALP_BE_LOCK_USD", 0.50))
             self.scalp_min_trail_profit_usd = float(getattr(_cfg_tr, "SCALP_MIN_TRAIL_PROFIT_USD", 1.50))
             self.scalp_profit_retention_pct = float(getattr(_cfg_tr, "SCALP_PROFIT_RETENTION_PCT", 0.50))
@@ -1203,7 +1203,7 @@ class ExecutionEngine:
 
                 # (1) Scalp Progressive Break-Even Lock
                 be_act_usd = float(getattr(self, "scalp_be_lock_usd", 0.50))
-                be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.04))
+                be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
                 move_gain_pct = ((pos.highest_price - entry) / entry * 100.0) if is_long else ((entry - pos.lowest_price) / entry * 100.0)
                 if pos.be_stage < 1 and (pos.highest_profit_usd >= be_act_usd or move_gain_pct >= be_act_pct):
                     pos.be_stage = 1
@@ -1225,19 +1225,21 @@ class ExecutionEngine:
 
                 # (2) Scalp Dynamic Trailing Stop
                 trail_on = bool(getattr(self, "scalp_trail_enabled", True))
-                trail_act_usd = float(getattr(self, "scalp_trail_activation_usd", 1.00))
-                trail_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.04))
-                trail_dist_pct = float(getattr(self, "scalp_trail_distance_pct", 0.03))
-                trail_dist_usd = float(getattr(self, "scalp_trail_distance_usd", 0.80))
+                trail_act_usd = float(getattr(self, "scalp_trail_activation_usd", 2.00))
+                trail_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
+                trail_dist_pct = float(getattr(self, "scalp_trail_distance_pct", 0.06))
+                trail_dist_usd = float(getattr(self, "scalp_trail_distance_usd", 2.00))
                 min_trail_profit = float(getattr(self, "scalp_min_trail_profit_usd", 1.50))
                 retention_pct = float(getattr(self, "scalp_profit_retention_pct", 0.50))
-                trail_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 0.40))
-                trail_buffer_pct = float(getattr(self, "scalp_trail_buffer_pct", 0.02))
+                trail_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 1.50))
+                trail_buffer_pct = float(getattr(self, "scalp_trail_buffer_pct", 0.05))
 
                 trail_stop_before = pos.stop_loss
 
                 # Calculate minimum buffer distance between current price and stop loss
-                curr_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 0.40))
+                curr_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 1.50))
+                # Protect against buffer exceeding trailing distance
+                curr_buffer_usd = min(curr_buffer_usd, trail_dist_usd * 0.8)
                 buffer_price = (curr_buffer_usd / pos.remaining_size) if pos.remaining_size > 0 else 0.0
 
                 if trail_on and (pos.highest_profit_usd >= trail_act_usd or move_gain_pct >= trail_act_pct):
@@ -1309,6 +1311,101 @@ class ExecutionEngine:
                             events.append({"event": "SCALP_TRAIL_UPDATED", "order": pos, "new_stop": pos.stop_loss, "message": tr_msg})
                             self._dispatch_event("SCALP_TRAIL_UPDATED", pos, tr_msg)
 
+                # (2.5) Scalp Target 1 (TP1) & Target 2 (TP2) Hit Evaluation
+                eval_high = curr_price if just_executed else high
+                eval_low = curr_price if just_executed else low
+                tp1_hit = ((eval_high >= pos.tp1) if is_long else (eval_low <= pos.tp1)) if pos.tp1 is not None else False
+                if pos.partials_done == 0 and pos.tp1 and tp1_hit:
+                    if pos.tp2:
+                        close_fraction = 0.50
+                        closed_size = pos.size * close_fraction
+                        pos.remaining_size -= closed_size
+                        pos.remaining_lots = round(pos.lots * (1.0 - close_fraction), 4)
+                        pos.partials_done = 1
+                        partial_pnl = (pos.tp1 - entry) * closed_size if is_long else (entry - pos.tp1) * closed_size
+                        pos.realized_pnl += partial_pnl
+                        pos.stop_loss = round(entry * 1.0005, 4) if is_long else round(entry * 0.9995, 4)
+                        pos.be_stage = 2
+                        try:
+                            self._broker_close(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp1, ticket=pos_ticket)
+                        except Exception:
+                            pass
+                        try:
+                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, take_profit=pos.tp2, ticket=pos_ticket)
+                        except Exception:
+                            pass
+                        tp_msg = (
+                            f"🎯 **SCALP TARGET 1 HIT (+1.0R / 50% TAKEN)** ({pos.symbol} [#{pos.id}])\n"
+                            f"50% closed @ `${pos.tp1:,.2f}` | PnL: `+${partial_pnl:,.2f}`\n"
+                            f"Stop Loss secured at Break-Even (`${pos.stop_loss:,.2f}`).\n"
+                            f"Remaining lots: `{pos.remaining_lots}` trailing towards TP2 (`${pos.tp2:,.2f}`)."
+                        )
+                        events.append({"event": "TP1_PARTIAL_TAKEN", "order": pos, "exit_price": pos.tp1, "realized_pnl": partial_pnl, "message": tp_msg})
+                        self._dispatch_event("TP1_PARTIAL_TAKEN", pos, tp_msg)
+                    else:
+                        broker_ok = True
+                        try:
+                            res = self._broker_close(sym, price=pos.tp1, ticket=pos_ticket)
+                            if res is False:
+                                broker_ok = False
+                        except Exception:
+                            broker_ok = False
+                        if broker_ok:
+                            pos.exit_price = pos.tp1
+                            pos.realized_pnl = (pos.tp1 - entry) * pos.remaining_size if is_long else (entry - pos.tp1) * pos.remaining_size
+                            pos.status = OrderStatus.CLOSED
+                            pos.closed_at = datetime.now(timezone.utc).isoformat()
+                            pos.close_reason = f"Scalp TP1 Target Hit (+${pos.realized_pnl:+.2f})"
+                            try:
+                                self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=1.0)
+                            except Exception:
+                                pass
+                            self._notify_brain_close(pos, 1.0)
+                            self.trade_history.append(pos)
+                            self.active_positions.pop(pos.id, None)
+                            self.save_state()
+                            tp_msg = (
+                                f"🎯 **SCALP TAKE PROFIT HIT** `{sym}` [#{pos.id}]\n"
+                                f"Exit `${pos.tp1:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
+                                f"_Target 1 reached with full profit locked in!_"
+                            )
+                            events.append({"event": "SCALP_CLOSE", "order": pos, "price": pos.tp1, "message": tp_msg})
+                            self._dispatch_event("SCALP_CLOSE", pos, tp_msg)
+                            continue
+
+                tp2_hit = ((eval_high >= pos.tp2) if is_long else (eval_low <= pos.tp2)) if pos.tp2 is not None else False
+                if pos.partials_done == 1 and pos.tp2 and tp2_hit:
+                    broker_ok = True
+                    try:
+                        res = self._broker_close(sym, price=pos.tp2, ticket=pos_ticket)
+                        if res is False:
+                            broker_ok = False
+                    except Exception:
+                        broker_ok = False
+                    if broker_ok:
+                        pos.exit_price = pos.tp2
+                        tp2_pnl = (pos.tp2 - entry) * pos.remaining_size if is_long else (entry - pos.tp2) * pos.remaining_size
+                        pos.realized_pnl += tp2_pnl
+                        pos.status = OrderStatus.CLOSED
+                        pos.closed_at = datetime.now(timezone.utc).isoformat()
+                        pos.close_reason = f"Scalp TP2 Runner Hit (+${pos.realized_pnl:+.2f})"
+                        try:
+                            self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=1.5)
+                        except Exception:
+                            pass
+                        self._notify_brain_close(pos, 1.5)
+                        self.trade_history.append(pos)
+                        self.active_positions.pop(pos.id, None)
+                        self.save_state()
+                        tp_msg = (
+                            f"🏆 **SCALP RUNNER TP2 HIT** `{sym}` [#{pos.id}]\n"
+                            f"Exit `${pos.tp2:,.2f}` | PnL `${pos.realized_pnl:+,.2f}`\n"
+                            f"_Full multi-target scalp cycle complete!_"
+                        )
+                        events.append({"event": "SCALP_CLOSE", "order": pos, "price": pos.tp2, "message": tp_msg})
+                        self._dispatch_event("SCALP_CLOSE", pos, tp_msg)
+                        continue
+
                 # (3) Micro Scalp Hard Take Profit (Safety Ceiling) / Run-to-TP Evaluation
                 if pos.unrealized_pnl > 0:
                     hit_pct = False
@@ -1321,41 +1418,47 @@ class ExecutionEngine:
                         let_run = bool(getattr(self, "scalp_let_profit_run", True))
                         has_higher_tp = (is_long and pos.tp1 and pos.tp1 > curr_price) or (not is_long and pos.tp1 and pos.tp1 < curr_price)
                         candle_range = max(high - low, 1e-4)
-                        # Strong expansion bar or holding >= 90% peak profit:
-                        expanding_bar = (is_long and curr_price >= high - 0.20 * candle_range and curr_price >= candle_open) or \
-                                        (not is_long and curr_price <= low + 0.20 * candle_range and curr_price <= candle_open)
-                        near_peak = (pos.unrealized_pnl >= pos.highest_profit_usd * 0.90)
+                        # Strong expansion bar or holding >= 85% peak profit:
+                        expanding_bar = (is_long and curr_price >= high - 0.25 * candle_range and curr_price >= candle_open) or \
+                                        (not is_long and curr_price <= low + 0.25 * candle_range and curr_price <= candle_open)
+                        near_peak = (pos.unrealized_pnl >= pos.highest_profit_usd * 0.85)
 
-                        if let_run and has_higher_tp and (expanding_bar or near_peak):
-                            # Profit is still expanding! Ratchet stop loss to lock in at least 85% of scalp target and let run towards higher TP
-                            locked_run_profit = scalp_usd * 0.85
-                            if pos.remaining_size > 0:
-                                if is_long:
-                                    run_sl = round(entry + (locked_run_profit / pos.remaining_size), 4)
-                                    if run_sl > pos.stop_loss and run_sl < curr_price:
-                                        pos.stop_loss = run_sl
-                                        pos.trailing_sl_active = True
-                                        try:
-                                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
-                                        except Exception:
-                                            pass
-                                else:
-                                    run_sl = round(entry - (locked_run_profit / pos.remaining_size), 4)
-                                    if run_sl < pos.stop_loss and run_sl > curr_price:
-                                        pos.stop_loss = run_sl
-                                        pos.trailing_sl_active = True
-                                        try:
-                                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
-                                        except Exception:
-                                            pass
-                            run_msg = (
-                                f"🚀 **SCALP PROFIT EXPANDING: HOLDING FOR TP** ({pos.symbol} [#{pos.id}])\n"
-                                f"Target `${scalp_usd:.2f}` reached with strong momentum! SL ratcheted to `${pos.stop_loss:,.2f}` (+${locked_run_profit:.2f} secured).\n"
-                                f"Holding position to run towards higher TP: `${pos.tp1:,.2f}`"
-                            )
-                            events.append({"event": "SCALP_RUNNING_TO_TP", "order": pos, "new_stop": pos.stop_loss, "message": run_msg})
-                            self._dispatch_event("SCALP_RUNNING_TO_TP", pos, run_msg)
-                            continue
+                        if let_run and has_higher_tp:
+                            if getattr(pos, "running_to_tp", False):
+                                # Already holding and running towards TP1! Do not hard-close; let trailing SL or TP1 manage exit.
+                                continue
+
+                            if expanding_bar or near_peak:
+                                pos.running_to_tp = True
+                                # Profit is still expanding! Ratchet stop loss to lock in at least 85% of scalp target and let run towards higher TP
+                                locked_run_profit = scalp_usd * 0.85
+                                if pos.remaining_size > 0:
+                                    if is_long:
+                                        run_sl = round(entry + (locked_run_profit / pos.remaining_size), 4)
+                                        if run_sl > pos.stop_loss and run_sl < curr_price:
+                                            pos.stop_loss = run_sl
+                                            pos.trailing_sl_active = True
+                                            try:
+                                                self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                                            except Exception:
+                                                pass
+                                    else:
+                                        run_sl = round(entry - (locked_run_profit / pos.remaining_size), 4)
+                                        if run_sl < pos.stop_loss and run_sl > curr_price:
+                                            pos.stop_loss = run_sl
+                                            pos.trailing_sl_active = True
+                                            try:
+                                                self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                                            except Exception:
+                                                pass
+                                run_msg = (
+                                    f"🚀 **SCALP PROFIT EXPANDING: HOLDING FOR TP** ({pos.symbol} [#{pos.id}])\n"
+                                    f"Target `${scalp_usd:.2f}` reached with strong momentum! SL ratcheted to `${pos.stop_loss:,.2f}` (+${locked_run_profit:.2f} secured).\n"
+                                    f"Holding position to run towards higher TP: `${pos.tp1:,.2f}`"
+                                )
+                                events.append({"event": "SCALP_RUNNING_TO_TP", "order": pos, "new_stop": pos.stop_loss, "message": run_msg})
+                                self._dispatch_event("SCALP_RUNNING_TO_TP", pos, run_msg)
+                                continue
 
                         broker_ok = True
                         try:

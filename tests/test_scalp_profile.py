@@ -1217,6 +1217,71 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
             self.assertFalse(res.allowed)
             self.assertTrue(any("quality" in r for r in res.reasons))
 
+    def test_scalp_waits_for_tp1_and_executes_tp1_without_premature_dump(self):
+        """Verify scalp trade waits through consolidation for TP1 and takes TP1 instead of dumping at $2.50."""
+        self.engine.scalp_mode = True
+        self.engine.scalp_tp_usd = 2.50
+        self.engine.scalp_let_profit_run = True
+
+        order = TradeOrder(
+            id="order-wait-for-tp1",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2645.0,
+            tp1=2656.0,
+            tp2=None,
+            tp3=None,
+            lots=0.01,
+            size=1.0,
+            leverage=20.0,
+            margin_required=26.5,
+            liquidation_price=2600.0,
+            risk_amount=5.0,
+            rr_ratio=1.2,
+            setup_reason="Wait For TP1 Scalp Test",
+            status=OrderStatus.OPEN,
+            executed_price=2650.0,
+            remaining_size=1.0,
+            is_scalp=True,
+        )
+        self.engine.active_positions[order.id] = order
+
+        # Candle 1: Reaches $2.60 profit (close=2652.60) on an expanding bar
+        # Triggering SCALP_RUNNING_TO_TP
+        c1 = {"open": 2650.5, "high": 2652.60, "low": 2650.5, "close": 2652.60}
+        events1 = self.engine.update_market_candle("XAUUSD", c1)
+        self.assertTrue(any(e["event"] == "SCALP_RUNNING_TO_TP" for e in events1))
+        self.assertTrue(getattr(order, "running_to_tp", False))
+        self.assertEqual(order.status, OrderStatus.OPEN)
+
+        # Candle 2: Consolidation candle at 2653.0 (high was 2654.5, so neither expanding bar nor near_peak)
+        # Because running_to_tp is True, it MUST NOT auto-close at $2.50; it waits for TP1!
+        c2 = {"open": 2652.5, "high": 2654.5, "low": 2652.5, "close": 2653.0}
+        events2 = self.engine.update_market_candle("XAUUSD", c2)
+        scalp_closes = [e for e in events2 if e["event"] == "SCALP_CLOSE"]
+        self.assertEqual(len(scalp_closes), 0)
+        self.assertEqual(order.status, OrderStatus.OPEN)
+        self.assertIn(order.id, self.engine.active_positions)
+
+        # Candle 3: Price hits TP1 (2656.0) with high 2657.0!
+        c3 = {"open": 2653.5, "high": 2657.0, "low": 2653.5, "close": 2656.5}
+        events3 = self.engine.update_market_candle("XAUUSD", c3)
+        tp_closes = [e for e in events3 if e["event"] == "SCALP_CLOSE"]
+        self.assertEqual(len(tp_closes), 1)
+        self.assertEqual(order.status, OrderStatus.CLOSED)
+        self.assertAlmostEqual(order.exit_price, 2656.0)
+        self.assertAlmostEqual(order.realized_pnl, 6.0)
+        self.assertIn("Scalp TP1 Target Hit", order.close_reason)
+
+    def test_scalp_trail_enlarged_buffer_default(self):
+        """Verify scalp engine defaults have increased trail buffer (1.50) and distance (2.00)."""
+        engine = ExecutionEngine(risk_manager=self.risk_mgr)
+        self.assertEqual(engine.scalp_trail_buffer_usd, 1.50)
+        self.assertEqual(engine.scalp_trail_distance_usd, 2.00)
+        self.assertEqual(engine.scalp_trail_activation_usd, 2.00)
+        self.assertEqual(engine.scalp_be_lock_usd, 0.50)
+
 
 if __name__ == "__main__":
     unittest.main()
