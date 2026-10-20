@@ -221,19 +221,57 @@ class TestAgentsAndArbiter(unittest.TestCase):
         self.assertEqual(v_empty.direction, OTEDir.FLAT)
         self.assertEqual(v_empty.reason, "Need more bars")
 
+    def test_squeeze_scalp_agent(self):
+        from volatility_squeeze_scalp import SqueezeScalpAgent, SqueezeDir
+        agent = SqueezeScalpAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "VOLATILITY-SQUEEZE")
+        self.assertIn(vote.direction, (SqueezeDir.LONG, SqueezeDir.SHORT, SqueezeDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame
+        import pandas as pd
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, SqueezeDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, SqueezeDir.FLAT)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
+    def test_ribbon_scalp_agent(self):
+        from momentum_ribbon_scalp import RibbonScalpAgent, RibbonDir
+        agent = RibbonScalpAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "RIBBON-SCALP")
+        self.assertIn(vote.direction, (RibbonDir.LONG, RibbonDir.SHORT, RibbonDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame
+        import pandas as pd
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, RibbonDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, RibbonDir.FLAT)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
     def test_evaluate_symbol(self):
         res = evaluate_symbol("XAUUSD", source="demo")
         self.assertEqual(res["symbol"], "XAUUSD")
         self.assertGreater(res["price"], 0.0)
         self.assertIn("votes", res)
-        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12, 13, 14))
+        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
         self.assertIn("mt5_chart", res)
 
     def test_evaluate_symbol_btc_normalization(self):
         res = evaluate_symbol("BTC", source="demo", on_demand=True)
         self.assertEqual(res["symbol"], "BTCUSDT")
         self.assertGreater(res["price"], 0.0)
-        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12, 13, 14))
+        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
         self.assertIn("mt5_chart", res)
 
 

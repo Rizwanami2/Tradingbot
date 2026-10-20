@@ -23,6 +23,7 @@ class StrategyProfile:
         "FAKE-BREAKOUT": 1.35, "MTF-CONFLUENCE": 1.40, "ASIAN-BREAKOUT": 1.25,
         "MT5-CHART": 1.35, "ORR-STRATEGY": 1.50,
         "SUPPLY-DEMAND": 1.45, "OTE-STRATEGY": 1.45,
+        "VOLATILITY-SQUEEZE": 1.55, "RIBBON-SCALP": 1.50,
     })
     min_agreement: int = 2
     min_score: float = 1.2
@@ -91,6 +92,8 @@ DEFAULT_PROFILES = {
             "ORR-STRATEGY": 1.50,
             "SUPPLY-DEMAND": 1.45,
             "OTE-STRATEGY": 1.45,
+            "VOLATILITY-SQUEEZE": 1.60,
+            "RIBBON-SCALP": 1.55,
         },
         min_agreement=2,
         min_score=1.0,
@@ -129,7 +132,7 @@ DEFAULT_PROFILES = {
     "swing": StrategyProfile(
         name="swing",
         description="Higher TF focus, tight high-conviction setup, wider targets",
-        weights={"TREND": 1.5, "LIQUIDITY": 1.3, "INDICATORS": 0.9, "AI-LEARNER": 1.0, "NEWS": 0.8, "FAKE-BREAKOUT": 1.25, "MTF-CONFLUENCE": 1.50, "ASIAN-BREAKOUT": 1.20, "MT5-CHART": 1.40, "ORR-STRATEGY": 1.45, "SUPPLY-DEMAND": 1.50, "OTE-STRATEGY": 1.50},
+        weights={"TREND": 1.5, "LIQUIDITY": 1.3, "INDICATORS": 0.9, "AI-LEARNER": 1.0, "NEWS": 0.8, "FAKE-BREAKOUT": 1.25, "MTF-CONFLUENCE": 1.50, "ASIAN-BREAKOUT": 1.20, "MT5-CHART": 1.40, "ORR-STRATEGY": 1.45, "SUPPLY-DEMAND": 1.50, "OTE-STRATEGY": 1.50, "VOLATILITY-SQUEEZE": 1.40, "RIBBON-SCALP": 1.35},
         min_agreement=3,
         min_score=1.70,
         min_rr=2.5,
@@ -143,7 +146,7 @@ DEFAULT_PROFILES = {
     "gold_only": StrategyProfile(
         name="gold_only",
         description="Optimized for XAU / Gold",
-        weights={"TREND": 1.2, "LIQUIDITY": 1.6, "INDICATORS": 1.0, "AI-LEARNER": 0.85, "NEWS": 1.0, "FAKE-BREAKOUT": 1.45, "MTF-CONFLUENCE": 1.45, "ASIAN-BREAKOUT": 1.35, "MT5-CHART": 1.45, "ORR-STRATEGY": 1.55, "SUPPLY-DEMAND": 1.55, "OTE-STRATEGY": 1.55},
+        weights={"TREND": 1.2, "LIQUIDITY": 1.6, "INDICATORS": 1.0, "AI-LEARNER": 0.85, "NEWS": 1.0, "FAKE-BREAKOUT": 1.45, "MTF-CONFLUENCE": 1.45, "ASIAN-BREAKOUT": 1.35, "MT5-CHART": 1.45, "ORR-STRATEGY": 1.55, "SUPPLY-DEMAND": 1.55, "OTE-STRATEGY": 1.55, "VOLATILITY-SQUEEZE": 1.55, "RIBBON-SCALP": 1.50},
         min_agreement=2,
         min_score=1.20,
         min_rr=1.5,
@@ -158,7 +161,7 @@ DEFAULT_PROFILES = {
     "crypto": StrategyProfile(
         name="crypto",
         description="Crypto-focused, lower leverage",
-        weights={"TREND": 1.3, "LIQUIDITY": 1.2, "INDICATORS": 1.1, "AI-LEARNER": 1.0, "NEWS": 1.1, "FAKE-BREAKOUT": 1.30, "MTF-CONFLUENCE": 1.35, "ASIAN-BREAKOUT": 1.25, "MT5-CHART": 1.30, "ORR-STRATEGY": 1.45, "SUPPLY-DEMAND": 1.45, "OTE-STRATEGY": 1.45},
+        weights={"TREND": 1.3, "LIQUIDITY": 1.2, "INDICATORS": 1.1, "AI-LEARNER": 1.0, "NEWS": 1.1, "FAKE-BREAKOUT": 1.30, "MTF-CONFLUENCE": 1.35, "ASIAN-BREAKOUT": 1.25, "MT5-CHART": 1.30, "ORR-STRATEGY": 1.45, "SUPPLY-DEMAND": 1.45, "OTE-STRATEGY": 1.45, "VOLATILITY-SQUEEZE": 1.55, "RIBBON-SCALP": 1.50},
         min_agreement=2,
         min_score=1.25,
         min_rr=2.0,
@@ -186,6 +189,8 @@ DEFAULT_PROFILES = {
             "ORR-STRATEGY": 1.50,
             "SUPPLY-DEMAND": 1.50,
             "OTE-STRATEGY": 1.50,
+            "VOLATILITY-SQUEEZE": 1.60,
+            "RIBBON-SCALP": 1.55,
         },
         min_agreement=2,
         min_score=1.20,

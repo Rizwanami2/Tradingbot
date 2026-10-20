@@ -105,6 +105,18 @@ except ImportError:
     OTEAgent = None
     OTEDir = None
 
+try:
+    from volatility_squeeze_scalp import SqueezeScalpAgent, SqueezeDir
+except ImportError:
+    SqueezeScalpAgent = None
+    SqueezeDir = None
+
+try:
+    from momentum_ribbon_scalp import RibbonScalpAgent, RibbonDir
+except ImportError:
+    RibbonScalpAgent = None
+    RibbonDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -613,6 +625,8 @@ class Arbiter:
         "ORR-STRATEGY": 1.50,
         "SUPPLY-DEMAND": 1.45,
         "OTE-STRATEGY": 1.45,
+        "VOLATILITY-SQUEEZE": 1.50,
+        "RIBBON-SCALP": 1.45,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -676,6 +690,8 @@ class Arbiter:
         self.orr = ORRAgent() if ORRAgent is not None else None
         self.sd = SupplyDemandAgent() if SupplyDemandAgent is not None else None
         self.ote = OTEAgent() if OTEAgent is not None else None
+        self.sqz = SqueezeScalpAgent() if SqueezeScalpAgent is not None else None
+        self.ribbon = RibbonScalpAgent() if RibbonScalpAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -779,6 +795,34 @@ class Arbiter:
             except Exception:
                 pass
 
+        if getattr(self, "sqz", None) is not None:
+            try:
+                sqz_v = self.sqz.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(sqz_v.direction, "name", str(sqz_v.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                v = Vote(sqz_v.agent, direction, float(sqz_v.strength), sqz_v.reason)
+                if hasattr(sqz_v, "stop_price"):
+                    v.stop_price = sqz_v.stop_price
+                if hasattr(sqz_v, "tp_price"):
+                    v.tp_price = sqz_v.tp_price
+                votes.append(v)
+            except Exception:
+                pass
+
+        if getattr(self, "ribbon", None) is not None:
+            try:
+                rib_v = self.ribbon.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(rib_v.direction, "name", str(rib_v.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                v = Vote(rib_v.agent, direction, float(rib_v.strength), rib_v.reason)
+                if hasattr(rib_v, "stop_price"):
+                    v.stop_price = rib_v.stop_price
+                if hasattr(rib_v, "tp_price"):
+                    v.tp_price = rib_v.tp_price
+                votes.append(v)
+            except Exception:
+                pass
+
         session_warn = None
         if is_tradeable_session is not None:
             try:
@@ -808,13 +852,22 @@ class Arbiter:
         # Institutional Synergy Booster:
         # Multiple institutional smart-money confirmations (Liquidity, MTF, ORR, S/D, OTE)
         # reinforce high-accuracy trade execution
-        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT"}
+        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT", "VOLATILITY-SQUEEZE", "RIBBON-SCALP"}
         long_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.LONG and v.strength >= 0.75)
         short_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.SHORT and v.strength >= 0.75)
         if long_inst_n >= 2:
             long_score = round(long_score * 1.15, 3)
         if short_inst_n >= 2:
             short_score = round(short_score * 1.15, 3)
+
+        # Scalp Velocity Booster:
+        # In scalp mode, accelerate conviction when fast momentum triggers fire
+        if getattr(self, "is_scalp", False):
+            SCALP_BURST_AGENTS = {"VOLATILITY-SQUEEZE", "RIBBON-SCALP", "MEAN-REVERSION"}
+            if any(v.agent in SCALP_BURST_AGENTS and v.direction == Dir.LONG and v.strength >= 0.80 for v in votes):
+                long_score = round(long_score * 1.10, 3)
+            if any(v.agent in SCALP_BURST_AGENTS and v.direction == Dir.SHORT and v.strength >= 0.80 for v in votes):
+                short_score = round(short_score * 1.10, 3)
 
         direction = Dir.FLAT
         score = 0.0

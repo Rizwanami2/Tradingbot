@@ -98,6 +98,8 @@ class AutonomousLearner:
         "ORR-STRATEGY": 1.45,
         "SUPPLY-DEMAND": 1.45,
         "OTE-STRATEGY": 1.45,
+        "VOLATILITY-SQUEEZE": 1.50,
+        "RIBBON-SCALP": 1.45,
     }
 
     def __init__(
