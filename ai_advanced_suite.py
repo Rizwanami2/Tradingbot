@@ -148,139 +148,11 @@ class AIAdvancedSuite:
         return float(np.clip(s, 0.0, 100.0))
 
     def is_manual_mode(self) -> bool:
-        return str(self.state.get("control_mode") or "auto").lower() in ("manual", "supervised", "advisory")
+        return True
 
     def evaluate_entry(self, ctx: SignalContext) -> GateResult:
-        res = GateResult(allow=True, size_mult=1.0)
-        if not self.enabled:
-            res.metadata["skipped"] = "AI_ADVANCED_ENABLED=false"
-            return res
-        self._roll_day()
-        direction = (ctx.direction or "FLAT").upper()
-        if direction in ("FLAT", "NONE", ""): return res.veto("flat direction")
-
-        # 1-trade manual override check
-        if self.state.get("override_next"):
-            self.state["override_next"] = False
-            self._save()
-            res.metadata["manual_override"] = True
-            res.reasons.append("manual override consumed (trade allowed)")
-            self._audit("entry_manual_override", {"symbol": ctx.symbol, "direction": direction})
-            return res
-
-        is_manual = self.is_manual_mode()
-        if is_manual:
-            res.metadata["manual_mode"] = True
-
-        def _veto_or_advise(reason: str) -> bool:
-            """In manual control mode, flag advisory warnings without hard blocking.
-            In auto mode, enforce strict algorithmic veto."""
-            if is_manual:
-                res.metadata.setdefault("advisory_vetoes", []).append(reason)
-                res.reasons.append(f"[MANUAL ADVISORY] {reason}")
-                return False
-            else:
-                res.veto(reason)
-                return True
-
-        if self.state.get("last_loss_ts"):
-            dt = time.time() - float(self.state["last_loss_ts"])
-            if dt < self.revenge_window_sec:
-                if _veto_or_advise(f"revenge-trade lock ({int(self.revenge_window_sec - dt)}s left)"):
-                    return res
-        is_scalp = bool(ctx.is_scalp or (ctx.profile and "scalp" in str(ctx.profile).lower()))
-        daily_cap = self.max_daily_scalp_trades if is_scalp else self.max_daily_trades
-        if int(self.state["daily"].get("trades", 0)) >= daily_cap:
-            if _veto_or_advise(f"max daily trades ({daily_cap})"):
-                return res
-        if int(self.state.get("consec_losses", 0)) >= self.max_consec_losses:
-            if _veto_or_advise(f"max consecutive losses ({self.max_consec_losses})"):
-                return res
-        if float(self.state["daily"].get("realized_r", 0.0)) <= -abs(self.daily_loss_r):
-            if _veto_or_advise(f"daily loss brake ({self.daily_loss_r}R)"):
-                return res
-        age = time.time() - float(ctx.signal_ts or time.time())
-        if age > self.stale_sec:
-            if _veto_or_advise(f"stale signal ({int(age)}s)"):
-                return res
-        regime = (ctx.regime or "unknown").lower()
-        if "chaos" in regime or "shock" in regime:
-            if _veto_or_advise(f"regime veto ({regime})"):
-                return res
-        persona = str(self.state.get("risk_persona") or "med").lower()
-        if persona == "low":
-            res.size_mult *= 0.5
-            if ctx.conviction < 0.65:
-                if _veto_or_advise("low-risk persona: conviction < 0.65"):
-                    return res
-        elif persona == "high":
-            res.size_mult *= 1.15
-        bias = str(self.state.get("bias_day") or "").lower()
-        if bias == "long" and direction != "LONG":
-            if _veto_or_advise("bias-day LONG only"):
-                return res
-        if bias == "short" and direction != "SHORT":
-            if _veto_or_advise("bias-day SHORT only"):
-                return res
-        profile = (ctx.profile or "").lower()
-        scorecard = self._scorecard(ctx)
-        res.scorecard = scorecard
-        balance_profiles = ("balance", "balanced", "protect", "conservative")
-        use_scorecard = (not self.balance_mode_only_scorecard) or (profile in balance_profiles or os.getenv("AI_MODE", "").lower() in balance_profiles)
-        if use_scorecard and scorecard < self.min_scorecard:
-            if _veto_or_advise(f"scorecard {scorecard:.0f} < {self.min_scorecard:.0f}"):
-                return res
-        if ctx.agent_dirs:
-            longs = sum(1 for d in ctx.agent_dirs.values() if str(d).upper() in ("LONG", "BUY"))
-            shorts = sum(1 for d in ctx.agent_dirs.values() if str(d).upper() in ("SHORT", "SELL"))
-            if longs and shorts and abs(longs - shorts) <= 1 and len(ctx.agent_dirs) >= 3:
-                if _veto_or_advise(f"agent conflict L{longs}/S{shorts}"):
-                    return res
-        if ctx.news_risk >= 0.75:
-            if _veto_or_advise(f"news risk {ctx.news_risk:.2f}"):
-                return res
-        if ctx.news_risk >= 0.5:
-            res.size_mult *= 0.5
-            res.reasons.append("news risk size cut")
-        if ctx.atr > 0 and ctx.spread > 0 and ctx.spread > 0.35 * ctx.atr:
-            if _veto_or_advise("spread too wide vs ATR"):
-                return res
-        if ctx.atr > 0 and ctx.entry_price > 0 and ctx.daily_open > 0:
-            move = abs(ctx.entry_price - ctx.daily_open) / ctx.atr
-            if move >= self.fomo_atr_mult and ctx.conviction < 0.75:
-                if _veto_or_advise(f"FOMO distance {move:.1f} ATR from daily open"):
-                    return res
-        if not ctx.structure_ok:
-            if _veto_or_advise("structure gate failed"):
-                return res
-        if ctx.htf_bias:
-            hb = ctx.htf_bias.upper()
-            if hb in ("LONG", "BULL") and direction == "SHORT":
-                res.size_mult *= 0.6
-            if hb in ("SHORT", "BEAR") and direction == "LONG":
-                res.size_mult *= 0.6
-        sym = ctx.symbol.upper()
-        hour = ctx.hour_utc if ctx.hour_utc is not None else datetime.now(timezone.utc).hour
-        if ("XAU" in sym or "GOLD" in sym) and 0 <= hour < 6:
-            res.size_mult *= 0.7
-        if "BTC" in sym and datetime.now(timezone.utc).weekday() >= 5:
-            res.size_mult *= 0.75
-        eq = float(self.state.get("equity") or 0.0)
-        peak = float(self.state.get("equity_peak") or eq or 1.0)
-        if peak > 0 and eq > 0:
-            dd = (peak - eq) / peak
-            if dd >= 0.10:
-                if _veto_or_advise("recovery mode: DD>=10%"):
-                    return res
-            if dd >= 0.06: res.size_mult *= 0.5
-            if dd >= 0.03: res.size_mult *= 0.75
-        res.size_mult = float(max(0.0, min(res.size_mult, 1.5)))
-        if res.size_mult <= 0.05:
-            if _veto_or_advise("size mult near zero"):
-                return res
-        res.reasons.append(f"scorecard={scorecard:.0f}")
-        self._audit("entry_allow" if res.allow else "entry_veto", {"symbol": ctx.symbol, "direction": direction, "scorecard": scorecard, "size_mult": res.size_mult, "reasons": list(res.reasons)})
-        return res
+        """AI veto completely removed: always allow entry."""
+        return GateResult(allow=True, size_mult=1.0, reasons=["AI veto disabled"])
 
     def on_trade_opened(self, symbol: str, direction: str, meta: Optional[Dict] = None) -> None:
         self._roll_day()
@@ -536,13 +408,5 @@ def get_ai_suite() -> AIAdvancedSuite:
     return _SUITE
 
 def evaluate_signal_dict(sig: Dict[str, Any], profile: str = "scalp") -> GateResult:
-    suite = get_ai_suite()
-    agents = sig.get("agents") or []
-    if isinstance(agents, dict):
-        agent_dirs = {str(k): str(v) for k, v in agents.items()}
-        agent_list = list(agent_dirs.keys())
-    else:
-        agent_list = [str(a) for a in agents]
-        agent_dirs = {}
-    ctx = SignalContext(symbol=str(sig.get("symbol") or ""), direction=str(sig.get("direction") or sig.get("side") or "FLAT").upper(), score=float(sig.get("score") or 0.0), conviction=float(sig.get("conviction") or 0.6), rr=float(sig.get("rr") or 0.0), agreement=int(sig.get("agreement") or sig.get("agree") or 0), regime=str(sig.get("regime") or ""), setup=str(sig.get("setup") or ""), agents=agent_list, agent_dirs=agent_dirs, features=sig.get("features"), entry_price=float(sig.get("entry") or sig.get("entry_level") or 0.0), atr=float(sig.get("atr") or 0.0), spread=float(sig.get("spread") or 0.0), session=str(sig.get("session") or ""), is_scalp=bool(sig.get("is_scalp")), profile=profile or str(sig.get("profile") or "scalp"), news_risk=float(sig.get("news_risk") or 0.0), daily_open=float(sig.get("daily_open") or 0.0), structure_ok=bool(sig.get("structure_ok", True)), htf_bias=str(sig.get("htf_bias") or ""), signal_ts=float(sig.get("signal_ts") or time.time()))
-    return suite.evaluate_entry(ctx)
+    """AI veto completely removed: always allow signal."""
+    return GateResult(allow=True, size_mult=1.0, reasons=["AI veto disabled"])
