@@ -870,7 +870,7 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = risk_mgr.state
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
-    cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().upper()
+    cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "continuous"))().upper()
     mode_label = "Signal-Driven (/signal executes)" if cur_auto_mode == "SIGNAL" else "Continuous Autonomous"
     auto_status = f"🟢 ACTIVE ({mode_label})" if autotrade_active else f"⚪ STOPPED ({mode_label})"
     summary = engine.get_portfolio_summary()
@@ -1850,7 +1850,7 @@ def get_gold_market_status() -> tuple:
 def build_watchlist_dashboard() -> tuple:
     """Generate Markdown text and inline keyboard for the Watchlist Dashboard."""
     active_symbols = getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)()
-    cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().upper()
+    cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "continuous"))().upper()
     mode_label = "Signal-Driven (/signal executes)" if cur_auto_mode == "SIGNAL" else "Continuous Autonomous"
     auto_status = f"🟢 ACTIVE ({mode_label})" if autotrade_active else f"⚪ STOPPED ({mode_label})"
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
@@ -2106,6 +2106,7 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         config.set_autotrade_mode("continuous")
         autotrade_active = True
         engine.reset_halt()
+        ensure_background_worker_running(ctx)
         await update.message.reply_text(
             "⚡ **Autotrade Mode: CONTINUOUS AUTONOMOUS**\n"
             "• **Trigger:** Autonomous 24/7 background trade entry + `/signal` on-demand\n"
@@ -2191,8 +2192,10 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
         except Exception:
             pass
+        config.set_autotrade_mode("continuous")
         autotrade_active = True
         engine.reset_halt()
+        ensure_background_worker_running(ctx)
         await update.message.reply_text(
             f"⚡ **RAPID SCALP AUTOTRADE ACTIVATED**\n"
             f"• **Execution Mode:** `{broker_mode}`\n"
@@ -2208,6 +2211,7 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         config.set_autotrade_mode("continuous")
         autotrade_active = True
         engine.reset_halt()
+        ensure_background_worker_running(ctx)
         mode_str = "CONTINUOUS AUTONOMOUS (24/7 Multi-Agent chart watching & auto-execution)"
         await update.message.reply_text(
             f"🟢 **Autotrade ACTIVATED**\n"
@@ -2585,8 +2589,10 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
     elif data == "wl:both":
         config.set_autotrade_symbols(["BTCUSDT", "XAUUSD"])
     elif data == "auto:on":
+        config.set_autotrade_mode("continuous")
         autotrade_active = True
         engine.reset_halt()
+        ensure_background_worker_running(ctx)
     elif data == "auto:off":
         autotrade_active = False
     elif data == "auto:scalp":
@@ -2595,8 +2601,10 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
             apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
         except Exception:
             pass
+        config.set_autotrade_mode("continuous")
         autotrade_active = True
         engine.reset_halt()
+        ensure_background_worker_running(ctx)
     elif data == "wl:positions":
         msg = engine.format_positions_detail() if hasattr(engine, "format_positions_detail") else str(engine.get_portfolio_summary())
         try:
@@ -4240,6 +4248,8 @@ async def chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def live_monitoring_worker(app):
+    global _background_autotrade_running
+    _background_autotrade_running = True
     try:
         from autotrade_worker import live_monitoring_worker as _multi_worker
         return await _multi_worker(
@@ -4250,164 +4260,32 @@ async def live_monitoring_worker(app):
             arbiter=arbiter,
             MarketDataFeed=MarketDataFeed,
             autotrade_active_getter=lambda: autotrade_active,
-            is_running_getter=lambda: _background_autotrade_running,
+            is_running_getter=(lambda: True) if app is not None else (lambda: _background_autotrade_running),
             write_runtime_status=_write_runtime_status,
             monitoring_health=monitoring_health,
             now_iso=_now_iso,
         )
     except Exception as _aw_err:
-        print("[autotrade_worker] using legacy worker:", _aw_err)
-    """Background task that polls candles and tracks setups/positions."""
-    try:
-        from multi_agent_trading_bot import _norm_trade_symbol
-        symbol = _norm_trade_symbol(getattr(config, "DEFAULT_SYMBOL", "XAUUSD"))
-    except Exception:
-        symbol = str(getattr(config, "DEFAULT_SYMBOL", "XAUUSD")).upper()
-        if symbol in ("XAUTUSD", "XAUT", "GOLD", "XAU"):
-            symbol = "XAUUSD"
-        if symbol in ("BTC", "BTCUSD", "XBT"):
-            symbol = "BTCUSDT"
-    feed = MarketDataFeed(symbol=symbol, source=config.DEFAULT_DATA_SOURCE)
-    _write_runtime_status()
-    while True:
-        monitoring_health["last_poll_at"] = _now_iso()
+        logger.error("[autotrade_worker] error: %s", _aw_err, exc_info=True)
+
+
+def ensure_background_worker_running(app_or_ctx=None):
+    global background_task, _background_autotrade_running
+    _background_autotrade_running = True
+    if background_task is None or background_task.done():
         try:
-            data = feed.multi_tf(limit_1m=500)
-            if data and "1m" in data and not data["1m"].empty:
-                monitoring_health["last_success_at"] = _now_iso()
-                monitoring_health["last_error"] = None
-                monitoring_health["consecutive_errors"] = 0
-                df1 = data["1m"]
-                daily = data.get("daily")
-                if daily is None or getattr(daily, "empty", True):
-                    try:
-                        daily = pd.DataFrame()
-                    except NameError:
-                        import pandas as _pd
-                        daily = _pd.DataFrame()
-                candle = df1.iloc[-1]
-                candle_dict = {
-                    "open": float(candle.get("open", candle["close"])),
-                    "high": float(candle["high"]),
-                    "low": float(candle["low"]),
-                    "close": float(candle["close"]),
-                }
-
-                if not autotrade_active and symbol in engine.pending_setups:
-                    engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
-
-                from anti_spam import get_anti_spam_limiter
-                limiter = get_anti_spam_limiter()
-
-                events = engine.update_market_candle(symbol, candle_dict)
-                for ev in events:
-                    logger.info(f"Execution Event: {ev['event']} - {ev.get('message')}")
-                    etype = ev.get("event")
-                    if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
-                        fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
-                        if fpnl < 0:
-                            limiter.record_loss(symbol, abs(fpnl))
-                        else:
-                            limiter.record_win(symbol)
-                    elif etype == "TRADE_EXECUTED":
-                        pos = ev.get("order")
-                        eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
-                        limiter.record_entry(symbol, eprice)
-                    if config.TELEGRAM_CHAT_ID:
-                        try:
-                            await app.bot.send_message(
-                                chat_id=config.TELEGRAM_CHAT_ID, text=ev["message"], parse_mode="Markdown"
-                            )
-                        except Exception:
-                            pass
-
-                is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
-                max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6)) or 6
-                open_n = len(engine.active_positions) + len(engine.pending_setups)
-                cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().lower()
-                if not autotrade_active:
-                    can_open = False
-                elif cur_mode == "signal":
-                    can_open = False
-                elif is_scalping:
-                    can_open, spam_reason = limiter.check_can_enter(
-                        symbol=symbol,
-                        current_price=candle_dict["close"],
-                        engine=engine,
-                        max_open=max_trades,
-                    )
-                else:
-                    can_open = (
-                        open_n < max_trades
-                        and symbol not in engine.active_positions
-                        and symbol not in engine.pending_setups
-                    )
-                    if can_open:
-                        can_open, spam_reason = limiter.check_can_enter(
-                            symbol=symbol,
-                            current_price=candle_dict["close"],
-                            engine=engine,
-                            max_open=max_trades,
-                        )
-                if can_open:
-                    sig, why, votes = arbiter.decide(
-                        df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr, symbol=symbol, on_demand=True
-                    )
-                    if not sig:
-                        logger.info("Autotrade: no setup — %s", why)
-                    if sig:
-                        order = engine.register_setup(sig, reason=sig.get("reason", ""))
-                        limiter.record_entry(symbol, order.entry_level)
-                        lot_mode_tag = " (Manual)" if getattr(order, "lot_mode", "auto") == "manual" else " (Auto)"
-                        alert = (
-                            f"⚡ **NEW MULTI-AGENT SETUP**\n"
-                            f"`{symbol}` **{order.direction}**\n"
-                            f"Entry `${order.entry_level:,.2f}` | SL `${order.stop_loss:,.2f}`\n"
-                            f"Lots `{order.lots}`{lot_mode_tag} | Lev `{order.leverage:.0f}x`\n"
-                            f"_{order.setup_reason}_"
-                        )
-                        if config.TELEGRAM_CHAT_ID:
-                            try:
-                                await app.bot.send_message(
-                                    chat_id=config.TELEGRAM_CHAT_ID, text=alert, parse_mode="Markdown"
-                                )
-                            except Exception:
-                                pass
-                        trig_events = engine.update_market_candle(symbol, candle_dict)
-                        for ev in trig_events:
-                            etype = ev.get("event")
-                            if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
-                                fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
-                                if fpnl < 0:
-                                    limiter.record_loss(symbol, abs(fpnl))
-                                else:
-                                    limiter.record_win(symbol)
-                            elif etype == "TRADE_EXECUTED":
-                                pos = ev.get("order")
-                                eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
-                                limiter.record_entry(symbol, eprice)
-                            if config.TELEGRAM_CHAT_ID:
-                                try:
-                                    await app.bot.send_message(
-                                        chat_id=config.TELEGRAM_CHAT_ID, text=ev["message"], parse_mode="Markdown"
-                                    )
-                                except Exception:
-                                    pass
-            else:
-                monitoring_health["last_error"] = "No market data returned"
-                monitoring_health["consecutive_errors"] += 1
+            app_target = None
+            if app_or_ctx is not None:
+                app_target = getattr(app_or_ctx, "application", None) or getattr(app_or_ctx, "bot", None) or app_or_ctx
+            loop = asyncio.get_running_loop()
+            background_task = loop.create_task(live_monitoring_worker(app_target))
+            logger.info("Live autotrade monitoring task started/restarted")
         except Exception as e:
-            monitoring_health["last_error"] = str(e)
-            monitoring_health["consecutive_errors"] += 1
-            logger.error(f"Monitoring worker error: {e}")
-
-        _write_runtime_status()
-        sleep_interval = config.FAST_POLL_INTERVAL if (engine.active_positions or engine.pending_setups) else config.POLL_INTERVAL
-        await asyncio.sleep(sleep_interval)
+            logger.debug("ensure_background_worker_running note: %s", e)
 
 
 _background_autotrade_thread: Optional[threading.Thread] = None
-_background_autotrade_running: bool = False
+_background_autotrade_running: bool = True
 
 
 def stop_background_autotrade_worker(timeout: float = 0.5) -> None:
@@ -4494,6 +4372,8 @@ def run_headless() -> None:
 
     print("Headless Trading Bot is running. Press Ctrl+C to terminate.")
     try:
+        global _background_autotrade_running
+        _background_autotrade_running = True
         asyncio.run(live_monitoring_worker(None))
     except (KeyboardInterrupt, SystemExit):
         print("\n[Headless] Trading Bot terminated.")
@@ -5861,7 +5741,7 @@ def main():
 
     async def on_post_init(application):
         logger.info("Initializing live monitoring background worker...")
-        asyncio.create_task(live_monitoring_worker(application))
+        ensure_background_worker_running(application)
 
         # Register official Telegram Bot Command list so Telegram UI command menu ('/') works
         try:

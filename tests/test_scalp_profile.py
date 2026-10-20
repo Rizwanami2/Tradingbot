@@ -585,9 +585,15 @@ class TestTelegramScalpCommands(unittest.IsolatedAsyncioTestCase):
 
 class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
     def setUp(self):
+        import main
+        main.engine.active_positions.clear()
+        main.engine.pending_setups.clear()
         self.risk_mgr = RiskManager(equity=10000.0, symbol="XAUUSD", state_file="test_scalp_multi_risk_mgr.json")
         self.risk_mgr.reset_daily_risk()
         self.engine = ExecutionEngine(risk_manager=self.risk_mgr)
+        self.engine.active_positions.clear()
+        self.engine.pending_setups.clear()
+        self.engine.save_state()
         self.engine.scalp_mode = True
         self.engine.scalp_trail_enabled = True
         self.engine.scalp_trail_activation_usd = 1.00
@@ -597,6 +603,12 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.engine.max_open_trades = 5
 
     def tearDown(self):
+        import main
+        main.engine.active_positions.clear()
+        main.engine.pending_setups.clear()
+        self.engine.active_positions.clear()
+        self.engine.pending_setups.clear()
+        self.engine.save_state()
         import os
         if os.path.exists("test_scalp_multi_risk_mgr.json"):
             try:

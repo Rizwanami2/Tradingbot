@@ -187,7 +187,7 @@ async def live_monitoring_worker(
                     engine.cancel_setup(r, reason=f"Symbol {r} removed from watchlist")
             watchlist = list(current_watchlist)
         monitoring_health["watchlist"] = list(watchlist)
-        cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().lower()
+        cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "continuous"))().lower()
         monitoring_health["autotrade_mode"] = cur_auto_mode
 
         try:
@@ -314,17 +314,23 @@ async def live_monitoring_worker(
                     cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "continuous"))().lower()
                     if not autotrade_active:
                         can_open = False
+                        monitoring_health[f"{symbol}_eval"] = "Autotrade paused"
                     elif cur_mode == "signal":
                         # In signal-driven mode, autotrade only executes when /signal is called;
                         # background worker manages open positions (TP/SL/trailing) but does not open new trades.
                         can_open = False
+                        monitoring_health[f"{symbol}_eval"] = "Signal-only mode (/signal executes)"
                     elif is_scalping:
                         # Deterministic scalp slot management: total capacity & per-currency limits (cooldowns bypassed)
                         can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open, bypass_cooldowns=True)
+                        if not can_open:
+                            monitoring_health[f"{symbol}_eval"] = f"Slot limit: {limit_reason}"
                     else:
                         can_open = open_n < max_open and symbol not in engine.active_positions and symbol not in engine.pending_setups
                         if can_open:
                             can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
+                        if not can_open:
+                            monitoring_health[f"{symbol}_eval"] = f"Capacity limit: {open_n}/{max_open}"
 
                     if can_open:
                         sig, why, votes = arbiter.decide(
