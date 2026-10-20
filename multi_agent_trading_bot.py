@@ -93,6 +93,18 @@ except ImportError:
     ORRAgent = None
     ORRDir = None
 
+try:
+    from supply_demand_strategy import SupplyDemandAgent, SDDir
+except ImportError:
+    SupplyDemandAgent = None
+    SDDir = None
+
+try:
+    from ote_strategy import OTEAgent, OTEDir
+except ImportError:
+    OTEAgent = None
+    OTEDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -311,6 +323,8 @@ class Vote:
     direction: Dir
     strength: float
     reason: str = ""
+    stop_price: Optional[float] = None
+    tp_price: Optional[float] = None
 
 
 class TrendAgent:
@@ -597,6 +611,8 @@ class Arbiter:
         "ASIAN-BREAKOUT": 1.25,
         "MT5-CHART": 1.35,
         "ORR-STRATEGY": 1.50,
+        "SUPPLY-DEMAND": 1.45,
+        "OTE-STRATEGY": 1.45,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -658,6 +674,8 @@ class Arbiter:
         self.asian = AsianBreakoutAgent() if AsianBreakoutAgent is not None else None
         self.mt5_chart = MT5ChartAgent()
         self.orr = ORRAgent() if ORRAgent is not None else None
+        self.sd = SupplyDemandAgent() if SupplyDemandAgent is not None else None
+        self.ote = OTEAgent() if OTEAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -724,7 +742,40 @@ class Arbiter:
                 ov = self.orr.vote(df1, daily if daily is not None else pd.DataFrame())
                 dname = getattr(ov.direction, "name", str(ov.direction)).upper()
                 direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
-                votes.append(Vote(ov.agent, direction, float(ov.strength), ov.reason))
+                v = Vote(ov.agent, direction, float(ov.strength), ov.reason)
+                if hasattr(ov, "stop_price"):
+                    v.stop_price = ov.stop_price
+                if hasattr(ov, "tp_price"):
+                    v.tp_price = ov.tp_price
+                votes.append(v)
+            except Exception:
+                pass
+
+        if getattr(self, "sd", None) is not None:
+            try:
+                sd_v = self.sd.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(sd_v.direction, "name", str(sd_v.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                v = Vote(sd_v.agent, direction, float(sd_v.strength), sd_v.reason)
+                if hasattr(sd_v, "stop_price"):
+                    v.stop_price = sd_v.stop_price
+                if hasattr(sd_v, "tp_price"):
+                    v.tp_price = sd_v.tp_price
+                votes.append(v)
+            except Exception:
+                pass
+
+        if getattr(self, "ote", None) is not None:
+            try:
+                ote_v = self.ote.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(ote_v.direction, "name", str(ote_v.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                v = Vote(ote_v.agent, direction, float(ote_v.strength), ote_v.reason)
+                if hasattr(ote_v, "stop_price"):
+                    v.stop_price = ote_v.stop_price
+                if hasattr(ote_v, "tp_price"):
+                    v.tp_price = ote_v.tp_price
+                votes.append(v)
             except Exception:
                 pass
 
@@ -753,6 +804,17 @@ class Arbiter:
             elif v.direction == Dir.SHORT:
                 short_score += w * v.strength
                 short_n += 1
+
+        # Institutional Synergy Booster:
+        # Multiple institutional smart-money confirmations (Liquidity, MTF, ORR, S/D, OTE)
+        # reinforce high-accuracy trade execution
+        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT"}
+        long_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.LONG and v.strength >= 0.75)
+        short_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.SHORT and v.strength >= 0.75)
+        if long_inst_n >= 2:
+            long_score = round(long_score * 1.15, 3)
+        if short_inst_n >= 2:
+            short_score = round(short_score * 1.15, 3)
 
         direction = Dir.FLAT
         score = 0.0
@@ -806,6 +868,18 @@ class Arbiter:
             else:
                 stop = entry + stop_dist
             tp1 = tp2 = None
+
+        # High-Accuracy Structural Stop Loss refinement:
+        # Ground stop loss directly behind institutional structure (Demand base / Supply ceiling / OTE origin / ORR retest)
+        for v in votes:
+            if v.direction == direction and getattr(v, "stop_price", None) is not None and v.strength >= 0.85:
+                sp = float(v.stop_price)
+                if direction == Dir.LONG and sp < entry and (entry - sp) <= stop_dist * 2.2 and (entry - sp) >= stop_dist * 0.4:
+                    stop = sp
+                    break
+                elif direction == Dir.SHORT and sp > entry and (sp - entry) <= stop_dist * 2.2 and (sp - entry) >= stop_dist * 0.4:
+                    stop = sp
+                    break
 
         plan = risk_mgr.position_size(entry=entry, stop=stop, symbol=symbol)
         if plan.lots <= 0:

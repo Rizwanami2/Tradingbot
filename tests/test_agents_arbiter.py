@@ -183,19 +183,57 @@ class TestAgentsAndArbiter(unittest.TestCase):
         self.assertEqual(v_empty.direction, ORRDir.FLAT)
         self.assertEqual(v_empty.reason, "Need more bars")
 
+    def test_supply_demand_agent(self):
+        from supply_demand_strategy import SupplyDemandAgent, SDDir
+        agent = SupplyDemandAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "SUPPLY-DEMAND")
+        self.assertIn(vote.direction, (SDDir.LONG, SDDir.SHORT, SDDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame
+        import pandas as pd
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, SDDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, SDDir.FLAT)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
+    def test_ote_agent(self):
+        from ote_strategy import OTEAgent, OTEDir
+        agent = OTEAgent()
+        vote = agent.vote(self.df1, self.daily)
+        self.assertEqual(vote.agent, "OTE-STRATEGY")
+        self.assertIn(vote.direction, (OTEDir.LONG, OTEDir.SHORT, OTEDir.FLAT))
+        self.assertGreaterEqual(vote.strength, 0.0)
+        self.assertLessEqual(vote.strength, 1.0)
+
+        # Edge cases: None, empty DataFrame
+        import pandas as pd
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, OTEDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        v_empty = agent.vote(pd.DataFrame())
+        self.assertEqual(v_empty.direction, OTEDir.FLAT)
+        self.assertEqual(v_empty.reason, "Need more bars")
+
     def test_evaluate_symbol(self):
         res = evaluate_symbol("XAUUSD", source="demo")
         self.assertEqual(res["symbol"], "XAUUSD")
         self.assertGreater(res["price"], 0.0)
         self.assertIn("votes", res)
-        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12))
+        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12, 13, 14))
         self.assertIn("mt5_chart", res)
 
     def test_evaluate_symbol_btc_normalization(self):
         res = evaluate_symbol("BTC", source="demo", on_demand=True)
         self.assertEqual(res["symbol"], "BTCUSDT")
         self.assertGreater(res["price"], 0.0)
-        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12))
+        self.assertIn(len(res["votes"]), (5, 6, 7, 8, 9, 10, 11, 12, 13, 14))
         self.assertIn("mt5_chart", res)
 
 
