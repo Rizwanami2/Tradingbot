@@ -117,6 +117,12 @@ except ImportError:
     RibbonScalpAgent = None
     RibbonDir = None
 
+try:
+    from stoch_rsi_scalp import StochRSIScalpAgent, StochDir
+except ImportError:
+    StochRSIScalpAgent = None
+    StochDir = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -627,6 +633,7 @@ class Arbiter:
         "OTE-STRATEGY": 1.45,
         "VOLATILITY-SQUEEZE": 1.50,
         "RIBBON-SCALP": 1.45,
+        "STOCH-RSI-SCALP": 1.50,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -692,6 +699,7 @@ class Arbiter:
         self.ote = OTEAgent() if OTEAgent is not None else None
         self.sqz = SqueezeScalpAgent() if SqueezeScalpAgent is not None else None
         self.ribbon = RibbonScalpAgent() if RibbonScalpAgent is not None else None
+        self.stoch = StochRSIScalpAgent() if StochRSIScalpAgent is not None else None
 
     def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
         votes = [
@@ -823,6 +831,20 @@ class Arbiter:
             except Exception:
                 pass
 
+        if getattr(self, "stoch", None) is not None:
+            try:
+                stoch_v = self.stoch.vote(df1, daily if daily is not None else pd.DataFrame())
+                dname = getattr(stoch_v.direction, "name", str(stoch_v.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                v = Vote(stoch_v.agent, direction, float(stoch_v.strength), stoch_v.reason)
+                if hasattr(stoch_v, "stop_price"):
+                    v.stop_price = stoch_v.stop_price
+                if hasattr(stoch_v, "tp_price"):
+                    v.tp_price = stoch_v.tp_price
+                votes.append(v)
+            except Exception:
+                pass
+
         session_warn = None
         if is_tradeable_session is not None:
             try:
@@ -852,7 +874,7 @@ class Arbiter:
         # Institutional Synergy Booster:
         # Multiple institutional smart-money confirmations (Liquidity, MTF, ORR, S/D, OTE)
         # reinforce high-accuracy trade execution
-        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT", "VOLATILITY-SQUEEZE", "RIBBON-SCALP"}
+        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT", "VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP"}
         long_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.LONG and v.strength >= 0.75)
         short_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.SHORT and v.strength >= 0.75)
         if long_inst_n >= 2:
@@ -863,7 +885,7 @@ class Arbiter:
         # Scalp Velocity Booster:
         # In scalp mode, accelerate conviction when fast momentum triggers fire
         if getattr(self, "is_scalp", False):
-            SCALP_BURST_AGENTS = {"VOLATILITY-SQUEEZE", "RIBBON-SCALP", "MEAN-REVERSION"}
+            SCALP_BURST_AGENTS = {"VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP", "MEAN-REVERSION"}
             if any(v.agent in SCALP_BURST_AGENTS and v.direction == Dir.LONG and v.strength >= 0.80 for v in votes):
                 long_score = round(long_score * 1.10, 3)
             if any(v.agent in SCALP_BURST_AGENTS and v.direction == Dir.SHORT and v.strength >= 0.80 for v in votes):

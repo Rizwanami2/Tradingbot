@@ -23,6 +23,14 @@ from momentum_ribbon_scalp import (
     detect_ribbon_scalp,
     ribbon_scalp_vote,
 )
+from stoch_rsi_scalp import (
+    StochRSIScalpAgent,
+    StochDir,
+    StochVote,
+    compute_stoch_rsi,
+    detect_stoch_rsi_scalp,
+    stoch_rsi_scalp_vote,
+)
 
 
 class TestScalpStrategies(unittest.TestCase):
@@ -139,6 +147,34 @@ class TestScalpStrategies(unittest.TestCase):
         rv = ribbon_scalp_vote(df)
         self.assertIsInstance(rv, RibbonVote)
         self.assertEqual(rv.agent, "RIBBON-SCALP")
+
+        stoch_v = stoch_rsi_scalp_vote(df)
+        self.assertIsInstance(stoch_v, StochVote)
+        self.assertEqual(stoch_v.agent, "STOCH-RSI-SCALP")
+
+    def test_stoch_rsi_scalp_agent(self):
+        agent = StochRSIScalpAgent()
+        v_none = agent.vote(None)
+        self.assertEqual(v_none.direction, StochDir.FLAT)
+        self.assertEqual(v_none.reason, "Need more bars")
+
+        # Bullish recovery from oversold
+        data = []
+        p = 2650.0
+        for i in range(40):
+            data.append({"open": p, "high": p + 0.1, "low": p - 0.5, "close": p - 0.4, "volume": 100})
+            p -= 0.4
+        # Turn around
+        for i in range(10):
+            data.append({"open": p, "high": p + 0.8, "low": p - 0.1, "close": p + 0.7, "volume": 150})
+            p += 0.7
+        df = pd.DataFrame(data)
+        vote = agent.vote(df)
+        self.assertEqual(vote.agent, "STOCH-RSI-SCALP")
+        self.assertIn(vote.direction, (StochDir.LONG, StochDir.SHORT, StochDir.FLAT))
+        if vote.direction != StochDir.FLAT:
+            self.assertIsNotNone(vote.stop_price)
+            self.assertIsNotNone(vote.tp_price)
 
 
 if __name__ == "__main__":

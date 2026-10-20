@@ -100,6 +100,7 @@ class AutonomousLearner:
         "OTE-STRATEGY": 1.45,
         "VOLATILITY-SQUEEZE": 1.50,
         "RIBBON-SCALP": 1.45,
+        "STOCH-RSI-SCALP": 1.50,
     }
 
     def __init__(
