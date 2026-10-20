@@ -33,66 +33,31 @@ def _get_pack():
 from telegram_brain import safe_reply
 
 
+async def _feature_removed_reply(update: Update, cmd: str):
+    await safe_reply(
+        update,
+        f"ℹ️ Command `/{cmd}` has been completely removed.\n"
+        "• All strategy signals execute directly without feature or veto gates.\n"
+        "• Use `/commands` to view active trading commands.",
+        parse_mode="Markdown",
+    )
+
+
 async def board_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        pack = _get_pack()
-        text = pack.board()
-        await safe_reply(update, text, parse_mode="Markdown")
-    except Exception as e:
-        logger.exception("Error in /board command: %s", e)
-        await safe_reply(update, f"Board error: {e}", parse_mode=None)
+    await _feature_removed_reply(update, "board")
 
 
 async def journal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        pack = _get_pack()
-        text = pack.journal.telegram_report()
-        recent = pack.journal.closed_summary(8)
-        if recent:
-            text += "\n\n*Recent closes:*"
-            for r in reversed(recent):
-                icon = "✅" if r.get("won") else "❌"
-                text += (
-                    f"\n{icon} `{r.get('symbol')}` {r.get('direction')} "
-                    f"R=`{r.get('r_multiple')}` PnL=`{r.get('pnl')}`"
-                )
-        await safe_reply(update, text, parse_mode="Markdown")
-    except Exception as e:
-        logger.exception("Error in /journal command: %s", e)
-        await safe_reply(update, f"Journal error: {e}", parse_mode=None)
+    await _feature_removed_reply(update, "journal")
 
 
 async def agents_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        pack = _get_pack()
-        await safe_reply(update, pack.agent_stats.telegram_report(), parse_mode="Markdown")
-    except Exception as e:
-        logger.exception("Error in /agents command: %s", e)
-        await safe_reply(update, f"Agents error: {e}", parse_mode=None)
+    await _feature_removed_reply(update, "agents")
 
 
 async def tiers_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        pack = _get_pack()
-        await safe_reply(update, pack.risk_tiers.telegram_line(), parse_mode="Markdown")
-    except Exception as e:
-        logger.exception("Error in /tiers command: %s", e)
-        await safe_reply(update, f"Tiers error: {e}", parse_mode=None)
+    await _feature_removed_reply(update, "tiers")
 
 
 def register_feature_pack(application) -> None:
-    existing_cmds = set()
-    for h in application.handlers.get(0, []):
-        if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
-            existing_cmds.update(h.commands)
-
-    for cmd, handler in [
-        ("board", board_command),
-        ("journal", journal_command),
-        ("agents", agents_command),
-        ("tiers", tiers_command),
-    ]:
-        if cmd not in existing_cmds:
-            application.add_handler(CommandHandler(cmd, handler))
-            existing_cmds.add(cmd)
-    logger.info("Registered Feature Pack: /board /journal /agents /tiers")
+    logger.info("Feature Pack commands (/board /journal /agents /tiers) removed by request")

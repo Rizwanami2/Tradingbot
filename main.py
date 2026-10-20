@@ -341,14 +341,13 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("🛡️ Risk & Safety", callback_data="cmd:cat:risk"),
-                InlineKeyboardButton("🧠 Autonomous AI", callback_data="cmd:cat:ai"),
-            ],
-            [
                 InlineKeyboardButton("📈 Backtest & Research", callback_data="cmd:cat:research"),
-                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
             ],
             [
+                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
                 InlineKeyboardButton("⚡ Quick Start", callback_data="cmd:cat:quick"),
+            ],
+            [
                 InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
             ],
         ])
@@ -425,21 +424,6 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
                 InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
-            ],
-        ])
-    elif cat in ("ai", "brain", "learner"):
-        return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🧠 Brain Status", callback_data="learner:status"),
-                InlineKeyboardButton("📜 Learned Rules", callback_data="learner:rules"),
-            ],
-            [
-                InlineKeyboardButton("🔍 Mined Flaws", callback_data="learner:flaws"),
-                InlineKeyboardButton("🔓 Clear Hour Bans", callback_data="learner:clearhours"),
-            ],
-            [
-                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-                InlineKeyboardButton("🧹 Reset Baseline", callback_data="learner:reset"),
             ],
         ])
     elif cat in ("research", "backtest"):
@@ -608,25 +592,6 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
         )
         return text, build_help_keyboard("research")
 
-    elif cat in ("ai", "brain", "learner", "agent", "agents"):
-        text = (
-            "🧠 **Autonomous AI & Standings:**\n"
-            "• `/ai [status|mode|manual|auto|override|reset|help]` — AI Advanced Suite & manual gating controls\n"
-            "• `/board` — Strategy board & agent standings\n"
-            "• `/journal` — Trade journal analytics & history\n"
-            "• `/agents` — Agent performance rankings & stats\n"
-            "• `/tiers` — Risk tier allocations\n"
-            "• `/digest` — Daily market performance digest\n"
-            "• `/brain` — Autonomous learner knowledge & win rates\n"
-            "• `/learner [on|off|unban|rules]` — Toggle learner veto filter & unban hours\n"
-            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
-            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
-            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
-            "• `/reset` — Clear conversation context\n"
-            "• `/ask [question]` — Conversational assistant with Gemini AI"
-        )
-        return text, build_help_keyboard("ai")
-
     elif cat in ("quick", "start"):
         text = (
             "⚡ **TradingBot Quick Start Guide**\n"
@@ -634,7 +599,7 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "1️⃣ **Analyze Setups:** Run `/signal btc` or `/signal gold` for multi-agent confluence\n"
             "2️⃣ **Automate Trading:** Run `/autotrade on` (trades BTC & Gold automatically)\n"
             "3️⃣ **Monitor PnL:** Check `/positions` for live profit and dynamic trailing stops\n"
-            "4️⃣ **Control Veto:** Use `/learner on|off` or `/veto on|off` to toggle AI vetoing\n"
+            "4️⃣ **Manage Risk:** Use `/risk` and `/settings` to configure lot sizing, leverage & stop buffers\n"
             "5️⃣ **Connect Broker:** Use `/mt5` for MT5 Live or `/delta` for Delta India\n\n"
             "💡 _Tap any button below to jump straight in:_"
         )
@@ -692,21 +657,9 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
             "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
             "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
-            "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n\n"
-            "🧠 **Autonomous AI & Standings:**\n"
-            "• `/board` — Strategy board & agent standings\n"
-            "• `/journal` — Trade journal analytics & history\n"
-            "• `/agents` — Agent performance rankings & stats\n"
-            "• `/tiers` — Risk tier allocations\n"
-            "• `/digest` — Daily market performance digest\n"
-            "• `/brain` — Autonomous learner knowledge & win rates\n"
-            "• `/learner [on|off]` — Autonomous learner veto toggle & unban\n"
-            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
-            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
-            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
-            "• `/reset` — Clear conversation context\n"
-            "• `/ask [question]` — Conversational assistant with Gemini AI\n\n"
-            "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`, `/commands ai`_"
+            "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
+            "• `/reset` — Clear conversation context\n\n"
+            "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`_"
         )
         return text, build_help_keyboard("main")
 
@@ -1712,11 +1665,37 @@ async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply.replace("*", "").replace("`", ""))
 
 
+async def featured_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Inform that feature and AI/veto commands have been completely removed."""
+    await safe_reply(
+        update,
+        "ℹ️ **Feature, AI, and Veto commands have been completely removed.**\n"
+        "• All strategy signals execute directly without feature or veto gates.\n"
+        "• Use `/commands` to view active trading, market, and risk commands.",
+        parse_mode="Markdown",
+    )
+
+
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Friendly fallback when an unrecognized command is typed."""
     text = getattr(update.message, "text", "") if (getattr(update, "message", None) and update.message.text) else "/command"
     cmd_raw = text.split()[0] if text else "/command"
     cmd_clean = cmd_raw.lower().lstrip("/")
+
+    removed_feature_cmds = {
+        "board", "journal", "agents", "tiers", "digest", "replay", "export",
+        "setups", "abooks", "heal", "brain", "relearn", "train", "learner",
+        "veto", "learnerveto", "ai", "aisuite", "feature", "features", "featured",
+    }
+    if cmd_clean in removed_feature_cmds:
+        await safe_reply(
+            update,
+            f"ℹ️ Command `/{cmd_clean}` has been completely removed.\n"
+            "• All trades execute directly without AI, veto, or feature gates.\n"
+            "• Use `/commands` to view all active trading commands.",
+            parse_mode="Markdown",
+        )
+        return
 
     suggestions = {
         "signals": "/signal",
@@ -1746,11 +1725,6 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "helpme": "/help",
         "commandslist": "/commands",
         "bot": "/status",
-        "aisuite": "/ai",
-        "suite": "/ai",
-        "riskpersona": "/ai persona",
-        "daybias": "/ai bias",
-        "scorecard": "/ai scorecard",
     }
 
     suggested = suggestions.get(cmd_clean)
@@ -5872,39 +5846,8 @@ def main():
     except Exception as e:
         logger.exception("Failed to register abacktest/profile/scalp handlers: %s", e)
 
-    # Autonomous AI & Feature Packs
-    try:
-        from telegram_feature_pack import board_command, journal_command, agents_command, tiers_command
-        app.add_handler(CommandHandler("board", board_command))
-        app.add_handler(CommandHandler("journal", journal_command))
-        app.add_handler(CommandHandler("agents", agents_command))
-        app.add_handler(CommandHandler("tiers", tiers_command))
-    except Exception:
-        pass
-    try:
-        from telegram_feature_pack_v4 import digest_command, replay_command, export_command, setups_command, abooks_command, heal_command
-        app.add_handler(CommandHandler("digest", digest_command))
-        app.add_handler(CommandHandler("replay", replay_command))
-        app.add_handler(CommandHandler("export", export_command))
-        app.add_handler(CommandHandler("setups", setups_command))
-        app.add_handler(CommandHandler("abooks", abooks_command))
-        app.add_handler(CommandHandler("heal", heal_command))
-    except Exception:
-        pass
-    try:
-        from telegram_brain import brain_command, relearn_command, train_command, learner_command, veto_command
-        app.add_handler(CommandHandler("brain", brain_command))
-        app.add_handler(CommandHandler("relearn", relearn_command))
-        app.add_handler(CommandHandler("train", train_command))
-        app.add_handler(CommandHandler(["learner", "autonomous"], learner_command))
-        app.add_handler(CommandHandler(["veto", "learnerveto"], veto_command))
-    except Exception:
-        pass
-    try:
-        from telegram_ai import ai_command
-        app.add_handler(CommandHandler(["ai", "aisuite"], ai_command))
-    except Exception:
-        pass
+    # Feature / AI / Veto commands removed
+    app.add_handler(CommandHandler(["feature", "features", "featured"], featured_command))
 
     # Conversational Assistant & Controls
     app.add_handler(CommandHandler(["ask", "chat"], ask_command))

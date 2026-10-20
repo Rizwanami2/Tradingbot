@@ -62,11 +62,5 @@ async def handle_ai_callback(data: Any, update: Optional[Update] = None, ctx: Op
 
 
 def register_ai_commands(application) -> None:
-    """Register /ai and /aisuite without conflicting with existing handlers."""
-    existing = set()
-    for h in application.handlers.get(0, []):
-        if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
-            existing.update(h.commands)
-    if "ai" not in existing:
-        application.add_handler(CommandHandler(["ai", "aisuite"], ai_command))
-        logger.info("Registered /ai command (Veto removed mode)")
+    """AI commands removed."""
+    logger.info("AI commands removed by request")

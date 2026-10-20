@@ -342,13 +342,6 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def register_all_advanced(application) -> None:
-    try:
-        from autonomous_learner import auto_start
-        auto_start()
-        logger.info("Autonomous learner auto-started")
-    except Exception as e:
-        logger.debug("Autonomous learner start skip: %s", e)
-
     existing_cmds = set()
     for h in application.handlers.get(0, []):
         if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
@@ -367,26 +360,4 @@ def register_all_advanced(application) -> None:
     _safe_add("asignal", asignal_command)
     _safe_add("abacktest", abacktest_command)
     _safe_add("backtestall", abacktest_command)
-    try:
-        from telegram_feature_pack import register_feature_pack
-        register_feature_pack(application)
-    except Exception as e:
-        logger.debug("Feature Pack v3 not registered: %s", e)
-    try:
-        from telegram_feature_pack_v4 import register_feature_pack_v4
-        register_feature_pack_v4(application)
-    except Exception as e:
-        logger.debug("Feature Pack v4 not registered: %s", e)
-    try:
-        from telegram_brain import register_brain
-        register_brain(application)
-    except Exception as e:
-        logger.debug("Brain commands not registered: %s", e)
-    try:
-        from telegram_ai import register_ai_commands
-        register_ai_commands(application)
-    except Exception as e:
-        logger.debug("AI commands not registered: %s", e)
-    logger.info(
-        "Registered advanced + FP3 + FP4 + /brain /relearn + /ai; autonomous learner active"
-    )
+    logger.info("Registered advanced trading commands: /performance /kill /profile /scalp /asignal /abacktest")
