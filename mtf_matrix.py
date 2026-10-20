@@ -399,11 +399,16 @@ def render_telegram_heatmap(snap_or_sym: Union[MatrixSnapshot, str]) -> str:
 
 
 def render_telegram_multi_matrix(symbols: Optional[List[str]] = None) -> str:
-    """Format a combined multi-symbol heatmap overview (e.g. Gold & Bitcoin)."""
+    """Format a combined multi-symbol heatmap overview (e.g. Gold & Bitcoin) with parallel evaluation."""
     syms = symbols or ["XAUUSD", "BTCUSDT"]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(4, len(syms))) as ex:
+        futures = {s: ex.submit(analyze_symbol_mtf, s) for s in syms}
+        snaps = {s: futures[s].result() for s in syms}
+
     blocks = []
     for s in syms:
-        snap = analyze_symbol_mtf(s)
+        snap = snaps[s]
         p_str = f"${snap.current_price:,.2f}" if snap.current_price >= 10.0 else f"${snap.current_price:,.4f}"
         score_bar = _render_score_bar(snap.overall_score)
         b_lines = [

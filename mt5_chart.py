@@ -31,6 +31,8 @@ _CONTEXT_CACHE: Dict[str, Tuple[float, str]] = {}
 _CONTEXT_LOCK = threading.Lock()
 _CHART_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
 _CHART_LOCK = threading.Lock()
+_COMBINED_CHART_CACHE: Dict[str, Tuple[float, str]] = {}
+_COMBINED_CHART_LOCK = threading.Lock()
 
 
 def normalize_mt5_symbol(symbol: str) -> str:
@@ -203,14 +205,16 @@ def fetch_mt5_candles(
     Returns list of dicts: [{"open": float, "high": float, "low": float, "close": float, "volume": float}]
     """
     norm_sym = normalize_mt5_symbol(symbol)
-    broker_id = id(broker) if broker is not None else "default"
-    cache_key = f"{norm_sym}_{timeframe}_{limit}_{broker_id}"
+    login_id = getattr(broker, "login", "default") if broker is not None else "default"
+    cache_key = f"{norm_sym}_{timeframe}_{limit}_{login_id}"
+    generic_key = f"{norm_sym}_{timeframe}_{limit}"
     now = time.time()
     with _CANDLE_LOCK:
-        if cache_key in _CANDLE_CACHE:
-            ts, cached_candles = _CANDLE_CACHE[cache_key]
-            if now - ts < max_age_seconds and cached_candles:
-                return copy.deepcopy(cached_candles)
+        for k in (cache_key, generic_key):
+            if k in _CANDLE_CACHE:
+                ts, cached_candles = _CANDLE_CACHE[k]
+                if now - ts < max_age_seconds and cached_candles:
+                    return copy.deepcopy(cached_candles)
 
     df: Optional[pd.DataFrame] = None
 
@@ -278,6 +282,7 @@ def fetch_mt5_candles(
     if candles:
         with _CANDLE_LOCK:
             _CANDLE_CACHE[cache_key] = (time.time(), candles)
+            _CANDLE_CACHE[generic_key] = (time.time(), candles)
 
     return candles
 
@@ -445,33 +450,8 @@ def compute_chart_technicals(candles: List[Dict[str, float]], live_mark: float =
     }
 
 
-def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any] = None) -> Dict[str, Any]:
-    """Compile comprehensive MT5 live chart data bundle for a symbol."""
-    norm_sym, name, icon = get_display_names(symbol)
-    tf_norm = timeframe.strip().upper()
-    cache_key = (norm_sym, tf_norm)
-    now = time.time()
-    if broker is None:
-        with _CHART_LOCK:
-            if cache_key in _CHART_CACHE:
-                ts, cached_bundle = _CHART_CACHE[cache_key]
-                if (now - ts) < 3.0:
-                    return dict(cached_bundle)
-
-    if broker is None:
-        try:
-            from mt5_broker import get_active_broker
-            broker = get_active_broker()
-        except Exception:
-            broker = None
-
-    quote = fetch_mt5_live_quote(norm_sym, broker=broker)
-    candles = fetch_mt5_candles(norm_sym, timeframe=timeframe, limit=14, broker=broker)
-    mark_p = quote["mark"]
-    technicals = compute_chart_technicals(candles, live_mark=mark_p)
-    ascii_plot = generate_ascii_candlestick_chart(candles, height=7)
-
-    # 1. Active MT5 open positions for this symbol
+def _extract_chart_positions_and_telemetry(norm_sym: str, mark_p: float, broker: Optional[Any]) -> Dict[str, Any]:
+    """Extract live broker and engine open positions, pending setups, and account metadata in sub-millisecond time."""
     open_positions: List[Dict[str, Any]] = []
     if broker is not None and hasattr(broker, "get_positions"):
         try:
@@ -537,7 +517,6 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
     except Exception as _e_err:
         logger.debug("Chart engine positions notice: %s", _e_err)
 
-    # 2. Pending setups for this symbol
     pending_setups: List[Dict[str, Any]] = []
     try:
         from main import engine
@@ -556,17 +535,6 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
     except Exception:
         pass
 
-    # 3. Signal key levels & market confluence
-    signal_levels: Dict[str, Any] = {}
-    try:
-        from realtime_prices import compute_levels
-        lvl_data = compute_levels(norm_sym)
-        if lvl_data.get("ok") and "levels" in lvl_data:
-            signal_levels = lvl_data["levels"]
-    except Exception:
-        pass
-
-    # Broker account telemetry
     server_name = "MetaQuotes-Demo"
     login_id = 0
     broker_mode = "LIVE"
@@ -586,6 +554,57 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
         except Exception:
             pass
 
+    return {
+        "open_positions": open_positions,
+        "pending_setups": pending_setups,
+        "server": server_name,
+        "login": login_id,
+        "broker_mode": broker_mode,
+        "trade_ready": trade_ready,
+        "leverage": leverage,
+    }
+
+
+def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any] = None) -> Dict[str, Any]:
+    """Compile comprehensive MT5 live chart data bundle for a symbol."""
+    norm_sym, name, icon = get_display_names(symbol)
+    tf_norm = timeframe.strip().upper()
+    cache_key = (norm_sym, tf_norm)
+    now = time.time()
+    with _CHART_LOCK:
+        if cache_key in _CHART_CACHE:
+            ts, cached_bundle = _CHART_CACHE[cache_key]
+            if (now - ts) < 4.0:
+                res = dict(cached_bundle)
+                dyn = _extract_chart_positions_and_telemetry(norm_sym, res.get("mark", 0.0), broker)
+                res.update(dyn)
+                return res
+
+    if broker is None:
+        try:
+            from mt5_broker import get_active_broker
+            broker = get_active_broker()
+        except Exception:
+            broker = None
+
+    quote = fetch_mt5_live_quote(norm_sym, broker=broker)
+    candles = fetch_mt5_candles(norm_sym, timeframe=timeframe, limit=14, broker=broker)
+    mark_p = quote["mark"]
+    technicals = compute_chart_technicals(candles, live_mark=mark_p)
+    ascii_plot = generate_ascii_candlestick_chart(candles, height=7)
+
+    # Signal key levels & market confluence
+    signal_levels: Dict[str, Any] = {}
+    try:
+        from realtime_prices import compute_levels
+        lvl_data = compute_levels(norm_sym)
+        if lvl_data.get("ok") and "levels" in lvl_data:
+            signal_levels = lvl_data["levels"]
+    except Exception:
+        pass
+
+    dyn = _extract_chart_positions_and_telemetry(norm_sym, mark_p, broker)
+
     bundle = {
         "symbol": norm_sym,
         "name": name,
@@ -598,19 +617,12 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
         "candles": candles,
         "ascii_chart": ascii_plot,
         "technicals": technicals,
-        "open_positions": open_positions,
-        "pending_setups": pending_setups,
         "signal_levels": signal_levels,
-        "server": server_name,
-        "login": login_id,
-        "broker_mode": broker_mode,
-        "trade_ready": trade_ready,
-        "leverage": leverage,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
-    if broker is None:
-        with _CHART_LOCK:
-            _CHART_CACHE[cache_key] = (now, bundle)
+    with _CHART_LOCK:
+        _CHART_CACHE[cache_key] = (time.time(), dict(bundle))
+    bundle.update(dyn)
     return bundle
 
 
@@ -713,7 +725,14 @@ def format_mt5_chart_card(chart_data: Dict[str, Any]) -> str:
 
 
 def format_combined_mt5_chart_dashboard(broker: Optional[Any] = None) -> str:
-    """Format combined MT5 Live Chart dashboard covering BOTH Bitcoin & Gold in parallel."""
+    """Format combined MT5 Live Chart dashboard covering BOTH Bitcoin & Gold in parallel with caching."""
+    now = time.time()
+    with _COMBINED_CHART_LOCK:
+        if "dashboard" in _COMBINED_CHART_CACHE:
+            ts, val = _COMBINED_CHART_CACHE["dashboard"]
+            if now - ts < 4.0 and val:
+                return val
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         f_btc = executor.submit(get_mt5_live_chart, "BTCUSD", "1m", broker)
         f_gold = executor.submit(get_mt5_live_chart, "XAUUSD", "1m", broker)
@@ -727,7 +746,10 @@ def format_combined_mt5_chart_dashboard(broker: Optional[Any] = None) -> str:
         f"⚡ **MetaTrader 5 (MT5) Institutional Live Charts**\n"
         f"Live multi-asset price feed & structural orderflow\n\n"
     )
-    return f"{header}{gold_card}\n\n{btc_card}"
+    result = f"{header}{gold_card}\n\n{btc_card}"
+    with _COMBINED_CHART_LOCK:
+        _COMBINED_CHART_CACHE["dashboard"] = (time.time(), result)
+    return result
 
 
 def get_mt5_combined_market_context(broker: Optional[Any] = None, max_age_seconds: float = 5.0) -> str:

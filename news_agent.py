@@ -25,6 +25,12 @@ class Vote:
     reason: str = ""
 
 
+_GLOBAL_HEADS_CACHE: Optional[List[str]] = None
+_GLOBAL_HEADS_TS: float = 0.0
+_GLOBAL_CAL_CACHE: Optional[List[Dict]] = None
+_GLOBAL_CAL_TS: float = 0.0
+
+
 class NewsAgent:
     name = "NEWS"
     FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
@@ -64,11 +70,15 @@ class NewsAgent:
         self.last_msg: str = ""
 
     def get_calendar(self) -> List[Dict]:
-        if time.time() - self._cal_ts < 900 and self._cal is not None:
+        global _GLOBAL_CAL_CACHE, _GLOBAL_CAL_TS
+        now = time.time()
+        if _GLOBAL_CAL_CACHE is not None and (now - _GLOBAL_CAL_TS < 1800):
+            return list(_GLOBAL_CAL_CACHE)
+        if self._cal is not None and (now - self._cal_ts < 1800):
             return self._cal
         events = []
         try:
-            resp = requests.get(self.FF_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+            resp = requests.get(self.FF_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=3.5)
             if resp.status_code == 200:
                 data = resp.json()
                 for item in data if isinstance(data, list) else []:
@@ -88,7 +98,9 @@ class NewsAgent:
         except Exception as e:
             self.last_msg = f"calendar error: {e}"
         self._cal = events
-        self._cal_ts = time.time()
+        self._cal_ts = now
+        _GLOBAL_CAL_CACHE = events
+        _GLOBAL_CAL_TS = now
         return self._cal
 
     def blackout(self, ts: datetime) -> Tuple[bool, str]:
@@ -107,24 +119,47 @@ class NewsAgent:
         return False, ""
 
     def crypto_headlines(self) -> List[str]:
-        if time.time() - self._heads_ts < 600 and self._heads is not None:
+        global _GLOBAL_HEADS_CACHE, _GLOBAL_HEADS_TS
+        now = time.time()
+        if _GLOBAL_HEADS_CACHE is not None and (now - _GLOBAL_HEADS_TS < 600):
+            return list(_GLOBAL_HEADS_CACHE)
+        if self._heads is not None and (now - self._heads_ts < 600):
             return self._heads
+
         heads: List[str] = []
-        for url in self.BTC_FEEDS:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _fetch_feed(url: str) -> List[str]:
+            res = []
             try:
-                r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+                r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=2.5)
                 if r.status_code == 200:
                     root = ET.fromstring(r.content)
                     for item in root.iter("item"):
                         title = item.findtext("title")
                         if title:
-                            heads.append(title.lower())
-                        if len(heads) >= 40:
+                            res.append(title.lower())
+                        if len(res) >= 30:
                             break
             except Exception:
-                continue
+                pass
+            return res
+
+        try:
+            with ThreadPoolExecutor(max_workers=min(4, len(self.BTC_FEEDS))) as ex:
+                futures = [ex.submit(_fetch_feed, u) for u in self.BTC_FEEDS]
+                for f in futures:
+                    try:
+                        heads.extend(f.result())
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         self._heads = heads[:60]
-        self._heads_ts = time.time()
+        self._heads_ts = now
+        _GLOBAL_HEADS_CACHE = self._heads
+        _GLOBAL_HEADS_TS = now
         return self._heads
 
     @staticmethod

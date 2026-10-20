@@ -529,8 +529,9 @@ class ExecutionEngine:
 
             # Check if this position is already tracked locally
             matched = False
+            active_snap = list(self.active_positions.values())
             if bp_ticket:
-                for p in self.active_positions.values():
+                for p in active_snap:
                     lp_ticket = str(getattr(p, "ticket", "") or getattr(p, "id", "") or "").strip()
                     if lp_ticket == bp_ticket:
                         matched = True
@@ -538,7 +539,7 @@ class ExecutionEngine:
 
             if not matched:
                 # Fallback to symbol + direction match if local order has no ticket yet
-                for p in self.active_positions.values():
+                for p in active_snap:
                     lp_ticket = str(getattr(p, "ticket", "") or "").strip()
                     if not lp_ticket and p.symbol.upper() == norm_sym and p.direction == bp_side:
                         if bp_ticket:
@@ -615,7 +616,7 @@ class ExecutionEngine:
         for bp in broker_positions:
             bp_ticket = str(getattr(bp, "ticket", "") or getattr(bp, "id", "") or "").strip()
             norm_sym = bp.symbol.upper()
-            for lp in self.active_positions.values():
+            for lp in list(self.active_positions.values()):
                 lp_ticket = str(getattr(lp, "ticket", "") or getattr(lp, "id", "") or "").strip()
                 if (bp_ticket and lp_ticket == bp_ticket) or (not lp_ticket and lp.symbol.upper() == norm_sym):
                     if bp.current_price:
@@ -2149,15 +2150,40 @@ class ExecutionEngine:
         return last_closed
 
     def get_current_price(self, symbol: str) -> Optional[float]:
-        """Resolve the latest market/mark price for a symbol using MT5 live feed."""
-        sym = symbol.upper()
-        # 1. Check broker live mark prices if available
+        """Resolve the latest market/mark price for a symbol using MT5 live feed with fast caching."""
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return None
+
+        now = time.time()
+        if not hasattr(self, "_price_cache"):
+            self._price_cache: Dict[str, Tuple[float, float]] = {}
+
+        # 0. Check in-memory fast TTL cache (3.0s)
+        if sym in self._price_cache:
+            ts, val = self._price_cache[sym]
+            if now - ts < 3.0 and val > 0:
+                return val
+
+        # 1. Check broker live mark prices if available with all common aliases
         if getattr(self, "broker", None) is not None:
-            if hasattr(self.broker, "mark_prices"):
-                for k in (sym, f"{sym}.m", f"{sym}m"):
+            if hasattr(self.broker, "mark_prices") and isinstance(self.broker.mark_prices, dict):
+                norm_candidates = [sym, f"{sym}.m", f"{sym}m"]
+                if sym.endswith("USDT"):
+                    c_usd = sym[:-1]
+                    norm_candidates.extend([c_usd, f"{c_usd}.m", f"{c_usd}m"])
+                elif sym.endswith("USD"):
+                    c_usdt = sym + "T"
+                    norm_candidates.extend([c_usdt, f"{c_usdt}.m", f"{c_usdt}m"])
+                if any(x in sym for x in ("XAU", "GOLD", "GC")):
+                    norm_candidates.extend(["XAUUSD", "GOLD", "XAUUSD.m", "GOLD.m"])
+                for k in norm_candidates:
                     bp = self.broker.mark_prices.get(k)
                     if bp and float(bp) > 0:
-                        return float(bp)
+                        val = float(bp)
+                        self._price_cache[sym] = (now, val)
+                        return val
+
         # 2. Check MT5 live quote
         try:
             from mt5_chart import fetch_mt5_live_quote
@@ -2173,9 +2199,15 @@ class ExecutionEngine:
                     p.current_price = price
                 for s in self.pending_setups.get_all(sym):
                     s.current_price = price
+                self._price_cache[sym] = (now, price)
+                if sym.endswith("USDT"):
+                    self._price_cache[sym[:-1]] = (now, price)
+                elif sym.endswith("USD"):
+                    self._price_cache[sym + "T"] = (now, price)
                 return price
         except Exception:
             pass
+
         # 3. Fetch live spot price from realtime_prices
         try:
             from realtime_prices import fetch_spot_price
@@ -2191,19 +2223,31 @@ class ExecutionEngine:
                     p.current_price = price
                 for s in self.pending_setups.get_all(sym):
                     s.current_price = price
+                self._price_cache[sym] = (now, price)
+                if sym.endswith("USDT"):
+                    self._price_cache[sym[:-1]] = (now, price)
+                elif sym.endswith("USD"):
+                    self._price_cache[sym + "T"] = (now, price)
                 return price
         except Exception:
             pass
+
         # 4. Fallback to active positions or pending setups cached current_price / entry
         if sym in self.active_positions:
             try:
                 pos = self.active_positions[sym]
-                return float(getattr(pos, "current_price", None) or pos.executed_price or pos.entry_level or 0.0)
+                val = float(getattr(pos, "current_price", None) or pos.executed_price or pos.entry_level or 0.0)
+                if val > 0:
+                    self._price_cache[sym] = (now, val)
+                    return val
             except Exception:
                 pass
         if sym in self.pending_setups:
             try:
-                return float(self.pending_setups[sym].entry_level or 0.0)
+                val = float(self.pending_setups[sym].entry_level or 0.0)
+                if val > 0:
+                    self._price_cache[sym] = (now, val)
+                    return val
             except Exception:
                 pass
         return None
@@ -2320,18 +2364,23 @@ class ExecutionEngine:
 
         # Current Market live quotes summary
         market_quotes = []
-        for msym in ("BTCUSDT", "XAUUSD"):
-            try:
-                mp = self.get_current_price(msym)
-                if mp and mp > 0:
-                    market_quotes.append(f"`{msym}`: `${mp:,.2f}`")
-            except Exception:
-                pass
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as _tp:
+                f_btc = _tp.submit(self.get_current_price, "BTCUSDT")
+                f_gold = _tp.submit(self.get_current_price, "XAUUSD")
+                mp_btc = f_btc.result()
+                mp_gold = f_gold.result()
+            if mp_btc and mp_btc > 0:
+                market_quotes.append(f"`BTCUSDT`: `${mp_btc:,.2f}`")
+            if mp_gold and mp_gold > 0:
+                market_quotes.append(f"`XAUUSD`: `${mp_gold:,.2f}`")
+        except Exception:
+            pass
         if market_quotes:
             lines.append(f"\n📊 **Current Market:** {' | '.join(market_quotes)}")
 
         # Real-time wallet telemetry
-        wallet = self.get_wallet_telemetry()
         curr = wallet.get("currency", "USD") or "USD"
         bal = wallet.get("balance", 0.0)
         eq = wallet.get("equity", 0.0)
@@ -2457,7 +2506,7 @@ class ExecutionEngine:
             pass
 
         # Refresh active positions with live MT5 market ticks
-        for p in self.active_positions.values():
+        for p in list(self.active_positions.values()):
             sym = getattr(p, "symbol", "")
             curr_p = self.get_current_price(sym)
             if curr_p and curr_p > 0:
@@ -2470,8 +2519,9 @@ class ExecutionEngine:
                         p.unrealized_pnl = (entry - curr_p) * p.remaining_size
 
         # Compute unrealized PnL from active positions
-        total_used_margin = sum(p.margin_required for p in self.active_positions.values())
-        total_unrealized_pnl = sum(p.unrealized_pnl for p in self.active_positions.values())
+        pos_snap = list(self.active_positions.values())
+        total_used_margin = sum(p.margin_required for p in pos_snap)
+        total_unrealized_pnl = sum(p.unrealized_pnl for p in pos_snap)
 
         # Sync with RiskManager
         is_mock_broker = broker is not None and type(broker).__name__ in ("MockMT5Broker", "MockDeltaBroker")
@@ -2527,8 +2577,9 @@ class ExecutionEngine:
     def get_portfolio_summary(self) -> Dict:
         """Returns account equity, margin utilization, and open positions stats."""
         wallet = self.get_wallet_telemetry()
-        total_used_margin = sum(p.margin_required for p in self.active_positions.values())
-        total_unrealized_pnl = sum(p.unrealized_pnl for p in self.active_positions.values())
+        pos_snap = list(self.active_positions.values())
+        total_used_margin = sum(p.margin_required for p in pos_snap)
+        total_unrealized_pnl = sum(p.unrealized_pnl for p in pos_snap)
         used_m = wallet.get("used_margin", 0.0) if wallet.get("used_margin", 0.0) > 0 else total_used_margin
         eq = wallet.get("equity", 0.0)
         bal = wallet.get("balance", eq)

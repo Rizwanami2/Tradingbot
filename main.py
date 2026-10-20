@@ -1453,19 +1453,16 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ok, msg = engine.set_slots_mode("manual", cnt)
                 await safe_reply(update, f"⚙️ {msg}\n\n" + engine.format_positions_detail(), parse_mode="Markdown")
                 return
-            elif args[0] in ("sync", "refresh", "reconcile", "wallet", "reload"):
-                if hasattr(engine, "reconcile_positions"):
-                    try:
-                        await _to_thread(engine.reconcile_positions)
-                    except Exception as rx:
-                        logger.debug("[positions_command] reconcile error: %s", rx)
-
-        # Always ensure positions are reconciled with MT5/broker before displaying
-        if hasattr(engine, "reconcile_positions"):
-            try:
-                await _to_thread(engine.reconcile_positions)
-            except Exception as rx:
-                logger.debug("[positions_command] auto reconcile note: %s", rx)
+        now_ts = time.time()
+        last_rec = getattr(engine, "_last_reconcile_ts", 0.0)
+        is_sync = bool(args and args[0] in ("sync", "refresh", "reconcile", "wallet", "reload"))
+        if is_sync or (now_ts - last_rec >= 2.0):
+            if hasattr(engine, "reconcile_positions"):
+                try:
+                    await _to_thread(engine.reconcile_positions)
+                    engine._last_reconcile_ts = time.time()
+                except Exception as rx:
+                    logger.debug("[positions_command] reconcile note: %s", rx)
 
         if hasattr(engine, "format_positions_detail"):
             msg = engine.format_positions_detail()
@@ -1817,8 +1814,18 @@ def get_gold_market_status() -> tuple:
     return True, "🟢 Open (24/5 Global Metals Session)"
 
 
+_WATCHLIST_CACHE: Dict[str, Tuple[float, Any]] = {}
+
+
 def build_watchlist_dashboard() -> tuple:
-    """Generate Markdown text and inline keyboard for the Watchlist Dashboard."""
+    """Generate Markdown text and inline keyboard for the Watchlist Dashboard with caching and parallel quotes."""
+    now = time.time()
+    cache_key = "dashboard"
+    if cache_key in _WATCHLIST_CACHE:
+        ts, val = _WATCHLIST_CACHE[cache_key]
+        if now - ts < 3.0 and val:
+            return val
+
     active_symbols = getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)()
     cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "continuous"))().upper()
     mode_label = "Signal-Driven (/signal executes)" if cur_auto_mode == "SIGNAL" else "Continuous Autonomous"
@@ -1831,14 +1838,20 @@ def build_watchlist_dashboard() -> tuple:
 
     btc_active = "BTCUSDT" in active_symbols
     btc_icon = "🟢 ACTIVE" if (autotrade_active and btc_active) else ("🟡 SELECTED (Paused)" if btc_active else "⚪ STANDBY")
-    btc_price = get_price_info("BTCUSDT")
+    gold_active = "XAUUSD" in active_symbols
+    gold_icon = "🟢 ACTIVE" if (autotrade_active and gold_active) else ("🟡 SELECTED (Paused)" if gold_active else "⚪ STANDBY")
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as _tp:
+        f_btc = _tp.submit(get_price_info, "BTCUSDT")
+        f_gold = _tp.submit(get_price_info, "XAUUSD")
+        btc_price = f_btc.result()
+        gold_price = f_gold.result()
+
     btc_mark = float(btc_price.get("mark") or btc_price.get("close") or 0.0)
     btc_chg = float(btc_price.get("change_pct") or 0.0)
     btc_rec = btc_price.get("recommendation") or "NEUTRAL"
 
-    gold_active = "XAUUSD" in active_symbols
-    gold_icon = "🟢 ACTIVE" if (autotrade_active and gold_active) else ("🟡 SELECTED (Paused)" if gold_active else "⚪ STANDBY")
-    gold_price = get_price_info("XAUUSD")
     gold_mark = float(gold_price.get("mark") or gold_price.get("close") or 0.0)
     gold_chg = float(gold_price.get("change_pct") or 0.0)
     gold_rec = gold_price.get("recommendation") or "NEUTRAL"
@@ -1917,7 +1930,9 @@ def build_watchlist_dashboard() -> tuple:
             InlineKeyboardButton("🔓 Clear Bans", callback_data="learner:clearhours"),
         ],
     ])
-    return text, markup
+    res = (text, markup)
+    _WATCHLIST_CACHE["dashboard"] = (time.time(), res)
+    return res
 
 
 async def watchlist_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3247,7 +3262,7 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Default: status dashboard
         cur_eff = getattr(b, "effective_backend", "N/A") if b else "N/A"
         cur_backend = getattr(b, "backend", getattr(config, "MT5_BACKEND", "auto")) if b else "auto"
-        res = await _to_thread(ea_client.status, magic=magic, timeout=1.5)
+        res = await _to_thread(ea_client.status, magic=magic, timeout=0.25)
         is_responsive = res.get("ok", False)
         status_icon = "🟢 Responsive" if is_responsive else "⚪ Awaiting MT5 EA"
         lines = [
@@ -3275,6 +3290,9 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• `/bridge dir <path>` — Change MT5 common directory",
         ])
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+_REGIME_CACHE: Dict[str, Tuple[float, Any]] = {}
 
 
 async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3330,12 +3348,18 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Unknown profile `{target}`. Valid: `{valid}`")
         return
 
-    feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
-    data = await _to_thread(feed.multi_tf, limit_1m=60)
-    df1 = data.get("1m") if data else None
-    metrics = compute_regime_indicators(df1) if df1 is not None else {"adx": 22.0, "atr_pct": 0.15, "bb_width": 0.005}
+    now_r = time.time()
+    cached_r = _REGIME_CACHE.get("regime")
+    if cached_r and (now_r - cached_r[0] < 30.0):
+        metrics, regime_desc = cached_r[1]
+    else:
+        feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
+        data = await _to_thread(feed.multi_tf, limit_1m=60)
+        df1 = data.get("1m") if data else None
+        metrics = compute_regime_indicators(df1) if df1 is not None else {"adx": 22.0, "atr_pct": 0.15, "bb_width": 0.005}
+        regime_desc = "Strong Trend" if metrics["adx"] >= 28 else ("Range / Chop" if metrics["adx"] < 20 else "Balanced Consolidation")
+        _REGIME_CACHE["regime"] = (now_r, (metrics, regime_desc))
     cur_prof = get_current_profile()
-    regime_desc = "Strong Trend" if metrics["adx"] >= 28 else ("Range / Chop" if metrics["adx"] < 20 else "Balanced Consolidation")
 
     lines = [
         f"📊 **Market Regime & Strategy Profile**",
@@ -5804,7 +5828,13 @@ def main():
         except Exception as e:
             logger.debug("Autonomous learner start skip: %s", e)
 
-    app = ApplicationBuilder().token(token).post_init(on_post_init).build()
+    app = (
+        ApplicationBuilder()
+        .token(token)
+        .concurrent_updates(True)
+        .post_init(on_post_init)
+        .build()
+    )
 
     # Core Navigation & Help
     app.add_handler(CommandHandler("start", start_command))
