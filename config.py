@@ -8,6 +8,11 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict
 
+ROOT_DIR = Path(__file__).resolve().parent
+_STRATEGIES_DIR = str(ROOT_DIR / "strategies")
+if _STRATEGIES_DIR not in sys.path:
+    sys.path.insert(0, _STRATEGIES_DIR)
+
 
 
 def load_dotenv(env_path: str = ".env"):

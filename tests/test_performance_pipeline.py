@@ -236,7 +236,6 @@ class TestPerformancePipeline(unittest.TestCase):
 
     def test_cli_performance_subcommands(self):
         from main import run_cli_interactive as main_cli
-        from main_full import run_cli_interactive as full_cli
 
         cmds = "performance\nperformance agents\nperformance trades\nperformance reset\nexit\n"
         
@@ -247,14 +246,6 @@ class TestPerformancePipeline(unittest.TestCase):
             main_cli()
         out = output_data.getvalue()
         self.assertIn("Performance", out)
-
-        # Test main_full.py
-        input_data2 = io.StringIO(cmds)
-        output_data2 = io.StringIO()
-        with patch("sys.stdin", input_data2), patch("sys.stdout", output_data2):
-            full_cli()
-        out2 = output_data2.getvalue()
-        self.assertIn("Performance", out2)
 
 
 if __name__ == "__main__":

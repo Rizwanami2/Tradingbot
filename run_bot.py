@@ -11,6 +11,9 @@ import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+_STRAT = str(ROOT / "strategies")
+if _STRAT not in sys.path:
+    sys.path.insert(0, _STRAT)
 
 def _ensure_execution_engine() -> None:
     """Restore execution_engine.py if missing/empty without exiting the process."""

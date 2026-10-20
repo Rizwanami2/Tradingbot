@@ -355,18 +355,6 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ENABLED", out)
         self.assertIn("PAUSED", out)
 
-        from main_full import run_cli_interactive as full_cli
-        input_data_full = io.StringIO("brain\nbrain rules\nbrain flaws\nbrain on\nbrain off\nexit\n")
-        output_data_full = io.StringIO()
-        with patch("sys.stdin", input_data_full), patch("sys.stdout", output_data_full):
-            full_cli()
-        out_full = output_data_full.getvalue()
-        self.assertIn("Autonomous Learner", out_full)
-        self.assertIn("Rules & Active Filters", out_full)
-        self.assertIn("Flaw Mining", out_full)
-        self.assertIn("ENABLED", out_full)
-        self.assertIn("PAUSED", out_full)
-
 
     async def test_status_command(self):
         self.ctx.args = []

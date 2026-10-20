@@ -2273,7 +2273,7 @@ async def handle_command_menu_callback(data: Any, update: Optional[Update] = Non
         elif action == "quality":
             ctx.args = []
             try:
-                from telegram_feature_pack_v4 import quality_command
+                from telegram_advanced import quality_command
                 await quality_command(update, ctx)
             except Exception as e:
                 await query.message.reply_text(f"Quality error: {e}")
@@ -5826,7 +5826,7 @@ def main():
     except Exception:
         app.add_handler(CommandHandler("asignal", signal_command))
     try:
-        from telegram_feature_pack_v4 import quality_command
+        from telegram_advanced import quality_command
         app.add_handler(CommandHandler("quality", quality_command))
     except Exception:
         pass

@@ -345,6 +345,30 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await safe_reply(update, f"Backtest error: {type(e).__name__}: {e}", parse_mode=None)
 
 
+async def quality_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Signal quality scorecard evaluation."""
+    try:
+        import config
+        from multi_agent_trading_bot import MarketDataFeed
+        from signal_quality import evaluate_signal_quality
+        sym = (ctx.args[0] if ctx.args else config.DEFAULT_SYMBOL).upper()
+        feed = MarketDataFeed(symbol=sym, source=getattr(config, "DEFAULT_DATA_SOURCE", "demo"))
+        data = feed.multi_tf(limit_1m=120)
+        df = data.get("1m") if data else None
+        if df is None or df.empty:
+            await safe_reply(update, "No data", parse_mode=None)
+            return
+        q = evaluate_signal_quality(df, "LONG", spread=0.0)
+        icon = "✅" if q.allowed else "❌"
+        clean_reasons = [str(r).replace("`", "'") for r in q.reasons]
+        reason_lines = "\n".join(f"• `{cr}`" for cr in clean_reasons)
+        msg = f"{icon} *Quality {sym}* score=`{q.score:.2f}`\n" + reason_lines
+        await safe_reply(update, msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /quality command: %s", e)
+        await safe_reply(update, f"Quality error: {e}", parse_mode=None)
+
+
 def register_all_advanced(application) -> None:
     try:
         from autonomous_learner import auto_start
@@ -371,6 +395,7 @@ def register_all_advanced(application) -> None:
     _safe_add("asignal", asignal_command)
     _safe_add("abacktest", abacktest_command)
     _safe_add("backtestall", abacktest_command)
+    _safe_add("quality", quality_command)
 
     try:
         from telegram_brain import register_brain
