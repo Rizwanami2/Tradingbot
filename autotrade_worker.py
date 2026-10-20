@@ -378,14 +378,20 @@ async def live_monitoring_worker(
                             d = sig.get("direction")
                             dname = d.name if hasattr(d, "name") else str(d)
                             is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
+                            # Ensure fast market execution for autotrade consensus setups
+                            sig["fast_market_fill"] = True
 
                             # Multi-Timeframe Trend & Volatility Confluence Matrix check
                             try:
                                 from mtf_matrix import check_mtf_confluence
                                 mtf_ok, mtf_reason, mtf_mult = check_mtf_confluence(symbol, dname, is_scalp=is_scalp_sig)
                                 if not mtf_ok:
-                                    logger.info("Autotrade %s: vetoed by MTF Confluence Matrix — %s", symbol, mtf_reason)
-                                    continue
+                                    score_val = float(sig.get("score") or 0.0)
+                                    if agree >= 2 or score_val >= 1.0:
+                                        logger.info("Autotrade %s: MTF Confluence warning (%s) overridden by Arbiter consensus (score=%.2f, votes=%d)", symbol, mtf_reason, score_val, agree)
+                                    else:
+                                        logger.info("Autotrade %s: vetoed by MTF Confluence Matrix — %s", symbol, mtf_reason)
+                                        continue
                                 if mtf_mult > 1.0 and "score" in sig:
                                     sig["score"] = float(sig["score"]) * mtf_mult
                             except Exception as _mtf_err:
@@ -398,12 +404,15 @@ async def live_monitoring_worker(
                                     _cdata = get_mt5_live_chart(symbol, timeframe="1m")
                                     if _cdata and _cdata.get("ok", True):
                                         _tbias = str(_cdata.get("technicals", {}).get("trend_bias", "")).upper()
-                                        if "BEARISH" in _tbias and ("BUY" in dname.upper() or "LONG" in dname.upper()):
-                                            logger.info("Autotrade %s: scalp vetoed by opposing MT5 live chart trend (%s)", symbol, _tbias)
-                                            continue
-                                        elif "BULLISH" in _tbias and ("SELL" in dname.upper() or "SHORT" in dname.upper()):
-                                            logger.info("Autotrade %s: scalp vetoed by opposing MT5 live chart trend (%s)", symbol, _tbias)
-                                            continue
+                                        score_val = float(sig.get("score") or 0.0)
+                                        is_opposing = ("BEARISH" in _tbias and ("BUY" in dname.upper() or "LONG" in dname.upper())) or \
+                                                      ("BULLISH" in _tbias and ("SELL" in dname.upper() or "SHORT" in dname.upper()))
+                                        if is_opposing:
+                                            if agree >= 2 or score_val >= 1.0:
+                                                logger.info("Autotrade %s: opposing MT5 live chart trend (%s) overridden by Arbiter consensus (score=%.2f, votes=%d)", symbol, _tbias, score_val, agree)
+                                            else:
+                                                logger.info("Autotrade %s: scalp vetoed by opposing MT5 live chart trend (%s)", symbol, _tbias)
+                                                continue
                                 except Exception as _mt5_err:
                                     logger.debug("Autotrade scalp MT5 chart check note: %s", _mt5_err)
 
@@ -418,8 +427,12 @@ async def live_monitoring_worker(
                                     is_scalp=is_scalp_sig,
                                 )
                                 if not sq_res.allowed:
-                                    logger.info("Autotrade %s: vetoed by Signal Quality — %s", symbol, ", ".join(sq_res.reasons))
-                                    continue
+                                    score_val = float(sig.get("score") or 0.0)
+                                    if agree >= 2 or score_val >= 1.0:
+                                        logger.info("Autotrade %s: Signal Quality warning (%s) overridden by Arbiter consensus (score=%.2f, votes=%d)", symbol, ", ".join(sq_res.reasons), score_val, agree)
+                                    else:
+                                        logger.info("Autotrade %s: vetoed by Signal Quality — %s", symbol, ", ".join(sq_res.reasons))
+                                        continue
                             except Exception as _sq_err:
                                 logger.debug("Autotrade signal quality note: %s", _sq_err)
 

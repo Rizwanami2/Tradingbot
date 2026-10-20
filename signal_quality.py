@@ -49,7 +49,7 @@ def liquidity_imbalance_score(df: pd.DataFrame, lookback: int = 40) -> Tuple[flo
         if h[i] < l[i - 2]:  # bearish gap
             gaps += 1
     density = gaps / max(1, lookback - 2)
-    score = float(min(1.0, density * 4.0))
+    score = float(min(1.0, 0.50 + density * 2.0))
     return score, f"imbalance density {density:.2f}"
 
 
@@ -157,11 +157,11 @@ def candle_quality(
         d = str(direction).upper()
         if "BUY" in d or "LONG" in d:
             # For BUY scalp, huge upper wick (selling pressure / shooting star rejection) kills accuracy
-            if upper_wick / rng > 0.45 and upper_wick > body * 1.4:
+            if upper_wick / rng > 0.55 and upper_wick > body * 1.4:
                 return False, "scalp opposing rejection wick (upper)", 0.25
         elif "SELL" in d or "SHORT" in d:
             # For SELL scalp, huge lower wick (buying pressure / hammer rejection) kills accuracy
-            if lower_wick / rng > 0.45 and lower_wick > body * 1.4:
+            if lower_wick / rng > 0.55 and lower_wick > body * 1.4:
                 return False, "scalp opposing rejection wick (lower)", 0.25
 
     if body_ratio < min_body:
@@ -209,10 +209,11 @@ def evaluate_signal_quality(
     reasons.append(msg_l)
 
     final = float(np.mean(scores)) if scores else 0.5
+    default_min_q = "0.35" if is_scalp else "0.45"
     try:
-        min_q = float(os.getenv("BOT_ACCURACY_MIN_QUALITY", "0.45") or 0.45)
+        min_q = float(os.getenv("BOT_ACCURACY_MIN_QUALITY", default_min_q) or default_min_q)
     except Exception:
-        min_q = 0.45
+        min_q = float(default_min_q)
     accuracy_on = os.getenv("BOT_ACCURACY_MODE", "false").lower() in ("true", "1", "yes", "on")
     if (accuracy_on or is_scalp) and final < min_q:
         reasons.append(f"quality {final:.2f} < min {min_q:.2f}")

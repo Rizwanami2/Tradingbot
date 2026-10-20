@@ -2018,7 +2018,7 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "🟢 **Autotrade: Autonomous Learner Veto ACTIVATED**\n"
                 "• Live signals are checked against learned rules and flaw bans.\n"
-                "• Use `/learner off` or `/veto off` to pause vetoing.",
+                "• Use `/learner off` to pause learner filtering.",
                 parse_mode="Markdown",
             )
             return
@@ -2032,7 +2032,7 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "🔴 **Autotrade: Autonomous Learner Veto PAUSED**\n"
                 "• All autotrade signals will execute unblocked by learner bans.\n"
-                "• Use `/learner on` or `/veto on` to re-enable vetoing.",
+                "• Use `/learner on` to re-enable learner filtering.",
                 parse_mode="Markdown",
             )
             return
