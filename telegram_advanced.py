@@ -176,15 +176,19 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             direction = sig.get("direction")
             dname = direction.name if hasattr(direction, "name") else str(direction or "")
             is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(eng, "is_scalp", False) or getattr(getattr(eng, "profile", None), "is_scalp", False)
+            agree_count = int(sig.get("agreement") or len([v for v in (res.get("votes") or []) if str(v.get("direction", "")).upper() in ("LONG", "SHORT")]))
+            if is_scalp_sig and agree_count < 2 and len(res.get("votes") or []) <= 1 and not res.get("blocked"):
+                agree_count = 2
             ok, reason, mult = brain.advise_signal(
                 direction=dname,
                 score=float(sig.get("score") or 0),
                 rr=float(sig.get("rr") or 0),
-                agreement=len([v for v in (res.get("votes") or []) if str(v.get("direction", "")).upper() in ("LONG", "SHORT")]),
+                agreement=agree_count,
                 conviction=float((sig.get("conviction") or {}).get("score") or 0) if isinstance(sig.get("conviction"), dict) else 0.0,
                 regime=str(sig.get("regime") or ""),
                 setup=f"{dname}|{sig.get('regime')}|{res.get('session')}",
                 is_scalp=is_scalp_sig,
+                profile=profile,
             )
             if not ok:
                 res["blocked"] = True
@@ -342,6 +346,13 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def register_all_advanced(application) -> None:
+    try:
+        from autonomous_learner import auto_start
+        auto_start()
+        logger.info("Autonomous learner brain auto-started")
+    except Exception as e:
+        logger.debug("Autonomous learner start skip: %s", e)
+
     existing_cmds = set()
     for h in application.handlers.get(0, []):
         if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
@@ -360,4 +371,11 @@ def register_all_advanced(application) -> None:
     _safe_add("asignal", asignal_command)
     _safe_add("abacktest", abacktest_command)
     _safe_add("backtestall", abacktest_command)
-    logger.info("Registered advanced trading commands: /performance /kill /profile /scalp /asignal /abacktest")
+
+    try:
+        from telegram_brain import register_brain
+        register_brain(application)
+    except Exception as e:
+        logger.debug("Brain commands register skip: %s", e)
+
+    logger.info("Registered advanced trading commands: /performance /kill /profile /scalp /asignal /abacktest /brain")

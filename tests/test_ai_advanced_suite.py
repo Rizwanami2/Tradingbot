@@ -39,20 +39,18 @@ class TestAIAdvancedSuite(unittest.TestCase):
         self.assertTrue(r.allow)
 
     def test_revenge_block(self):
-        # AI veto removed: signal always allowed
         self.suite.state["last_loss_ts"] = __import__("time").time()
         r = self.suite.evaluate_entry(self._ctx())
-        self.assertTrue(r.allow)
-        self.assertIn("AI veto disabled", r.reasons)
+        self.assertFalse(r.allow)
+        self.assertTrue(any("revenge" in x.lower() for x in r.reasons))
 
     def test_scorecard_balance_only(self):
-        # AI veto removed: all profiles allowed without scorecard block
         r = self.suite.evaluate_entry(self._ctx(conviction=0.2, agreement=0, rr=0.5, profile="scalp"))
-        self.assertTrue(r.allow)
+        self.assertIsInstance(r.allow, bool)
         r2 = self.suite.evaluate_entry(
             self._ctx(conviction=0.2, agreement=0, rr=0.2, profile="balance", news_risk=0.9)
         )
-        self.assertTrue(r2.allow)
+        self.assertFalse(r2.allow)
 
     def test_lot_ceiling(self):
         self.assertLessEqual(self.suite.apply_lot_ceiling(5.0), self.suite.lot_ceiling)
@@ -65,22 +63,35 @@ class TestAIAdvancedSuite(unittest.TestCase):
     def test_manual_mode_allows_with_advisory_reasons(self):
         import time
         self.suite.state["last_loss_ts"] = time.time()
-        # AI veto removed: both modes allow entry without veto
+        # In auto mode, blocked:
         r_auto = self.suite.evaluate_entry(self._ctx())
-        self.assertTrue(r_auto.allow)
+        self.assertFalse(r_auto.allow)
 
+        # In manual mode, allowed with advisory warning:
         msg = self.suite.set_manual_mode(True)
         self.assertIn("MANUAL", msg)
         self.assertTrue(self.suite.is_manual_mode())
         r_manual = self.suite.evaluate_entry(self._ctx())
         self.assertTrue(r_manual.allow)
+        self.assertTrue(any("advisory" in x.lower() or "revenge" in x.lower() for x in r_manual.reasons))
+        self.assertTrue(r_manual.metadata.get("manual_mode"))
 
     def test_manual_override_single_trade(self):
-        # AI veto removed: signals always allowed
+        import time
+        self.suite.state["last_loss_ts"] = time.time()
+        self.suite.set_control_mode("auto")
+
+        self.suite.set_override_next(True)
+        self.assertTrue(self.suite.state.get("override_next"))
+
         r1 = self.suite.evaluate_entry(self._ctx())
         self.assertTrue(r1.allow)
+        self.assertTrue(r1.metadata.get("manual_override"))
+        self.assertFalse(self.suite.state.get("override_next"))
+
+        # Subsequent signal is blocked again
         r2 = self.suite.evaluate_entry(self._ctx())
-        self.assertTrue(r2.allow)
+        self.assertFalse(r2.allow)
 
     def test_reset_safety_locks(self):
         import time

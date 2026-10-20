@@ -625,6 +625,20 @@ class Arbiter:
             self.fast_market_fill = getattr(prof, "fast_market_fill", False)
         except Exception:
             pass
+
+        # Combine with Brain self-learned agent weights
+        try:
+            from autonomous_learner import get_brain
+            brain = get_brain(auto_bootstrap=False)
+            if brain and getattr(brain.knowledge, "enabled", True) and brain.knowledge.agent_weights:
+                for k, w in brain.knowledge.agent_weights.items():
+                    if k in self.WEIGHTS:
+                        self.WEIGHTS[k] = round((self.WEIGHTS[k] + float(w)) / 2.0, 3)
+                    else:
+                        self.WEIGHTS[k] = round(float(w), 3)
+        except Exception:
+            pass
+
         self.trend = TrendAgent()
         self.liq = LiquidityAgent()
         self.ind = IndicatorAgent()
@@ -800,6 +814,7 @@ class Arbiter:
             "is_scalp": bool(getattr(self, "is_scalp", False)),
             "fast_market_fill": bool(getattr(self, "fast_market_fill", False)),
             "lot_mode": getattr(plan, "lot_mode", "auto"),
+            "agents": [v.agent for v in votes if getattr(v.direction, "name", str(v.direction)).upper() == direction.name],
             "mt5_chart": None,
         }
         try:

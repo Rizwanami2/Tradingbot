@@ -341,13 +341,14 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("🛡️ Risk & Safety", callback_data="cmd:cat:risk"),
+                InlineKeyboardButton("🧠 Autonomous AI", callback_data="cmd:cat:ai"),
+            ],
+            [
                 InlineKeyboardButton("📈 Backtest & Research", callback_data="cmd:cat:research"),
-            ],
-            [
                 InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
-                InlineKeyboardButton("⚡ Quick Start", callback_data="cmd:cat:quick"),
             ],
             [
+                InlineKeyboardButton("⚡ Quick Start", callback_data="cmd:cat:quick"),
                 InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
             ],
         ])
@@ -418,12 +419,27 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("❤️ Health Telemetry", callback_data="cmd:run:health"),
             ],
             [
-                InlineKeyboardButton("🎯 Sizing & Risk", callback_data="cmd:run:risk"),
-                InlineKeyboardButton("📦 Lot Configuration", callback_data="lot:info"),
+                InlineKeyboardButton("🔴 Pause Veto", callback_data="learner:off"),
+                InlineKeyboardButton("🟢 Activate Veto", callback_data="learner:on"),
             ],
             [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
+                InlineKeyboardButton("🎯 Sizing & Risk", callback_data="cmd:run:risk"),
+            ],
+        ])
+    elif cat in ("ai", "brain", "learner"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🧠 Brain Status", callback_data="learner:status"),
+                InlineKeyboardButton("📜 Learned Rules", callback_data="learner:rules"),
+            ],
+            [
+                InlineKeyboardButton("🔍 Mined Flaws", callback_data="learner:flaws"),
+                InlineKeyboardButton("🔓 Clear Hour Bans", callback_data="learner:clearhours"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("🧹 Reset Baseline", callback_data="learner:reset"),
             ],
         ])
     elif cat in ("research", "backtest"):
@@ -474,7 +490,7 @@ def build_settings_dashboard() -> Tuple[str, InlineKeyboardMarkup]:
         f"• **Lot Sizing:** `{lot_mode} ({lot_val})`\n"
         f"• **Account Leverage:** `{lev:.0f}x`\n"
         f"• **Active Slot Limit:** `{max_slots} trades max`\n"
-        f"• **AI & Veto:** `🔴 REMOVED (Direct Execution)`\n"
+        f"• **Learner Veto:** `{learner_st}`\n"
         f"• **Virtual Stops:** `{'🟢 Active' if getattr(engine, 'virtual_stops_enabled', True) else '⚪ Off'}`\n\n"
         "💡 _Tap buttons below for instant configuration:_"
     )
@@ -488,7 +504,7 @@ def build_settings_dashboard() -> Tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("🏦 Switch Broker", callback_data="mt5:refresh"),
         ],
         [
-            InlineKeyboardButton("🛡️ Sizing & Risk", callback_data="cmd:run:risk"),
+            InlineKeyboardButton("🧠 Learner Veto Toggle", callback_data="learner:toggle"),
             InlineKeyboardButton("🔄 Refresh Settings", callback_data="settings:refresh"),
         ],
         [
@@ -592,6 +608,25 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
         )
         return text, build_help_keyboard("research")
 
+    elif cat in ("ai", "brain", "learner", "agent", "agents"):
+        text = (
+            "🧠 **Autonomous AI & Multi-Agent Standings:**\n"
+            "• `/brain` — Autonomous learner knowledge, learned rules & win rates\n"
+            "• `/learner [on|off|unban|rules]` — Toggle learner veto filter & unban hours\n"
+            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
+            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
+            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
+            "• `/ai [status|mode|manual|auto|override|reset|help]` — AI Advanced Suite controls\n"
+            "• `/board` — Strategy board & agent standings\n"
+            "• `/journal` — Trade journal analytics & history\n"
+            "• `/agents` — Agent performance rankings & stats\n"
+            "• `/tiers` — Risk tier allocations\n"
+            "• `/digest` — Daily market performance digest\n"
+            "• `/reset` — Clear conversation context\n"
+            "• `/ask [question]` — Conversational assistant with Gemini AI"
+        )
+        return text, build_help_keyboard("ai")
+
     elif cat in ("quick", "start"):
         text = (
             "⚡ **TradingBot Quick Start Guide**\n"
@@ -659,7 +694,13 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
             "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
             "• `/reset` — Clear conversation context\n\n"
-            "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`_"
+            "🧠 **Autonomous Brain & Multi-Agent Learning:**\n"
+            "• `/brain` — Autonomous learner knowledge, learned rules & win rates\n"
+            "• `/learner [on|off|unban|rules]` — Toggle learner veto filter & unban hours\n"
+            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
+            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
+            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n\n"
+            "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`, `/commands ai`_"
         )
         return text, build_help_keyboard("main")
 
@@ -1851,8 +1892,19 @@ def build_watchlist_dashboard() -> tuple:
         f"• **Execution Mode:** `{broker_mode}` | **Profile:** `{profile}`\n"
         f"• **Lot Sizing:** `{'AUTO (Dynamic)' if getattr(risk_mgr.config, 'lot_mode', 'auto') == 'auto' else f'MANUAL ({risk_mgr.get_manual_lot():.2f} lots)'}`\n"
         f"• **Slots:** `{open_count}/{max_trades}` active (`{slots}` free)\n"
-        f"• **AI & Veto:** `🔴 REMOVED (Direct Execution)`\n"
     )
+
+    learner_active = True
+    try:
+        from autonomous_learner import get_brain
+        _b = get_brain(auto_bootstrap=False)
+        learner_active = getattr(_b.knowledge, "enabled", True)
+        l_icon = "🟢 ACTIVE" if learner_active else "🔴 PAUSED (/learner on)"
+        b_cnt = len(_b.knowledge.banned_hours)
+        b_info = f" ({b_cnt} banned hours)" if b_cnt and learner_active else ""
+        text += f"• **Learner Veto:** {l_icon}{b_info}\n"
+    except Exception:
+        pass
 
     text += (
         f"\n💡 **Switch Selection:**\n"
@@ -1860,6 +1912,7 @@ def build_watchlist_dashboard() -> tuple:
         f"• `/watchlist gold` — Trade Gold only\n"
         f"• `/watchlist both` — Trade both BTC + Gold\n"
         f"• `/autotrade on [btc|gold|both]`\n"
+        f"• `/learner on|off` — Toggle Autonomous Learner veto\n"
     )
 
     markup = InlineKeyboardMarkup([
@@ -1941,11 +1994,90 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = [a.lower() for a in (ctx.args or [])]
     arg = args[0] if args else ""
 
-    if args and args[0] in ("learner", "veto", "brain", "autobrain", "unban", "unbanhour", "unbanweekday"):
-        await update.message.reply_text(
-            "ℹ️ **AI and Veto features have been completely removed.**\n• All trades execute directly without AI filtering or veto blocks.",
-            parse_mode="Markdown",
-        )
+    if args and args[0] in ("learner", "veto", "brain", "autobrain"):
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        sub = args[1].lower() if len(args) > 1 else "toggle"
+        if sub in ("on", "1", "true", "enable", "start"):
+            brain.set_enabled(True)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(True)
+            except Exception:
+                pass
+            await update.message.reply_text(
+                "🟢 **Autotrade: Autonomous Learner Veto ACTIVATED**\n"
+                "• Live signals are checked against learned rules and flaw bans.\n"
+                "• Use `/learner off` or `/veto off` to pause vetoing.",
+                parse_mode="Markdown",
+            )
+            return
+        elif sub in ("off", "0", "false", "disable", "pause", "stop"):
+            brain.set_enabled(False)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(False)
+            except Exception:
+                pass
+            await update.message.reply_text(
+                "🔴 **Autotrade: Autonomous Learner Veto PAUSED**\n"
+                "• All autotrade signals will execute unblocked by learner bans.\n"
+                "• Use `/learner on` or `/veto on` to re-enable vetoing.",
+                parse_mode="Markdown",
+            )
+            return
+        elif sub in ("unban", "allow"):
+            target = args[2].lower() if len(args) > 2 else ""
+            wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+            if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+                brain.unban_weekday(w)
+                await update.message.reply_text(f"🔓 **Unbanned {wd_names[w]} (weekday {w})** from Autonomous Learner.", parse_mode="Markdown")
+            elif target in ("weekdays", "weekday", "allweekdays"):
+                c = brain.clear_banned_weekdays()
+                await update.message.reply_text(f"🔓 **Cleared all {c} banned weekdays** from Autonomous Learner.", parse_mode="Markdown")
+            elif target in ("all", "allbans", "everything"):
+                res = brain.clear_bans()
+                await update.message.reply_text(f"🔓 **Cleared all active bans** (Hours: {res['hours']}, Weekdays: {res['weekdays']}, Setups: {res['setups']}).", parse_mode="Markdown")
+            elif target.isdigit():
+                h = int(target) % 24
+                brain.unban_hour(h)
+                await update.message.reply_text(f"🔓 **Unbanned UTC hour {h:02d}:00** from Autonomous Learner.", parse_mode="Markdown")
+            else:
+                c = brain.clear_banned_hours()
+                await update.message.reply_text(f"🔓 **Cleared all {c} banned hours** from Autonomous Learner.", parse_mode="Markdown")
+            return
+        elif sub in ("rules", "filters"):
+            await update.message.reply_text(brain.format_rules(), parse_mode="Markdown")
+            return
+        else:
+            new_st = not getattr(brain.knowledge, "enabled", True)
+            brain.set_enabled(new_st)
+            st_text = "🟢 **ACTIVATED**" if new_st else "🔴 **PAUSED**"
+            await update.message.reply_text(f"🧠 **Autotrade Learner Veto:** {st_text}", parse_mode="Markdown")
+            return
+    elif args and args[0] in ("unban", "unbanhour", "unbanweekday"):
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        target = args[1].lower() if len(args) > 1 else ""
+        wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+        if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+            brain.unban_weekday(w)
+            await update.message.reply_text(f"🔓 **Unbanned {wd_names[w]} (weekday {w})** from Autonomous Learner.", parse_mode="Markdown")
+        elif target in ("weekdays", "weekday", "allweekdays"):
+            c = brain.clear_banned_weekdays()
+            await update.message.reply_text(f"🔓 **Cleared all {c} banned weekdays** from Autonomous Learner.", parse_mode="Markdown")
+        elif target in ("all", "allbans", "everything"):
+            res = brain.clear_bans()
+            await update.message.reply_text(f"🔓 **Cleared all active bans** (Hours: {res['hours']}, Weekdays: {res['weekdays']}, Setups: {res['setups']}).", parse_mode="Markdown")
+        elif target.isdigit():
+            h = int(target) % 24
+            brain.unban_hour(h)
+            await update.message.reply_text(f"🔓 **Unbanned UTC hour {h:02d}:00** from Autonomous Learner.", parse_mode="Markdown")
+        else:
+            c = brain.clear_banned_hours()
+            await update.message.reply_text(f"🔓 **Cleared all {c} banned hours** from Autonomous Learner.", parse_mode="Markdown")
         return
 
     if arg in ("signal", "signal_only", "ondemand", "on_demand"):
@@ -5846,8 +5978,18 @@ def main():
     except Exception as e:
         logger.exception("Failed to register abacktest/profile/scalp handlers: %s", e)
 
-    # Feature / AI / Veto commands removed
-    app.add_handler(CommandHandler(["feature", "features", "featured"], featured_command))
+    # Autonomous Brain & AI Suite
+    try:
+        from telegram_brain import register_brain
+        register_brain(app)
+    except Exception as _b_err:
+        logger.warning("Failed to register brain commands: %s", _b_err)
+
+    try:
+        from telegram_ai import register_ai_commands
+        register_ai_commands(app)
+    except Exception as _ai_err:
+        logger.warning("Failed to register AI commands: %s", _ai_err)
 
     # Conversational Assistant & Controls
     app.add_handler(CommandHandler(["ask", "chat"], ask_command))

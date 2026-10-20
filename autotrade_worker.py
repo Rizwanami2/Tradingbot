@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable, Dict, List
+import time
+from typing import Any, Callable, Dict, List, Tuple
 
 import pandas as pd
 
@@ -30,8 +31,42 @@ _last_ai_veto: Dict[str, Tuple[str, float]] = {}
 
 
 def _ai_gate_signal(sig: dict, symbol: str, profile: str, dname: str = "", agree: int = 0, conv_val: float = 0.6):
-    """AI and veto features removed completely: always allow signal."""
-    return True, sig
+    """Run AI Advanced Suite; return (allow, sig_updated). Never raises."""
+    try:
+        from ai_advanced_suite import evaluate_signal_dict, get_ai_suite
+        suite = get_ai_suite()
+        if not getattr(suite, "enabled", True):
+            return True, sig
+        if not sig.get("direction") and dname:
+            sig["direction"] = dname
+        if not sig.get("agreement"):
+            sig["agreement"] = agree
+        if sig.get("conviction") is None:
+            sig["conviction"] = conv_val
+        sig.setdefault("symbol", symbol)
+        gate = evaluate_signal_dict(sig, profile=str(profile or "scalp"))
+        if not gate.allow:
+            reasons_str = "; ".join(gate.reasons)
+            now_ts = time.time()
+            last_r, last_ts = _last_ai_veto.get(symbol, ("", 0.0))
+            if reasons_str != last_r or (now_ts - last_ts) >= 60.0:
+                logger.info("Autotrade %s: AI suite veto — %s", symbol, reasons_str)
+                _last_ai_veto[symbol] = (reasons_str, now_ts)
+            return False, sig
+        if gate.size_mult < 1.0 and sig.get("lot_mode", "auto") != "manual":
+            for k in ("lots", "size"):
+                if sig.get(k):
+                    sig[k] = max(0.01, round(float(sig[k]) * gate.size_mult, 4))
+            try:
+                sig["lots"] = suite.apply_lot_ceiling(float(sig.get("lots") or sig.get("size") or 0.01))
+            except Exception:
+                pass
+        sig["ai_scorecard"] = gate.scorecard
+        sig["ai_gate_reasons"] = list(gate.reasons)
+        return True, sig
+    except Exception as e:
+        logger.debug("AI suite gate error: %s", e)
+        return True, sig
 
 
 def _ai_on_open(symbol: str, direction: str, meta=None):
@@ -43,13 +78,32 @@ def _ai_on_open(symbol: str, direction: str, meta=None):
 
 
 def _ai_on_close(symbol: str, fpnl: float, ev: dict = None):
+    ev = ev or {}
+    r_mult = float(ev.get("r_multiple", ev.get("r", 0.0)) or 0.0)
+    if r_mult == 0.0 and fpnl != 0.0:
+        r_mult = 1.0 if fpnl > 0 else -1.0
     try:
         from ai_advanced_suite import get_ai_suite
-        ev = ev or {}
-        r_mult = float(ev.get("r_multiple", ev.get("r", 0.0)) or 0.0)
-        if r_mult == 0.0 and fpnl != 0.0:
-            r_mult = 1.0 if fpnl > 0 else -1.0
         get_ai_suite().on_trade_closed(symbol=symbol, won=fpnl >= 0, r_multiple=r_mult)
+    except Exception:
+        pass
+    try:
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        pos = ev.get("order") if ev else None
+        agents = getattr(pos, "agents", []) if pos else []
+        regime = getattr(pos, "regime", "") if pos else ""
+        session = getattr(pos, "session", "") if pos else ""
+        setup = f"{getattr(pos, 'direction', '').lower()}|{symbol.lower()}" if pos else f"live|{symbol.lower()}"
+        brain.on_trade_closed(
+            r_multiple=r_mult,
+            won=fpnl >= 0,
+            setup=setup,
+            regime=regime,
+            session=session,
+            agents=agents,
+            conf=getattr(pos, "conviction", 0.6) if pos else 0.6,
+        )
     except Exception:
         pass
 
@@ -312,6 +366,50 @@ async def live_monitoring_worker(
                             monitoring_health[f"{symbol}_eval"] = f"Waiting: {why}"
                         else:
                             monitoring_health[f"{symbol}_eval"] = f"Setup: {getattr(sig.get('direction'), 'name', str(sig.get('direction')))}"
+                            dname = ""
+                            agree = 0
+                            conv_val = 0.6
+                            try:
+                                from autonomous_learner import get_brain
+                                brain = get_brain(auto_bootstrap=False)
+                                d = sig.get("direction")
+                                dname = d.name if hasattr(d, "name") else str(d)
+                                agree = len([v for v in (votes or []) if str(getattr(v, "direction", v.get("direction", "") if isinstance(v, dict) else "")).upper() == dname.upper()])
+                                if isinstance(sig.get("conviction"), dict):
+                                    conv_val = float(sig["conviction"].get("score", 0.6) or 0.6)
+                                elif sig.get("conviction") is not None:
+                                    try:
+                                        conv_val = float(sig["conviction"])
+                                    except Exception:
+                                        conv_val = 0.6
+                                is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
+                                ok, reason, size_mult = brain.advise_signal(
+                                    direction=dname,
+                                    score=float(sig.get("score") or 0.0),
+                                    rr=float(sig.get("rr") or 0.0),
+                                    agreement=agree,
+                                    conviction=conv_val,
+                                    regime=str(sig.get("regime") or ""),
+                                    setup=f"{dname.lower()}|{sig.get('regime') or 'unknown'}",
+                                    is_scalp=is_scalp_sig,
+                                    profile=current_profile_name,
+                                )
+                                if not ok:
+                                    logger.info("Autotrade %s: vetoed by Autonomous Learner — %s", symbol, reason)
+                                    continue
+                                if size_mult < 1.0 and sig.get("lot_mode", "auto") != "manual":
+                                    if sig.get("lots"):
+                                        sig["lots"] = max(0.01, round(float(sig["lots"]) * size_mult, 4))
+                                    if sig.get("size"):
+                                        sig["size"] = max(0.01, round(float(sig["size"]) * size_mult, 4))
+                            except Exception as _b_err:
+                                logger.debug("Autotrade brain check error: %s", _b_err)
+
+                            # Combined AI Advanced Suite (automatic)
+                            ok_ai, sig = _ai_gate_signal(sig, symbol, current_profile_name, dname=dname, agree=agree, conv_val=conv_val)
+                            if not ok_ai:
+                                continue
+
                             d = sig.get("direction")
                             dname = d.name if hasattr(d, "name") else str(d)
                             is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
@@ -362,6 +460,10 @@ async def live_monitoring_worker(
 
                             try:
                                 order = engine.register_setup(sig, reason=sig.get("reason", ""))
+                                order.agents = list(sig.get("agents") or [])
+                                order.regime = str(sig.get("regime") or "")
+                                order.score = float(sig.get("score") or 0.0)
+                                order.conviction = float(sig.get("conviction") or 0.6)
                                 _ai_on_open(symbol, str(getattr(order, "direction", "") or dname), meta={"scorecard": sig.get("ai_scorecard")})
                                 limiter.record_entry(symbol, order.entry_level)
                             except RuntimeError as reg_err:

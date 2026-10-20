@@ -122,14 +122,14 @@ class TestFeaturePacks(unittest.TestCase):
             summary = brain.summary()
             self.assertIn("Autonomous Learner", summary)
 
-            # Test advise_signal always passes now that veto features are completely removed
+            # Test set_enabled toggle
             brain.knowledge.banned_setups["LONG|bad"] = "test ban"
             ok, reason, mult = brain.advise_signal(setup="LONG|bad")
-            self.assertTrue(ok)
-            self.assertIn("veto features removed completely", reason)
+            self.assertFalse(ok)
             brain.set_enabled(False)
             ok, reason, mult = brain.advise_signal(setup="LONG|bad")
             self.assertTrue(ok)
+            self.assertIn("disabled", reason)
             brain.set_enabled(True)
 
             # Test format_rules and format_flaws
@@ -150,20 +150,20 @@ class TestFeaturePacks(unittest.TestCase):
             brain.knowledge.min_rr = 1.90
             brain.knowledge.min_score = 1.95
             brain.knowledge.min_agreement = 4
-            # Veto removed: Non-scalp passes without veto
+            # Non-scalp with rr=1.00 should be vetoed
             ok_swing, reason_swing, _ = brain.advise_signal("LONG", score=2.0, rr=1.00, agreement=4, conviction=0.6, is_scalp=False)
-            self.assertTrue(ok_swing)
-            self.assertIn("pass learned filters", reason_swing)
+            self.assertFalse(ok_swing)
+            self.assertIn("R:R 1.00 < learned min 1.90", reason_swing)
 
-            # Scalp with rr=1.00 passes learned filters
+            # Scalp with rr=1.00 should PASS learned filters
             ok_scalp, reason_scalp, _ = brain.advise_signal("LONG", score=1.2, rr=1.00, agreement=2, conviction=0.5, is_scalp=True)
             self.assertTrue(ok_scalp)
             self.assertIn("pass learned filters", reason_scalp)
 
-            # Veto removed: Scalp passes without veto
+            # Scalp with poor R:R (e.g. 0.70) should be vetoed
             ok_bad_scalp, reason_bad_scalp, _ = brain.advise_signal("LONG", score=1.2, rr=0.70, agreement=2, conviction=0.5, is_scalp=True)
-            self.assertTrue(ok_bad_scalp)
-            self.assertIn("pass learned filters", reason_bad_scalp)
+            self.assertFalse(ok_bad_scalp)
+            self.assertIn("scalp R:R 0.70 < learned min 0.95", reason_bad_scalp)
 
     def test_trade_journal_brain_wiring(self):
         import autonomous_learner

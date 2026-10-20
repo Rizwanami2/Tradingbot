@@ -89,6 +89,12 @@ class AutonomousLearner:
         "INDICATORS": 1.00,
         "AI-LEARNER": 0.90,
         "NEWS": 0.70,
+        "GAUTAM-JHA": 1.55,
+        "MEAN-REVERSION": 1.35,
+        "FAKE-BREAKOUT": 1.35,
+        "MTF-CONFLUENCE": 1.40,
+        "ASIAN-BREAKOUT": 1.25,
+        "MT5-CHART": 1.35,
     }
 
     def __init__(
@@ -614,8 +620,77 @@ class AutonomousLearner:
         is_scalp: bool = False,
         profile: Optional[str] = None,
     ) -> Tuple[bool, str, float]:
-        """AI & veto features removed completely: always allow signal without veto."""
-        return True, "AUTO: pass learned filters (veto features removed completely)", 1.0
+        """
+        Returns (allow, reason, size_multiplier).
+        Evaluates candidate signal against self-learned filters, flaw patterns, and regimes.
+        """
+        k = self.knowledge
+        if not getattr(k, "enabled", True):
+            return True, "AUTO: brain filtering is disabled", 1.0
+
+        now = datetime.now(timezone.utc)
+        hour = hour if hour is not None else now.hour
+        weekday = weekday if weekday is not None else now.weekday()
+
+        if hour in k.banned_hours:
+            return False, f"AUTO: banned hour {hour} UTC (learned)", 0.0
+        if weekday in k.banned_weekdays:
+            if getattr(k, "allow_weekday_bans", False):
+                return False, f"AUTO: banned weekday {weekday} (learned)", 0.0
+            else:
+                k.banned_weekdays = [w for w in k.banned_weekdays if w != weekday]
+                self._save()
+        if setup and setup in k.banned_setups:
+            return False, f"AUTO: banned setup ({k.banned_setups[setup]})", 0.0
+
+        # Adjust minimum thresholds based on profile (scalp concession vs balanced vs swing tight)
+        prof_name = str(profile or "").lower().strip()
+        if prof_name == "scalp":
+            is_scalp = True
+            min_score = min(0.85, k.min_score)
+            min_rr = 0.90
+            min_agreement = min(2, k.min_agreement)
+            conv_floor = min(0.40, k.conviction_floor)
+        elif prof_name == "xau_scalp":
+            is_scalp = True
+            min_score = min(1.10, k.min_score)
+            min_rr = 1.10
+            min_agreement = min(2, k.min_agreement)
+            conv_floor = min(0.50, k.conviction_floor)
+        elif is_scalp:
+            min_score = min(1.0, k.min_score)
+            min_rr = 0.95
+            min_agreement = min(2, k.min_agreement)
+            conv_floor = min(0.45, k.conviction_floor)
+        elif prof_name == "swing":
+            min_score = max(1.70, k.min_score)
+            min_rr = max(2.5, k.min_rr)
+            min_agreement = min(3, max(3, k.min_agreement))
+            conv_floor = max(0.65, k.conviction_floor)
+        else:
+            min_score = min(2.2, k.min_score)
+            min_rr = min(2.2, k.min_rr)
+            min_agreement = min(3, k.min_agreement)
+            conv_floor = min(0.60, k.conviction_floor)
+
+        if score and score < min_score:
+            tag = "scalp score" if is_scalp else "score"
+            return False, f"AUTO: {tag} {score:.2f} < learned min {min_score:.2f}", 0.0
+        if rr and rr < min_rr:
+            tag = "scalp R:R" if is_scalp else "R:R"
+            return False, f"AUTO: {tag} {rr:.2f} < learned min {min_rr:.2f}", 0.0
+        if agreement and agreement < min_agreement:
+            tag = "scalp agreement" if is_scalp else "agreement"
+            return False, f"AUTO: {tag} {agreement} < learned min {min_agreement}", 0.0
+        if conviction and conviction < conv_floor:
+            tag = "scalp conviction" if is_scalp else "conviction"
+            return False, f"AUTO: {tag} {conviction:.0%} < floor {conv_floor:.0%}", 0.0
+
+        size_mult = 1.0
+        if regime and regime in k.size_mult_by_regime:
+            size_mult *= float(k.size_mult_by_regime[regime])
+
+        return True, "AUTO: pass learned filters", size_mult
 
     def set_enabled(self, enabled: bool) -> bool:
         """Enable or pause autonomous learned signal filtering."""

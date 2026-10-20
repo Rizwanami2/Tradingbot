@@ -164,46 +164,518 @@ async def handle_learner_callback(data: str, update: Update, ctx: ContextTypes.D
     query = getattr(update, "callback_query", None)
     if query:
         try:
-            await query.answer("AI & Veto features have been completely removed.")
-            await query.edit_message_text(
-                "ℹ️ **Autonomous Learner & Veto Features Completely Removed**\n"
-                "• All veto filters, hour bans, and setup bans have been removed.\n"
-                "• All trade signals execute directly.",
-                parse_mode="Markdown",
-            )
+            await query.answer()
         except Exception:
             pass
+
+    from autonomous_learner import get_brain
+    brain = get_brain(auto_bootstrap=False)
+    action = data.split(":", 1)[1] if ":" in data else ""
+
+    if action in ("off", "disable", "pause"):
+        brain.set_enabled(False)
+        try:
+            from ai_advanced_suite import get_ai_suite
+            get_ai_suite().set_enabled(False)
+        except Exception:
+            pass
+        msg = (
+            "🔴 *Autonomous Learner Filter Paused*\n"
+            "• Trade signal vetoing is **DISABLED**.\n"
+            "• All autotrade setups will pass through without hour or setup bans.\n"
+            "• Turn back on anytime with `/learner on` or `/veto on`."
+        )
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(False))
         return True
 
-    msg = (
-        "ℹ️ **Autonomous Learner & Veto Features Completely Removed**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "• All veto filters, hour bans, weekday bans, and setup bans have been disabled.\n"
-        "• All trade signals execute directly without veto blocks."
-    )
-    await safe_reply(update, msg, parse_mode="Markdown")
-    return True
+    elif action in ("on", "enable", "activate"):
+        brain.set_enabled(True)
+        try:
+            from ai_advanced_suite import get_ai_suite
+            get_ai_suite().set_enabled(True)
+        except Exception:
+            pass
+        msg = (
+            "🟢 *Autonomous Learner Filter Activated*\n"
+            "• Trade signal vetoing is **ACTIVE**.\n"
+            "• Signals are protected against learned flaw hours and bad setups.\n"
+            "• Pause anytime with `/learner off` or `/veto off`."
+        )
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(True))
+        return True
+
+    elif action == "toggle":
+        new_val = not getattr(brain.knowledge, "enabled", True)
+        brain.set_enabled(new_val)
+        try:
+            from ai_advanced_suite import get_ai_suite
+            get_ai_suite().set_enabled(new_val)
+        except Exception:
+            pass
+        st = "ACTIVATED 🟢" if new_val else "PAUSED 🔴"
+        msg = (
+            f"🧠 *Autonomous Learner Filter:* `{st}`\n"
+            f"• Signal vetoing is {'active' if new_val else 'disabled'}."
+        )
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(new_val))
+        return True
+
+    elif action.startswith("unban:"):
+        h_str = action.split(":", 1)[1]
+        try:
+            h = int(h_str) % 24
+            ok = brain.unban_hour(h)
+            if ok:
+                msg = f"🔓 *Unbanned UTC Hour {h:02d}:00*\n• Trades during {h:02d}:00 UTC will now execute freely."
+            else:
+                msg = f"ℹ️ *UTC Hour {h:02d}:00 was not in the banned list.*"
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        except Exception as e:
+            await safe_reply(update, f"Unban error: {e}", parse_mode=None)
+        return True
+
+    elif action.startswith("unban_wd:") or action.startswith("unban_weekday:"):
+        w_str = action.split(":", 1)[1]
+        try:
+            w = int(w_str) % 7
+            wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            w_name = wd_names[w]
+            brain.unban_weekday(w)
+            msg = (
+                f"🔓 *Unbanned {w_name} (Weekday {w})*\n"
+                f"• Trades on {w_name}s will now execute freely without autonomous veto.\n"
+                f"• Weekday bans disabled by policy to maintain continuous trading."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        except Exception as e:
+            await safe_reply(update, f"Unban weekday error: {e}", parse_mode=None)
+        return True
+
+    elif action in ("clearweekdays", "clearweekday", "clear_weekdays"):
+        cnt = brain.clear_banned_weekdays()
+        msg = f"🔓 *Cleared all {cnt} banned weekdays*\n• All days of the week are now completely unblocked."
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        return True
+
+    elif action in ("clearhours", "clearhour"):
+        cnt = brain.clear_banned_hours()
+        msg = f"🔓 *Cleared all {cnt} banned UTC hours*\n• All trading hours are now unblocked."
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        return True
+
+    elif action in ("clearbans", "clearallbans"):
+        res = brain.clear_bans()
+        msg = (
+            f"🔓 *Cleared all active learned bans*\n"
+            f"• Hours cleared: `{res['hours']}`\n"
+            f"• Weekdays cleared: `{res['weekdays']}`\n"
+            f"• Setups cleared: `{res['setups']}`"
+        )
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        return True
+
+    elif action == "rules":
+        text = brain.format_rules()
+        await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        return True
+
+    elif action == "flaws":
+        text = brain.format_flaws()
+        await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        return True
+
+    elif action == "reset":
+        res = brain.reset_memory()
+        msg = (
+            "🧹 *Autonomous Learner Memory Reset*\n"
+            "• Baseline defaults restored.\n"
+            "• All learned bans and flaw memory cleared."
+        )
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(True))
+        return True
+
+    elif action == "status":
+        text = brain.summary()
+        await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+        return True
+
+    return False
 
 
 async def learner_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "ℹ️ **Autonomous Learner & Veto Features Completely Removed**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "• All veto filters, hour bans, weekday bans, and setup bans have been disabled.\n"
-        "• All trade signals execute directly without veto blocks."
-    )
-    await safe_reply(update, msg, parse_mode="Markdown")
-    return
+    """
+    Handle /learner and /veto commands:
+    /learner [status]
+    /learner on | off
+    /learner unban <hour|setup|hours>
+    /learner clearhours | clearbans
+    /learner rules | flaws | reset
+    """
+    try:
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        args: List[str] = list(getattr(ctx, "args", []) or [])
+        subcmd = args[0].lower() if args else "status"
+
+        if subcmd in ("on", "enable", "start", "1", "true"):
+            brain.set_enabled(True)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(True)
+            except Exception:
+                pass
+            msg = (
+                "🟢 *Autonomous Learner Filter Activated*\n"
+                "• Live signals are actively checked against learned filters.\n"
+                "• Flawed hours, banned setups, and low-expectancy patterns will be vetoed.\n"
+                "• Combined AI & Veto protection is active.\n\n"
+                "💡 _To pause vetoing anytime: `/learner off` or `/veto off`_"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(True))
+
+        elif subcmd in ("off", "disable", "pause", "stop", "0", "false"):
+            brain.set_enabled(False)
+            try:
+                from ai_advanced_suite import get_ai_suite
+                get_ai_suite().set_enabled(False)
+            except Exception:
+                pass
+            msg = (
+                "🔴 *Autonomous Learner Filter Paused*\n"
+                "• Signal vetoing is **DISABLED** (signals pass through unblocked).\n"
+                "• Autonomous learner will continue logging trade outcomes in background.\n\n"
+                "💡 _To re-enable vetoing anytime: `/learner on` or `/veto on`_"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(False))
+
+        elif subcmd in ("unban", "allow"):
+            target = args[1].lower() if len(args) > 1 else ""
+            wd_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+            # Handle: /learner unban weekday 0 or /learner unban wd mon
+            if target in ("weekday", "wd", "day") and len(args) > 2:
+                target = args[2].lower()
+            elif target in ("hour", "hours") and len(args) > 2 and args[2].isdigit():
+                target = args[2]
+
+            w = brain.parse_weekday(target) if hasattr(brain, "parse_weekday") else None
+            # If target explicitly named a day or matches weekday map
+            if w is not None and (target in getattr(brain, "WEEKDAY_MAP", {}) or (target.isdigit() and int(target) in brain.knowledge.banned_weekdays and int(target) not in brain.knowledge.banned_hours)):
+                ok = brain.unban_weekday(w)
+                w_name = wd_names[w]
+                if ok:
+                    msg = f"🔓 *Unbanned {w_name} (Weekday {w})*\n• Trades on {w_name}s will no longer be blocked by Autonomous Learner."
+                else:
+                    msg = f"ℹ️ *{w_name} (Weekday {w}) was not in the banned weekdays list.*"
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target.isdigit():
+                h = int(target) % 24
+                if h in brain.knowledge.banned_weekdays and h not in brain.knowledge.banned_hours:
+                    ok = brain.unban_weekday(h)
+                    w_name = wd_names[h % 7]
+                    msg = f"🔓 *Unbanned {w_name} (Weekday {h})*\n• Trades on {w_name}s will no longer be blocked."
+                else:
+                    ok = brain.unban_hour(h)
+                    if ok:
+                        msg = f"🔓 *Unbanned UTC Hour {h:02d}:00*\n• Trades during hour {h:02d}:00 UTC will no longer be blocked."
+                    else:
+                        msg = f"ℹ️ *UTC Hour {h:02d}:00 was not in the banned list.*"
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target in ("weekdays", "allweekdays", "weekday"):
+                cnt = brain.clear_banned_weekdays()
+                msg = f"🔓 *Cleared all {cnt} banned weekdays*\n• All days of the week are now completely unblocked."
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target in ("all", "allbans", "everything"):
+                res = brain.clear_bans()
+                msg = (
+                    f"🔓 *Cleared all active learned bans*\n"
+                    f"• Hours cleared: `{res['hours']}`\n"
+                    f"• Weekdays cleared: `{res['weekdays']}`\n"
+                    f"• Setups cleared: `{res['setups']}`"
+                )
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target in ("hours", "allhours"):
+                cnt = brain.clear_banned_hours()
+                msg = f"🔓 *Cleared all {cnt} banned UTC hours*\n• All trading hours are now unblocked."
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target:
+                removed = brain.unban_setup(target)
+                if removed:
+                    msg = f"🔓 *Unbanned Setup(s):* `{', '.join(removed)}`"
+                else:
+                    msg = f"ℹ️ *No banned setups matching '{target}' found.*"
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            else:
+                msg = (
+                    "ℹ️ *Usage for unbanning:*\n"
+                    "• `/learner unban monday` (or `mon`, `tue`, `wed`, etc.)\n"
+                    "• `/learner unban weekday 0`\n"
+                    "• `/learner unban weekdays` (clears all weekday bans)\n"
+                    "• `/learner unban <hour>` (e.g. `/learner unban 14`)\n"
+                    "• `/learner unban hours` (clears all hour bans)\n"
+                    "• `/learner unban <setup_name>`\n"
+                    "• `/learner clearbans` or `/learner unban all`"
+                )
+                await safe_reply(update, msg, parse_mode="Markdown")
+
+        elif subcmd in ("clearweekdays", "clearweekday", "unbanweekdays"):
+            cnt = brain.clear_banned_weekdays()
+            msg = f"🔓 *Cleared all {cnt} banned weekdays*\n• All days of the week are now completely unblocked."
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("clearhours", "clearhour"):
+            cnt = brain.clear_banned_hours()
+            msg = f"🔓 *Cleared all {cnt} banned UTC hours*\n• All trading hours are now unblocked."
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("clearbans", "clearallbans", "unbanall"):
+            res = brain.clear_bans()
+            msg = (
+                f"🔓 *Cleared all active learned bans*\n"
+                f"• Hours cleared: `{res['hours']}`\n"
+                f"• Weekdays cleared: `{res['weekdays']}`\n"
+                f"• Setups cleared: `{res['setups']}`"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("weekdaybans", "weekdayban"):
+            opt = args[1].lower() if len(args) > 1 else "status"
+            if opt in ("on", "1", "true", "enable"):
+                brain.set_allow_weekday_bans(True)
+                msg = "⚠️ *Weekday Bans Policy ENABLED*\n• Autonomous learner may veto signals on historically weak weekdays."
+            elif opt in ("off", "0", "false", "disable"):
+                brain.set_allow_weekday_bans(False)
+                msg = "🟢 *Weekday Bans Policy DISABLED*\n• Autonomous learner will NEVER veto signals based on the day of the week."
+            else:
+                cur = getattr(brain.knowledge, "allow_weekday_bans", False)
+                st = "🟢 DISABLED (Never ban days)" if not cur else "🔴 ENABLED"
+                msg = f"📅 *Learner Weekday Ban Policy:* `{st}`\n• Use `/learner weekdaybans off` or `/learner weekdaybans on`."
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("rules", "filters", "rule"):
+            text = brain.format_rules()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("flaws", "flaw", "sanctions"):
+            text = brain.format_flaws()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("reset", "clear"):
+            res = brain.reset_memory()
+            msg = (
+                "🧹 *Autonomous Learner Memory Reset*\n"
+                "• All learned bans, weak regimes, and agent weights have been reset.\n"
+                "• Baseline defaults restored.\n"
+                "• Trade logs cleared. Fresh learning cycle started."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(True))
+
+        elif subcmd in ("status", "info"):
+            text = brain.summary()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("help", "commands"):
+            msg = (
+                "🧠 *Autonomous Learner & Veto Commands:*\n"
+                "• `/learner on` or `/veto on` — Activate learned signal vetoing\n"
+                "• `/learner off` or `/veto off` — Pause signal vetoing (pass all trades)\n"
+                "• `/learner unban <hour>` — Unban a specific UTC hour (e.g. `/learner unban 14`)\n"
+                "• `/learner clearhours` — Clear all banned hours\n"
+                "• `/learner clearbans` — Clear all bans (hours, weekdays, setups)\n"
+                "• `/learner rules` — View active learned thresholds & bans\n"
+                "• `/learner flaws` — View detected statistical flaws\n"
+                "• `/learner reset` — Reset memory to baseline defaults\n"
+                "• `/autotrade veto on|off` — Toggle veto filter via autotrade"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown")
+
+        else:
+            text = brain.summary() + "\n\n_Quick toggle: `/learner on` | `/learner off` | `/learner unban <hour>`_"
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+    except Exception as e:
+        logger.exception("Error in /learner command: %s", e)
+        await safe_reply(update, f"Learner error: {e}", parse_mode=None)
 
 
 async def veto_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Unified /veto command — informs that veto features have been removed."""
+    """Unified /veto command — opens combined AI & Veto hub or delegates to learner actions."""
+    args = list(getattr(ctx, "args", []) or [])
+    if not args or (args and args[0].lower() in ("status", "dash", "dashboard", "hub")):
+        try:
+            from telegram_ai import build_ai_dashboard
+            text, markup = build_ai_dashboard()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
+            return
+        except Exception as e:
+            logger.debug("veto dashboard fallback: %s", e)
     await learner_command(update, ctx)
 
 
 async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Inform that autonomous learner & veto features have been removed."""
-    await learner_command(update, ctx)
+    """
+    Handle /brain and subcommands:
+    /brain [status]
+    /brain reset
+    /brain relearn [SYM] [YEARS]
+    /brain rules
+    /brain flaws
+    /brain on | off
+    /brain unban <hour|setup|all>
+    /brain clearhours | clearbans
+    /brain help
+    """
+    try:
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        args: List[str] = list(getattr(ctx, "args", []) or [])
+        subcmd = args[0].lower() if args else "status"
+
+        if subcmd in ("status", "info"):
+            text = brain.summary()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("reset", "clear"):
+            res = brain.reset_memory()
+            msg = (
+                "🧹 *Autonomous Learner Memory Reset*\n"
+                "• All learned bans, weak regimes, and agent weights have been reset.\n"
+                f"• Baseline restored: Min score `≥{res['min_score']:.2f}`, "
+                f"RR `≥1:{res['min_rr']:.2f}`, Agreement `≥{res['min_agreement']}`, "
+                f"Conviction `≥{res['conviction_floor']:.0%}`\n"
+                "• Trade logs cleared. Fresh learning cycle started."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(True))
+
+        elif subcmd in ("relearn", "train", "bootstrap"):
+            sym = args[1].upper() if len(args) > 1 else "XAUUSD"
+            years = 5.0
+            if len(args) > 2:
+                try:
+                    years = max(0.5, min(5.0, float(args[2])))
+                except ValueError:
+                    pass
+            if sym in ("ALL", "HEAVY"):
+                await safe_reply(update, "⏳ *Starting Heavy Bot Training Pipeline across all assets*...", parse_mode="Markdown")
+                from heavy_trainer import HeavyTrainer
+                trainer = HeavyTrainer(years=years)
+                summary = trainer.train_all(heavy=True)
+                rep = trainer.format_markdown_report(summary)
+                await safe_reply(update, rep, parse_mode="Markdown")
+                return
+
+            await safe_reply(update, f"⏳ Re-learning from {sym} history (up to {years:.1f}y)...", parse_mode=None)
+            res = brain.bootstrap(symbol=sym, years=years)
+            rep = (
+                f"✅ *Autonomous Retraining Complete ({sym})*\n"
+                f"• Replayed Trades: `{res.get('trades', 0)}`\n"
+                f"• Replay Expectancy: `{res.get('expectancy', 0.0):+.3f}R`\n"
+                f"• Flaws Mined: `{res.get('flaws', 0)}`\n"
+                f"• Active Banned Setups: `{res.get('banned_setups', 0)}`\n"
+                f"• Banned UTC Hours: `{res.get('banned_hours', [])}`\n"
+                f"• Filter Thresholds: score `≥{res.get('min_score', 1.8):.2f}` | RR `≥{res.get('min_rr', 1.8):.2f}`\n"
+                f"_Learned knowledge persisted to memory._"
+            )
+            await safe_reply(update, rep, parse_mode="Markdown")
+
+        elif subcmd in ("rules", "filters", "rule"):
+            text = brain.format_rules()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("flaws", "flaw", "sanctions"):
+            text = brain.format_flaws()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("on", "enable", "start", "1", "true"):
+            brain.set_enabled(True)
+            msg = (
+                "🟢 *Autonomous Learner Filter Activated*\n"
+                "• Live signals are actively checked against learned filters.\n"
+                "• Banned setups, weak hours, and low expectancy patterns will be vetoed.\n"
+                "• Regime size multipliers are active."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(True))
+
+        elif subcmd in ("off", "disable", "pause", "stop", "0", "false"):
+            brain.set_enabled(False)
+            msg = (
+                "🔴 *Autonomous Learner Filter Paused*\n"
+                "• Live signal vetoing is disabled (signals will pass through unblocked).\n"
+                "• Autonomous learner will continue logging trade outcomes in background."
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(False))
+
+        elif subcmd in ("unban", "allow"):
+            target = args[1].lower() if len(args) > 1 else ""
+            if target in ("hour", "hours") and len(args) > 2 and args[2].isdigit():
+                target = args[2]
+            if target.isdigit():
+                h = int(target) % 24
+                ok = brain.unban_hour(h)
+                if ok:
+                    msg = f"🔓 *Unbanned UTC Hour {h:02d}:00*\n• Trades during hour {h:02d}:00 UTC will no longer be blocked."
+                else:
+                    msg = f"ℹ️ *UTC Hour {h:02d}:00 was not in the banned list.*"
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target in ("all", "hours", "allhours"):
+                cnt = brain.clear_banned_hours()
+                msg = f"🔓 *Cleared all {cnt} banned UTC hours*\n• All trading hours are now unblocked."
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            elif target:
+                removed = brain.unban_setup(target)
+                if removed:
+                    msg = f"🔓 *Unbanned Setup(s):* `{', '.join(removed)}`"
+                else:
+                    msg = f"ℹ️ *No banned setups matching '{target}' found.*"
+                await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+            else:
+                msg = (
+                    "ℹ️ *Usage for unbanning:*\n"
+                    "• `/brain unban <hour>` (e.g. `/brain unban 14`)\n"
+                    "• `/brain unban hours` (clears all hour bans)\n"
+                    "• `/brain unban <setup_name>`\n"
+                    "• `/brain clearbans` (clears all active bans)"
+                )
+                await safe_reply(update, msg, parse_mode="Markdown")
+
+        elif subcmd in ("clearhours", "clearhour"):
+            cnt = brain.clear_banned_hours()
+            msg = f"🔓 *Cleared all {cnt} banned UTC hours*\n• All trading hours are now unblocked."
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("clearbans", "clearallbans", "unbanall"):
+            res = brain.clear_bans()
+            msg = (
+                f"🔓 *Cleared all active learned bans*\n"
+                f"• Hours cleared: `{res['hours']}`\n"
+                f"• Weekdays cleared: `{res['weekdays']}`\n"
+                f"• Setups cleared: `{res['setups']}`"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+        elif subcmd in ("help", "commands"):
+            msg = (
+                "🧠 *Autonomous Learner Commands:*\n"
+                "• `/train [heavy|quick|status]` — Deep multi-asset AI & autonomous training\n"
+                "• `/brain` or `/brain status` — Overall status, memory & win rates\n"
+                "• `/brain rules` — Active learned thresholds, bans & agent weights\n"
+                "• `/brain flaws` — Detected flaws and current sanctions\n"
+                "• `/brain on` / `/brain off` — Enable or pause active signal filtering\n"
+                "• `/brain unban <hour>` — Unban a specific UTC hour\n"
+                "• `/brain clearhours` — Clear all banned hours\n"
+                "• `/brain relearn [SYM|ALL] [YEARS]` — Bootstrap memory from up to 5Y data\n"
+                "• `/brain reset` — Clear memory & restore clean baseline defaults"
+            )
+            await safe_reply(update, msg, parse_mode="Markdown")
+
+        else:
+            # Fall back to summary with usage hint
+            text = brain.summary() + "\n\n_Subcommands: `/train`, `/brain status`, `/brain rules`, `/brain flaws`, `/brain unban <hour>`, `/brain relearn`, `/brain reset`, `/brain on|off`_"
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_learner_toggle_keyboard(brain.is_enabled()))
+
+    except Exception as e:
+        logger.exception("Error in /brain command: %s", e)
+        await safe_reply(update, f"Brain error: {e}", parse_mode=None)
 
 
 async def train_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -287,4 +759,21 @@ async def relearn_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def register_brain(application) -> None:
-    logger.info("Brain, learner, and veto commands removed by request")
+    existing_cmds = set()
+    for h in application.handlers.get(0, []):
+        if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
+            existing_cmds.update(h.commands)
+
+    for cmd, handler in [
+        ("brain", brain_command),
+        ("relearn", relearn_command),
+        ("train", train_command),
+        ("learner", learner_command),
+        ("autonomous", learner_command),
+        ("veto", learner_command),
+        ("learnerveto", learner_command),
+    ]:
+        if cmd not in existing_cmds:
+            application.add_handler(CommandHandler(cmd, handler))
+            existing_cmds.add(cmd)
+    logger.info("Registered /brain /relearn /train /learner /veto")

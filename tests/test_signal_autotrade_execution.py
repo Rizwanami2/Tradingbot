@@ -25,12 +25,30 @@ class TestSignalAutotradeExecution(unittest.IsolatedAsyncioTestCase):
         self.engine = main.engine
         self.engine.active_positions.clear()
         self.engine.pending_setups.clear()
+        if hasattr(self.engine, "reset_halt"):
+            self.engine.reset_halt()
+        if hasattr(self.engine, "broker") and self.engine.broker is not None:
+            if hasattr(self.engine.broker, "_sim_positions") and isinstance(self.engine.broker._sim_positions, dict):
+                self.engine.broker._sim_positions.clear()
+            if hasattr(self.engine.broker, "_positions") and isinstance(self.engine.broker._positions, dict):
+                self.engine.broker._positions.clear()
+            if hasattr(self.engine.broker, "positions") and isinstance(self.engine.broker.positions, dict):
+                self.engine.broker.positions.clear()
 
     def tearDown(self):
         config.set_autotrade_mode(self.orig_mode, persist=False)
         main.autotrade_active = False
         self.engine.active_positions.clear()
         self.engine.pending_setups.clear()
+        if hasattr(self.engine, "reset_halt"):
+            self.engine.reset_halt()
+        if hasattr(self.engine, "broker") and self.engine.broker is not None:
+            if hasattr(self.engine.broker, "_sim_positions") and isinstance(self.engine.broker._sim_positions, dict):
+                self.engine.broker._sim_positions.clear()
+            if hasattr(self.engine.broker, "_positions") and isinstance(self.engine.broker._positions, dict):
+                self.engine.broker._positions.clear()
+            if hasattr(self.engine.broker, "positions") and isinstance(self.engine.broker.positions, dict):
+                self.engine.broker.positions.clear()
 
     async def test_signal_command_executes_trade_into_position(self):
         """Verify that when /signal is run with an actionable signal, autotrade executes it."""

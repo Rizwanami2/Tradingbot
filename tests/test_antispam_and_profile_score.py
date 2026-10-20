@@ -188,7 +188,7 @@ class TestAntiSpamAndProfileScore(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok_scalp)
         self.assertIn("pass learned filters", reason_scalp)
 
-        # Veto removed: Swing setup passes without veto
+        # Swing tight strategy: score 1.20 or rr 1.50 should FAIL (requires min_score 1.70, rr 2.50, agreement 3)
         ok_swing, reason_swing, _ = learner.advise_signal(
             direction="LONG",
             score=1.20,
@@ -198,8 +198,7 @@ class TestAntiSpamAndProfileScore(unittest.IsolatedAsyncioTestCase):
             is_scalp=False,
             profile="swing",
         )
-        self.assertTrue(ok_swing)
-        self.assertIn("pass learned filters", reason_swing)
+        self.assertFalse(ok_swing)
 
         # Swing setup with high score (1.80), 3 agents, and 2.6 R:R should PASS
         ok_swing_pass, reason_swing_pass, _ = learner.advise_signal(
