@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+import os
 
 import numpy as np
 import pandas as pd
@@ -208,4 +209,12 @@ def evaluate_signal_quality(
     reasons.append(msg_l)
 
     final = float(np.mean(scores)) if scores else 0.5
+    try:
+        min_q = float(os.getenv("BOT_ACCURACY_MIN_QUALITY", "0.45") or 0.45)
+    except Exception:
+        min_q = 0.45
+    accuracy_on = os.getenv("BOT_ACCURACY_MODE", "false").lower() in ("true", "1", "yes", "on")
+    if (accuracy_on or is_scalp) and final < min_q:
+        reasons.append(f"quality {final:.2f} < min {min_q:.2f}")
+        return QualityResult(False, final, reasons)
     return QualityResult(True, final, reasons)

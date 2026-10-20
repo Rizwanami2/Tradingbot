@@ -1141,6 +1141,21 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertFalse(ok_sell)
         self.assertIn("opposing rejection wick (lower)", reason_sell)
 
+    def test_scalp_min_quality_gate(self):
+        """Verify evaluate_signal_quality enforces minimum quality score for scalps."""
+        from signal_quality import evaluate_signal_quality
+
+        dates = pd.date_range("2026-10-19 10:00", periods=25, freq="1min")
+        # Build DataFrame with low liquidity/flat candles
+        rows = [{"open": 100.0, "high": 100.1, "low": 99.9, "close": 100.02} for _ in range(25)]
+        df_flat = pd.DataFrame(rows, index=dates)
+
+        with patch("signal_quality.liquidity_imbalance_score", return_value=(0.20, "poor liquidity")), \
+             patch("signal_quality.candle_quality", return_value=(True, "candle ok", 0.40)):
+            res = evaluate_signal_quality(df_flat, direction="BUY", is_scalp=True)
+            self.assertFalse(res.allowed)
+            self.assertTrue(any("quality" in r for r in res.reasons))
+
 
 if __name__ == "__main__":
     unittest.main()
