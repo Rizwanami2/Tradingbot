@@ -248,6 +248,15 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Unknown command", text)
         self.assertIn("/commands", text)
 
+    async def test_unknown_command_removed_features(self):
+        for cmd in ["/ai", "/veto", "/featured", "/feature"]:
+            self.message.text = cmd
+            self.message.reply_text.reset_mock()
+            await unknown_command(self.update, self.ctx)
+            self.message.reply_text.assert_called_once()
+            text = self.message.reply_text.call_args[0][0]
+            self.assertIn("has been completely removed", text)
+
     async def test_ask_command(self):
         self.ctx.args = []
         await ask_command(self.update, self.ctx)

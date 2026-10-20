@@ -733,22 +733,6 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(welcome.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
 
 
-async def ai_veto_removed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Inform user that secondary AI Suite & Veto filtering have been permanently removed."""
-    msg = (
-        "ℹ️ **AI Suite & Veto Removed**\n\n"
-        "• **Execution Engine:** Pure Multi-Agent Consensus (`multi_agent_trading_bot.py`)\n"
-        "  _Consensus signals flow directly to execution without secondary AI or veto blocks._\n\n"
-        "• **Learning Engine:** Autonomous Brain (`autonomous_learner.py`)\n"
-        "  _Background win-rate logging and regime sizing remain active without blocking trades._\n\n"
-        "• Use `/brain`, `/agents`, `/signal`, or `/autotrade` for active controls."
-    )
-    try:
-        await update.message.reply_text(msg, parse_mode="Markdown")
-    except Exception:
-        await update.message.reply_text(msg.replace("*", "").replace("_", "").replace("`", ""))
-
-
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cat = (ctx.args[0].lower() if ctx.args else "").strip()
     text, markup = format_command_menu(cat)
@@ -1718,17 +1702,6 @@ async def ask_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply.replace("*", "").replace("`", ""))
 
 
-async def featured_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Inform that feature and AI/veto commands have been completely removed."""
-    await safe_reply(
-        update,
-        "ℹ️ **Feature, AI, and Veto commands have been completely removed.**\n"
-        "• All strategy signals execute directly without feature or veto gates.\n"
-        "• Use `/commands` to view active trading, market, and risk commands.",
-        parse_mode="Markdown",
-    )
-
-
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Friendly fallback when an unrecognized command is typed."""
     text = getattr(update.message, "text", "") if (getattr(update, "message", None) and update.message.text) else "/command"
@@ -1737,6 +1710,7 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     removed_feature_cmds = {
         "feature", "features", "featured",
+        "ai", "aisuite", "veto", "learnerveto", "vedo",
     }
     if cmd_clean in removed_feature_cmds:
         await safe_reply(
@@ -5921,12 +5895,6 @@ def main():
         register_brain(app)
     except Exception as _b_err:
         logger.warning("Failed to register brain commands: %s", _b_err)
-
-    # AI Suite & Veto Removed: friendly notice if legacy commands are invoked
-    try:
-        app.add_handler(CommandHandler(["ai", "aisuite", "veto", "learnerveto", "vedo"], ai_veto_removed_command))
-    except Exception as _ai_err:
-        logger.warning("Failed to register AI removal notice handler: %s", _ai_err)
 
     # Conversational Assistant & Controls
     app.add_handler(CommandHandler(["ask", "chat"], ask_command))
