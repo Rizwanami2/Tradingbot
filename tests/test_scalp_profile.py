@@ -80,6 +80,33 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         self.assertAlmostEqual(config.SCALP_TAKE_PROFIT_USD, 2.50)
         self.assertAlmostEqual(config.SCALP_STOP_LOSS_USD, 3.00)
 
+    def test_xau_scalp_profile_defaults_and_apply(self):
+        profiles = load_profiles()
+        self.assertIn("xau_scalp", profiles)
+        p = profiles["xau_scalp"]
+        self.assertTrue(p.is_scalp)
+        self.assertFalse(p.allow_asian)
+        self.assertAlmostEqual(p.min_score, 1.20)
+        self.assertAlmostEqual(p.min_rr, 1.20)
+        self.assertAlmostEqual(p.scalp_tp_usd, 3.00)
+        self.assertAlmostEqual(p.scalp_sl_usd, 2.50)
+        self.assertEqual(p.max_open_trades, 2)
+        self.assertEqual(p.scalp_max_positions_per_symbol, 1)
+
+        prof, summary = apply_profile(
+            "xau_scalp",
+            arbiter=self.arbiter,
+            risk_mgr=self.risk_mgr,
+            engine=self.engine,
+            config=config,
+        )
+        self.assertEqual(prof.name, "xau_scalp")
+        self.assertIn("XAUUSD-optimized", summary)
+        self.assertFalse(self.arbiter.allow_asian)
+        self.assertAlmostEqual(self.engine.scalp_tp_usd, 3.00)
+        self.assertAlmostEqual(self.engine.scalp_sl_usd, 2.50)
+        self.assertEqual(self.engine.max_open_trades, 2)
+
     def test_arbiter_decide_scalp_micro_levels(self):
         apply_profile("scalp", arbiter=self.arbiter, risk_mgr=self.risk_mgr, engine=self.engine, config=config)
 

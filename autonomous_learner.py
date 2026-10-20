@@ -647,6 +647,13 @@ class AutonomousLearner:
             min_rr = 0.90
             min_agreement = min(2, k.min_agreement)
             conv_floor = min(0.40, k.conviction_floor)
+        elif prof_name == "xau_scalp":
+            is_scalp = True
+            # XAUUSD-optimized high-accuracy scalp profile
+            min_score = min(1.10, k.min_score)
+            min_rr = 1.10
+            min_agreement = min(2, k.min_agreement)
+            conv_floor = min(0.50, k.conviction_floor)
         elif is_scalp:
             # Scalp mode active without explicit scalp profile override
             min_score = min(1.0, k.min_score)
