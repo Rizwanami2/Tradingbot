@@ -47,6 +47,8 @@ class StrategyProfile:
     scalp_trail_distance_usd: float = 0.80
     scalp_trail_activation_pct: float = 0.04
     scalp_trail_distance_pct: float = 0.03
+    scalp_trail_buffer_usd: float = 0.40
+    scalp_trail_buffer_pct: float = 0.02
     scalp_be_lock_usd: float = 0.50
     scalp_min_trail_profit_usd: float = 1.50
     scalp_profit_retention_pct: float = 0.50
@@ -108,6 +110,8 @@ DEFAULT_PROFILES = {
         scalp_trail_distance_usd=0.80,
         scalp_trail_activation_pct=0.04,
         scalp_trail_distance_pct=0.03,
+        scalp_trail_buffer_usd=0.40,
+        scalp_trail_buffer_pct=0.02,
         scalp_be_lock_usd=0.50,
         scalp_min_trail_profit_usd=1.50,
         scalp_profit_retention_pct=0.50,
@@ -195,9 +199,11 @@ DEFAULT_PROFILES = {
         max_open_trades=2,
         scalp_trail_enabled=True,
         scalp_trail_activation_usd=1.20,
-        scalp_trail_distance_usd=0.70,
+        scalp_trail_distance_usd=0.80,
         scalp_trail_activation_pct=0.04,
         scalp_trail_distance_pct=0.025,
+        scalp_trail_buffer_usd=0.35,
+        scalp_trail_buffer_pct=0.02,
         scalp_be_lock_usd=0.60,
         scalp_min_trail_profit_usd=1.20,
         scalp_profit_retention_pct=0.55,
@@ -313,6 +319,8 @@ def apply_profile(
             engine.scalp_trail_distance_usd = getattr(p, "scalp_trail_distance_usd", 0.80)
             engine.scalp_trail_activation_pct = getattr(p, "scalp_trail_activation_pct", 0.04)
             engine.scalp_trail_distance_pct = getattr(p, "scalp_trail_distance_pct", 0.03)
+            engine.scalp_trail_buffer_usd = getattr(p, "scalp_trail_buffer_usd", 0.40)
+            engine.scalp_trail_buffer_pct = getattr(p, "scalp_trail_buffer_pct", 0.02)
             engine.scalp_be_lock_usd = getattr(p, "scalp_be_lock_usd", 0.50)
             engine.scalp_min_trail_profit_usd = getattr(p, "scalp_min_trail_profit_usd", 1.50)
             engine.scalp_profit_retention_pct = getattr(p, "scalp_profit_retention_pct", 0.50)
@@ -333,6 +341,8 @@ def apply_profile(
             config.SCALP_TRAIL_DISTANCE_USD = getattr(p, "scalp_trail_distance_usd", 0.80)
             config.SCALP_TRAIL_ACTIVATION_PCT = getattr(p, "scalp_trail_activation_pct", 0.04)
             config.SCALP_TRAIL_DISTANCE_PCT = getattr(p, "scalp_trail_distance_pct", 0.03)
+            config.SCALP_TRAIL_BUFFER_USD = getattr(p, "scalp_trail_buffer_usd", 0.40)
+            config.SCALP_TRAIL_BUFFER_PCT = getattr(p, "scalp_trail_buffer_pct", 0.02)
             config.SCALP_BE_LOCK_USD = getattr(p, "scalp_be_lock_usd", 0.50)
             config.SCALP_MIN_TRAIL_PROFIT_USD = getattr(p, "scalp_min_trail_profit_usd", 1.50)
             config.SCALP_PROFIT_RETENTION_PCT = getattr(p, "scalp_profit_retention_pct", 0.50)
@@ -366,7 +376,7 @@ def apply_profile(
             f"• ⚡ **Rapid Micro-Scalping Mode**: ACTIVE\n"
             f"  - Micro TP: `{p.scalp_tp_pct:.2f}%` move or `${p.scalp_tp_usd:.2f}` USD profit\n"
             f"  - Micro SL: `{p.scalp_sl_pct:.2f}%` move or `${p.scalp_sl_usd:.2f}` USD loss\n"
-            f"  - 🛡️ Dynamic Trailing SL: ACTIVE (Trigger `${getattr(p, 'scalp_trail_activation_usd', 1.0):.2f}` / Trail `${getattr(p, 'scalp_trail_distance_usd', 0.8):.2f}` | Min Floor `+${getattr(p, 'scalp_min_trail_profit_usd', 1.5):.2f}`)\n"
+            f"  - 🛡️ Dynamic Trailing SL: ACTIVE (Trigger `${getattr(p, 'scalp_trail_activation_usd', 1.0):.2f}` / Trail `${getattr(p, 'scalp_trail_distance_usd', 0.8):.2f}` | Buffer `${getattr(p, 'scalp_trail_buffer_usd', 0.4):.2f}` | Min Floor `+${getattr(p, 'scalp_min_trail_profit_usd', 1.5):.2f}`)\n"
             f"  - 🚀 Run-to-TP Expansion: `{'ACTIVE (holds on strong momentum)' if getattr(p, 'scalp_let_profit_run', True) else 'DISABLED'}`\n"
             f"  - 🎯 High-Accuracy Scalp Filters: MTF trend alignment & structure confirmation enabled\n"
             f"  - Polling: `{p.poll_interval}s` fast frequency | Market Fills: `Instant`\n"

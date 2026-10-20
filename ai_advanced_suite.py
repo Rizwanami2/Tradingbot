@@ -67,7 +67,8 @@ class AIAdvancedSuite:
         self.balance_mode_only_scorecard = _env_bool("AI_SCORECARD_BALANCE_ONLY", True)
         self.live_health = _env_bool("AI_HEALTH_LIVE", True)
         self.min_scorecard = _env_float("AI_MIN_SCORECARD", 55.0)
-        self.max_daily_trades = _env_int("AI_MAX_DAILY_TRADES", 12)
+        self.max_daily_trades = _env_int("AI_MAX_DAILY_TRADES", 50)
+        self.max_daily_scalp_trades = _env_int("AI_MAX_DAILY_SCALP_TRADES", 100)
         self.max_consec_losses = _env_int("AI_MAX_CONSEC_LOSSES", 4)
         self.revenge_window_sec = _env_float("AI_REVENGE_WINDOW_SEC", 900.0)
         self.fomo_atr_mult = _env_float("AI_FOMO_ATR_MULT", 1.5)
@@ -187,8 +188,10 @@ class AIAdvancedSuite:
             if dt < self.revenge_window_sec:
                 if _veto_or_advise(f"revenge-trade lock ({int(self.revenge_window_sec - dt)}s left)"):
                     return res
-        if int(self.state["daily"].get("trades", 0)) >= self.max_daily_trades:
-            if _veto_or_advise(f"max daily trades ({self.max_daily_trades})"):
+        is_scalp = bool(ctx.is_scalp or (ctx.profile and "scalp" in str(ctx.profile).lower()))
+        daily_cap = self.max_daily_scalp_trades if is_scalp else self.max_daily_trades
+        if int(self.state["daily"].get("trades", 0)) >= daily_cap:
+            if _veto_or_advise(f"max daily trades ({daily_cap})"):
                 return res
         if int(self.state.get("consec_losses", 0)) >= self.max_consec_losses:
             if _veto_or_advise(f"max consecutive losses ({self.max_consec_losses})"):
@@ -436,11 +439,26 @@ class AIAdvancedSuite:
         if float(self.state.get("daily", {}).get("realized_r", 0.0)) <= -abs(self.daily_loss_r):
             cleared.append("Daily Loss Brake")
             self.state.setdefault("daily", {})["realized_r"] = 0.0
+        if int(self.state.get("daily", {}).get("trades", 0)) >= 10:
+            cleared.append(f"Daily Trade Counter ({self.state['daily']['trades']})")
+            self.state.setdefault("daily", {})["trades"] = 0
         self.state["override_next"] = False
         self._audit("manual_safety_reset", {"cleared": cleared})
         self._save()
         details = ", ".join(cleared) if cleared else "No active locks found"
         return f"Safety locks reset successfully ({details})"
+
+    def reset_daily_trades(self, force: bool = True) -> str:
+        """Reset daily trades count and unblock daily limits immediately."""
+        self._roll_day()
+        old_trades = self.state.setdefault("daily", {}).get("trades", 0)
+        self.state["daily"]["trades"] = 0
+        self.state["daily"]["realized_r"] = 0.0
+        self.state["consec_losses"] = 0
+        self.state["last_loss_ts"] = 0.0
+        self._audit("daily_trades_reset", {"previous_trades": old_trades})
+        self._save()
+        return f"Daily trades reset from {old_trades} to 0. Daily trade limits unblocked."
 
     def set_min_scorecard(self, score: float) -> str:
         val = float(np.clip(score, 0.0, 100.0))

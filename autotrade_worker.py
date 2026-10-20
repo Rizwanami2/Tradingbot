@@ -26,6 +26,9 @@ async def send_telegram_alert(app: Any, config: Any, text: str) -> bool:
             return False
 
 
+_last_ai_veto: Dict[str, Tuple[str, float]] = {}
+
+
 def _ai_gate_signal(sig: dict, symbol: str, profile: str, dname: str = "", agree: int = 0, conv_val: float = 0.6):
     """Run AI Advanced Suite; return (allow, sig_updated). Never raises."""
     try:
@@ -42,7 +45,12 @@ def _ai_gate_signal(sig: dict, symbol: str, profile: str, dname: str = "", agree
         sig.setdefault("symbol", symbol)
         gate = evaluate_signal_dict(sig, profile=str(profile or "scalp"))
         if not gate.allow:
-            logger.info("Autotrade %s: AI suite veto — %s", symbol, "; ".join(gate.reasons))
+            reasons_str = "; ".join(gate.reasons)
+            now_ts = time.time()
+            last_r, last_ts = _last_ai_veto.get(symbol, ("", 0.0))
+            if reasons_str != last_r or (now_ts - last_ts) >= 60.0:
+                logger.info("Autotrade %s: AI suite veto — %s", symbol, reasons_str)
+                _last_ai_veto[symbol] = (reasons_str, now_ts)
             return False, sig
         if gate.size_mult < 1.0 and sig.get("lot_mode", "auto") != "manual":
             for k in ("lots", "size"):

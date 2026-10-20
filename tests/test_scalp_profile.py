@@ -1061,6 +1061,55 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertIn("order-shakeout-protect", self.engine.active_positions)
         self.assertEqual(order.status, OrderStatus.OPEN)
 
+    def test_scalp_trail_buffering_prevents_ratchet_into_current_price(self):
+        """Verify trailing stop never tightens into or above current price during intra-candle pullbacks."""
+        self.engine.scalp_mode = True
+        self.engine.scalp_trail_enabled = True
+        self.engine.scalp_trail_activation_usd = 1.00
+        self.engine.scalp_trail_distance_usd = 0.80
+        self.engine.scalp_trail_buffer_usd = 0.40
+
+        order = TradeOrder(
+            id="order-buffer-test",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2645.0,
+            tp1=2665.0,
+            tp2=2670.0,
+            tp3=None,
+            lots=0.01,
+            size=1.0,
+            leverage=20.0,
+            margin_required=26.5,
+            liquidation_price=2600.0,
+            risk_amount=5.0,
+            rr_ratio=1.0,
+            setup_reason="Trail Buffer Test",
+            status=OrderStatus.OPEN,
+            executed_price=2650.0,
+            remaining_size=1.0,
+            is_scalp=True,
+        )
+        self.engine.active_positions[order.id] = order
+
+        # Price peaked at 2653.5 (+3.50), but pulled back to 2652.5 within the candle.
+        # Highest = 2653.5 -> unbuffered trail would be 2653.5 - 0.80 = 2652.70 (which is ABOVE close 2652.5!).
+        # But with buffer_usd = 0.40, safe_sl_ceiling = 2652.5 - 0.40 = 2652.10.
+        # Candidate SL MUST be clamped to <= 2652.10 so it does not choke or invert against current price!
+        candle = {"open": 2650.0, "high": 2653.5, "low": 2650.0, "close": 2652.5}
+        events = self.engine.update_market_candle("XAUUSD", candle)
+
+        self.assertTrue(order.trailing_sl_active)
+        # Stop loss must be safely below current price by at least the buffer
+        self.assertLessEqual(order.stop_loss, 2652.5 - 0.40 + 1e-4)
+        self.assertGreater(order.stop_loss, 2650.0)
+        # Position must NOT be stopped out on this candle!
+        trail_hits = [e for e in events if e["event"] == "SCALP_TRAIL_HIT"]
+        self.assertEqual(len(trail_hits), 0)
+        self.assertEqual(order.status, OrderStatus.OPEN)
+        self.assertIn(order.id, self.engine.active_positions)
+
     def test_scalp_mtf_confluence_veto_countertrend(self):
         """Verify scalp strategy strictly vetoes counter-trend trades against MTF matrix."""
         from mtf_matrix import check_mtf_confluence, MatrixSnapshot, TimeframeAnalysis

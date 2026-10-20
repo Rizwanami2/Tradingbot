@@ -288,6 +288,8 @@ class ExecutionEngine:
         self.scalp_trail_distance_usd: float = 0.80
         self.scalp_trail_activation_pct: float = 0.04
         self.scalp_trail_distance_pct: float = 0.03
+        self.scalp_trail_buffer_usd: float = 0.40
+        self.scalp_trail_buffer_pct: float = 0.02
         self.scalp_be_lock_usd: float = 0.50
         self.scalp_min_trail_profit_usd: float = 1.50
         self.scalp_profit_retention_pct: float = 0.50
@@ -299,6 +301,8 @@ class ExecutionEngine:
             self.scalp_trail_distance_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_USD", 0.80))
             self.scalp_trail_activation_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_ACTIVATION_PCT", 0.04))
             self.scalp_trail_distance_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_DISTANCE_PCT", 0.03))
+            self.scalp_trail_buffer_usd = float(getattr(_cfg_tr, "SCALP_TRAIL_BUFFER_USD", 0.40))
+            self.scalp_trail_buffer_pct = float(getattr(_cfg_tr, "SCALP_TRAIL_BUFFER_PCT", 0.02))
             self.scalp_be_lock_usd = float(getattr(_cfg_tr, "SCALP_BE_LOCK_USD", 0.50))
             self.scalp_min_trail_profit_usd = float(getattr(_cfg_tr, "SCALP_MIN_TRAIL_PROFIT_USD", 1.50))
             self.scalp_profit_retention_pct = float(getattr(_cfg_tr, "SCALP_PROFIT_RETENTION_PCT", 0.50))
@@ -1227,8 +1231,14 @@ class ExecutionEngine:
                 trail_dist_usd = float(getattr(self, "scalp_trail_distance_usd", 0.80))
                 min_trail_profit = float(getattr(self, "scalp_min_trail_profit_usd", 1.50))
                 retention_pct = float(getattr(self, "scalp_profit_retention_pct", 0.50))
+                trail_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 0.40))
+                trail_buffer_pct = float(getattr(self, "scalp_trail_buffer_pct", 0.02))
 
                 trail_stop_before = pos.stop_loss
+
+                # Calculate minimum buffer distance between current price and stop loss
+                curr_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 0.40))
+                buffer_price = (curr_buffer_usd / pos.remaining_size) if pos.remaining_size > 0 else 0.0
 
                 if trail_on and (pos.highest_profit_usd >= trail_act_usd or move_gain_pct >= trail_act_pct):
                     pos.trailing_sl_active = True
@@ -1250,10 +1260,17 @@ class ExecutionEngine:
                         usd_trail = (pos.highest_price - (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
                         base_sl = round(max(pct_trail, usd_trail), 4)
                         profit_floor_sl = round(entry + (locked_profit_usd / pos.remaining_size), 4) if pos.remaining_size > 0 else base_sl
-                        new_sl = max(base_sl, profit_floor_sl, round(entry * 1.0002, 4))
-                        if new_sl > pos.stop_loss:
+                        candidate_sl = max(base_sl, profit_floor_sl, round(entry * 1.0002, 4))
+
+                        # Enforce mandatory trail buffer: stop loss must NEVER exceed (curr_price - buffer_price)
+                        # This prevents the trailing stop from ratcheting into or above current price during intra-candle pullbacks
+                        safe_sl_ceiling = round(curr_price - buffer_price, 4)
+                        if candidate_sl > safe_sl_ceiling:
+                            candidate_sl = safe_sl_ceiling
+
+                        if candidate_sl > pos.stop_loss and candidate_sl < curr_price:
                             old_sl = pos.stop_loss
-                            pos.stop_loss = new_sl
+                            pos.stop_loss = candidate_sl
                             try:
                                 self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
                             except Exception:
@@ -1270,10 +1287,16 @@ class ExecutionEngine:
                         usd_trail = (pos.lowest_price + (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
                         base_sl = round(min(pct_trail, usd_trail), 4)
                         profit_floor_sl = round(entry - (locked_profit_usd / pos.remaining_size), 4) if pos.remaining_size > 0 else base_sl
-                        new_sl = min(base_sl, profit_floor_sl, round(entry * 0.9998, 4))
-                        if new_sl < pos.stop_loss:
+                        candidate_sl = min(base_sl, profit_floor_sl, round(entry * 0.9998, 4))
+
+                        # Enforce mandatory trail buffer: stop loss must NEVER be below (curr_price + buffer_price)
+                        safe_sl_floor = round(curr_price + buffer_price, 4)
+                        if candidate_sl < safe_sl_floor:
+                            candidate_sl = safe_sl_floor
+
+                        if candidate_sl < pos.stop_loss and candidate_sl > curr_price:
                             old_sl = pos.stop_loss
-                            pos.stop_loss = new_sl
+                            pos.stop_loss = candidate_sl
                             try:
                                 self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
                             except Exception:
@@ -1298,18 +1321,18 @@ class ExecutionEngine:
                         let_run = bool(getattr(self, "scalp_let_profit_run", True))
                         has_higher_tp = (is_long and pos.tp1 and pos.tp1 > curr_price) or (not is_long and pos.tp1 and pos.tp1 < curr_price)
                         candle_range = max(high - low, 1e-4)
-                        # Strong expansion bar: price pushing near candle extreme in profit direction
-                        expanding_bar = (is_long and curr_price >= high - 0.10 * candle_range and curr_price > candle_open) or \
-                                        (not is_long and curr_price <= low + 0.10 * candle_range and curr_price < candle_open)
-                        near_peak = (pos.unrealized_pnl >= pos.highest_profit_usd * 0.98)
+                        # Strong expansion bar or holding >= 90% peak profit:
+                        expanding_bar = (is_long and curr_price >= high - 0.20 * candle_range and curr_price >= candle_open) or \
+                                        (not is_long and curr_price <= low + 0.20 * candle_range and curr_price <= candle_open)
+                        near_peak = (pos.unrealized_pnl >= pos.highest_profit_usd * 0.90)
 
-                        if let_run and has_higher_tp and expanding_bar and near_peak:
+                        if let_run and has_higher_tp and (expanding_bar or near_peak):
                             # Profit is still expanding! Ratchet stop loss to lock in at least 85% of scalp target and let run towards higher TP
                             locked_run_profit = scalp_usd * 0.85
                             if pos.remaining_size > 0:
                                 if is_long:
                                     run_sl = round(entry + (locked_run_profit / pos.remaining_size), 4)
-                                    if run_sl > pos.stop_loss:
+                                    if run_sl > pos.stop_loss and run_sl < curr_price:
                                         pos.stop_loss = run_sl
                                         pos.trailing_sl_active = True
                                         try:
@@ -1318,7 +1341,7 @@ class ExecutionEngine:
                                             pass
                                 else:
                                     run_sl = round(entry - (locked_run_profit / pos.remaining_size), 4)
-                                    if run_sl < pos.stop_loss:
+                                    if run_sl < pos.stop_loss and run_sl > curr_price:
                                         pos.stop_loss = run_sl
                                         pos.trailing_sl_active = True
                                         try:
@@ -1374,7 +1397,7 @@ class ExecutionEngine:
                 if pos.trailing_sl_active or pos.be_stage >= 1:
                     stop_tightened_in_candle = (pos.stop_loss != trail_stop_before)
                     if stop_tightened_in_candle:
-                        trail_hit = (curr_price <= pos.stop_loss) if is_long else (curr_price >= pos.stop_loss)
+                        trail_hit = False
                     else:
                         # Prevent intra-candle lower-wick false shakeouts:
                         # If current price is safely trading above trailing stop, do not stop out on old pre-rally low
@@ -1660,7 +1683,15 @@ class ExecutionEngine:
                 trail_stop = self.risk_manager.trailing_stop(
                     pos.direction.lower(), entry, pos.stop_loss, pos.highest_price, pos.lowest_price, initial_risk, tp1_hit=True
                 )
-                if (is_long and trail_stop > pos.stop_loss) or (not is_long and trail_stop < pos.stop_loss):
+                min_step = max(initial_risk * 0.1, abs(entry) * 0.0003)
+                safe_sl_ceiling = round(curr_price - min_step, 4)
+                safe_sl_floor = round(curr_price + min_step, 4)
+                if is_long and trail_stop > safe_sl_ceiling:
+                    trail_stop = safe_sl_ceiling
+                elif not is_long and trail_stop < safe_sl_floor:
+                    trail_stop = safe_sl_floor
+
+                if (is_long and trail_stop > pos.stop_loss and trail_stop < curr_price) or (not is_long and trail_stop < pos.stop_loss and trail_stop > curr_price):
                     old_trail = pos.stop_loss
                     pos.stop_loss = trail_stop
                     min_step = max(initial_risk * 0.1, abs(entry) * 0.0003)
