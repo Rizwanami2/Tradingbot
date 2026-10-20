@@ -35,6 +35,7 @@ class TestSpamAndMT5Autotrade(unittest.IsolatedAsyncioTestCase):
         self.broker = MockMT5Broker(initial_balance=15000.0)
         self.broker.login = 888999
         self.broker.server = "Exness-Real5"
+        self._orig_broker = engine.broker
         engine.broker = self.broker
         engine.active_positions.clear()
         engine.pending_setups.clear()
@@ -49,9 +50,12 @@ class TestSpamAndMT5Autotrade(unittest.IsolatedAsyncioTestCase):
         self.ctx.args = []
 
     def tearDown(self):
+        import main
+        main.stop_background_autotrade_worker()
         self.limiter.reset()
         self.limiter.set_spam_mode(False)
         self.limiter.set_mode("auto")
+        engine.broker = self._orig_broker
         engine.active_positions.clear()
         engine.pending_setups.clear()
 

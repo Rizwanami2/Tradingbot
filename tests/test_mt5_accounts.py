@@ -155,11 +155,15 @@ class TestMT5AccountManager(unittest.TestCase):
 
 class TestSwitchBrokerMode(unittest.TestCase):
     def setUp(self):
+        self._orig_broker = engine.broker
+        self._orig_mode = config.BROKER_MODE
         self.temp_dir = tempfile.mkdtemp()
         self.storage_file = os.path.join(self.temp_dir, "test_accounts.json")
         self.mgr = MT5AccountManager(storage_file=self.storage_file)
 
     def tearDown(self):
+        engine.broker = self._orig_broker
+        config.BROKER_MODE = self._orig_mode
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_switch_to_paper(self):
@@ -237,6 +241,9 @@ class TestSwitchBrokerMode(unittest.TestCase):
 
 class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
+        self._orig_broker = engine.broker
+        self._orig_mode = config.BROKER_MODE
         self.chat = Chat(id=12345, type="private")
         self.message = MagicMock(spec=Message)
         self.message.reply_text = AsyncMock()
@@ -249,6 +256,13 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
 
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
         self.ctx.args = []
+
+    async def asyncTearDown(self):
+        import main
+        main.stop_background_autotrade_worker()
+        config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
+        engine.broker = self._orig_broker
+        config.BROKER_MODE = self._orig_mode
 
     async def test_mt5_command_status_dashboard(self):
         self.ctx.args = ["status"]
@@ -427,6 +441,16 @@ class TestTelegramMT5Commands(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCLIInteractiveMT5(unittest.TestCase):
+    def setUp(self):
+        self._orig_broker = engine.broker
+        self._orig_mode = config.BROKER_MODE
+
+    def tearDown(self):
+        import main
+        main.stop_background_autotrade_worker()
+        engine.broker = self._orig_broker
+        config.BROKER_MODE = self._orig_mode
+
     def test_cli_mt5_and_switch(self):
         mgr = get_account_manager()
         mgr.add_account("100200300", "P@ssw0rd123", "Demo-Server", alias="mytestacc")

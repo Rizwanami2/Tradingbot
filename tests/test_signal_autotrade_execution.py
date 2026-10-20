@@ -19,8 +19,10 @@ from telegram_advanced import asignal_command
 
 class TestSignalAutotradeExecution(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        main.stop_background_autotrade_worker()
         self.orig_mode = config.get_autotrade_mode()
         config.set_autotrade_mode("signal", persist=False)
+        config.MT5_BACKEND = "auto"
         main.autotrade_active = False
         self.engine = main.engine
         self.engine.active_positions.clear()
@@ -28,6 +30,10 @@ class TestSignalAutotradeExecution(unittest.IsolatedAsyncioTestCase):
         if hasattr(self.engine, "reset_halt"):
             self.engine.reset_halt()
         if hasattr(self.engine, "broker") and self.engine.broker is not None:
+            if hasattr(self.engine.broker, "backend"):
+                self.engine.broker.backend = "auto"
+            if hasattr(self.engine.broker, "effective_backend"):
+                self.engine.broker.effective_backend = "simulated"
             if hasattr(self.engine.broker, "_sim_positions") and isinstance(self.engine.broker._sim_positions, dict):
                 self.engine.broker._sim_positions.clear()
             if hasattr(self.engine.broker, "_positions") and isinstance(self.engine.broker._positions, dict):
@@ -36,6 +42,7 @@ class TestSignalAutotradeExecution(unittest.IsolatedAsyncioTestCase):
                 self.engine.broker.positions.clear()
 
     def tearDown(self):
+        main.stop_background_autotrade_worker()
         config.set_autotrade_mode(self.orig_mode, persist=False)
         main.autotrade_active = False
         self.engine.active_positions.clear()

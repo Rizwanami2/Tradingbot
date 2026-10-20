@@ -1724,9 +1724,7 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cmd_clean = cmd_raw.lower().lstrip("/")
 
     removed_feature_cmds = {
-        "board", "journal", "agents", "tiers", "digest", "replay", "export",
-        "setups", "abooks", "heal", "brain", "relearn", "train", "learner",
-        "veto", "learnerveto", "ai", "aisuite", "feature", "features", "featured",
+        "feature", "features", "featured",
     }
     if cmd_clean in removed_feature_cmds:
         await safe_reply(
@@ -4219,6 +4217,7 @@ async def live_monitoring_worker(app):
             arbiter=arbiter,
             MarketDataFeed=MarketDataFeed,
             autotrade_active_getter=lambda: autotrade_active,
+            is_running_getter=lambda: _background_autotrade_running,
             write_runtime_status=_write_runtime_status,
             monitoring_health=monitoring_health,
             now_iso=_now_iso,
@@ -4375,13 +4374,29 @@ async def live_monitoring_worker(app):
 
 
 _background_autotrade_thread: Optional[threading.Thread] = None
+_background_autotrade_running: bool = False
+
+
+def stop_background_autotrade_worker(timeout: float = 0.5) -> None:
+    """Safely request background autotrade worker to stop and wait briefly."""
+    global _background_autotrade_running, _background_autotrade_thread
+    _background_autotrade_running = False
+    if _background_autotrade_thread and _background_autotrade_thread.is_alive():
+        try:
+            _background_autotrade_thread.join(timeout=timeout)
+        except Exception:
+            pass
+    _background_autotrade_thread = None
 
 
 def start_background_autotrade_worker() -> Optional[threading.Thread]:
     """Run live_monitoring_worker in a dedicated background thread for CLI/standalone mode."""
-    global _background_autotrade_thread
+    global _background_autotrade_thread, _background_autotrade_running
     if _background_autotrade_thread and _background_autotrade_thread.is_alive():
+        _background_autotrade_running = True
         return _background_autotrade_thread
+
+    _background_autotrade_running = True
 
     try:
         from autonomous_learner import auto_start
@@ -4398,6 +4413,8 @@ def start_background_autotrade_worker() -> Optional[threading.Thread]:
         logger.debug("Dashboard start skip: %s", e)
 
     def _worker_thread():
+        global _background_autotrade_running
+        _background_autotrade_running = True
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -4405,7 +4422,11 @@ def start_background_autotrade_worker() -> Optional[threading.Thread]:
         except Exception as e:
             logger.error("Background autotrade worker error: %s", e)
         finally:
-            loop.close()
+            _background_autotrade_running = False
+            try:
+                loop.close()
+            except Exception:
+                pass
 
     _background_autotrade_thread = threading.Thread(
         target=_worker_thread, daemon=True, name="AutotradeWorkerThread"
@@ -4463,10 +4484,12 @@ def run_cli_interactive():
             cmd = input("TradingBot> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting CLI.")
+            stop_background_autotrade_worker()
             break
         if not cmd:
             continue
         if cmd.lower() in ("exit", "quit"):
+            stop_background_autotrade_worker()
             break
         parts = cmd.split()
         name = parts[0].lower().lstrip("/")
@@ -5779,6 +5802,7 @@ def run_cli_interactive():
                 print(f"AI command error: {e}")
         else:
             print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, train, relearn, ask, reset, exit")
+    stop_background_autotrade_worker()
 
 
 def main():

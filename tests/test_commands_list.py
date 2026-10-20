@@ -60,13 +60,43 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self._orig_positions = dict(engine.active_positions)
         self._orig_setups = dict(engine.pending_setups)
         self._orig_mt5_backend = getattr(config, "MT5_BACKEND", "auto")
+        self._orig_broker_backend = getattr(engine.broker, "backend", "auto")
+        self._orig_broker_eff = getattr(engine.broker, "effective_backend", "simulated")
 
-    async def asyncTearDown(self):
+    def setUp(self):
+        self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
+        self._orig_broker = engine.broker
+        self._orig_positions = dict(engine.active_positions)
+        self._orig_setups = dict(engine.pending_setups)
+        self._orig_mt5_backend = getattr(config, "MT5_BACKEND", "auto")
+        self._orig_broker_backend = getattr(engine.broker, "backend", "auto")
+        self._orig_broker_eff = getattr(engine.broker, "effective_backend", "simulated")
+
+    def tearDown(self):
+        import main
+        main.stop_background_autotrade_worker()
         config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
         engine.broker = self._orig_broker
         engine.active_positions = self._orig_positions
         engine.pending_setups = self._orig_setups
         config.MT5_BACKEND = self._orig_mt5_backend
+        if hasattr(engine.broker, "backend"):
+            engine.broker.backend = self._orig_broker_backend
+        if hasattr(engine.broker, "effective_backend"):
+            engine.broker.effective_backend = self._orig_broker_eff
+
+    async def asyncTearDown(self):
+        import main
+        main.stop_background_autotrade_worker()
+        config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
+        engine.broker = self._orig_broker
+        engine.active_positions = self._orig_positions
+        engine.pending_setups = self._orig_setups
+        config.MT5_BACKEND = self._orig_mt5_backend
+        if hasattr(engine.broker, "backend"):
+            engine.broker.backend = self._orig_broker_backend
+        if hasattr(engine.broker, "effective_backend"):
+            engine.broker.effective_backend = self._orig_broker_eff
 
     async def test_help_command_full_catalog(self):
         self.ctx.args = []
@@ -95,13 +125,11 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/abacktest", text)
         self.assertIn("/performance", text)
         self.assertIn("/profile", text)
-        self.assertIn("/board", text)
-        self.assertIn("/journal", text)
-        self.assertIn("/agents", text)
-        self.assertIn("/tiers", text)
-        self.assertIn("/digest", text)
         self.assertIn("/brain", text)
         self.assertIn("/relearn", text)
+        self.assertIn("/learner", text)
+        self.assertIn("/veto", text)
+        self.assertIn("/train", text)
         self.assertIn("/reset", text)
         self.assertIn("/ask", text)
 
@@ -160,8 +188,13 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.ctx.args = ["ai"]
         await help_command(self.update, self.ctx)
         text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Autonomous AI & Standings", text)
+        self.assertIn("Autonomous AI & Multi-Agent Standings", text)
         self.assertIn("/brain", text)
+        self.assertIn("/board", text)
+        self.assertIn("/journal", text)
+        self.assertIn("/agents", text)
+        self.assertIn("/tiers", text)
+        self.assertIn("/digest", text)
 
     async def test_start_command(self):
         await start_command(self.update, self.ctx)
@@ -409,16 +442,16 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.ctx.args = []
         await digest_command(self.update, self.ctx)
         self.message.reply_text.assert_called()
-        self.assertIn("Daily Digest", self.message.reply_text.call_args[0][0])
+        self.assertIn("removed", self.message.reply_text.call_args[0][0])
 
         await export_command(self.update, self.ctx)
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
         await setups_command(self.update, self.ctx)
-        self.assertIn("Setups", self.message.reply_text.call_args[0][0])
+        self.assertIn("removed", self.message.reply_text.call_args[0][0])
 
         await abooks_command(self.update, self.ctx)
-        self.assertIn("A/B", self.message.reply_text.call_args[0][0])
+        self.assertIn("removed", self.message.reply_text.call_args[0][0])
 
         await heal_command(self.update, self.ctx)
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)

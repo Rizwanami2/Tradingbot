@@ -297,6 +297,7 @@ class TestExecutionEngine(unittest.TestCase):
 
     def test_scalp_auto_close(self):
         self.engine.scalp_mode = True
+        self.engine.scalp_let_profit_run = False
         sig = {
             "symbol": "XAUUSD",
             "direction": "LONG",
@@ -320,6 +321,31 @@ class TestExecutionEngine(unittest.TestCase):
         events = self.engine.update_market_candle("XAUUSD", candle_scalp)
         self.assertTrue(any(ev["event"] == "SCALP_CLOSE" for ev in events))
         self.assertNotIn("XAUUSD", self.engine.active_positions)
+
+    def test_scalp_let_profit_run_when_expanding(self):
+        self.engine.scalp_mode = True
+        self.engine.scalp_let_profit_run = True
+        sig = {
+            "symbol": "XAUUSD",
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop": 2640.0,
+            "tp1": 2665.0,
+            "tp2": 2675.0,
+            "lots": 0.02,
+            "size": 2.0,
+            "leverage": 20.0,
+            "margin_required": 53.0,
+            "liquidation_price": 2623.5,
+            "risk_amount": 20.0,
+            "rr": 1.5,
+        }
+        self.engine.register_setup(sig)
+        self.engine.update_market_candle("XAUUSD", {"open": 2650.0, "high": 2651.0, "low": 2649.0, "close": 2650.0})
+        self.assertIn("XAUUSD", self.engine.active_positions)
+        candle_scalp = {"open": 2650.0, "high": 2655.0, "low": 2650.0, "close": 2654.0}
+        events = self.engine.update_market_candle("XAUUSD", candle_scalp)
+        self.assertTrue(any(ev["event"] == "SCALP_RUNNING_TO_TP" for ev in events))
 
     def test_max_open_trades_limit(self):
         self.engine.max_open_trades = 2

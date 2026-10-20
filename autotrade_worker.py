@@ -120,6 +120,7 @@ async def live_monitoring_worker(
     write_runtime_status: Callable[[], None],
     monitoring_health: Dict[str, Any],
     now_iso: Callable[[], str],
+    is_running_getter: Optional[Callable[[], bool]] = None,
 ):
     async def _send_alert(text: str) -> None:
         await send_telegram_alert(app, config, text)
@@ -173,7 +174,7 @@ async def live_monitoring_worker(
     logger.info("Autotrade watchlist=%s max_open=%s (combined AI suite on)", watchlist, max_open)
     write_runtime_status()
 
-    while True:
+    while (is_running_getter() if is_running_getter is not None else True):
         monitoring_health["last_poll_at"] = now_iso()
         any_data = False
         autotrade_active = bool(autotrade_active_getter())
