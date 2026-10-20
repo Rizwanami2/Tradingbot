@@ -486,8 +486,10 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
                     pnl = float(getattr(p, "unrealized_pnl", 0.0) or 0.0)
                     if pnl == 0.0 and c_px > 0 and e_px > 0:
                         diff = (c_px - e_px) if side_str in ("BUY", "LONG") else (e_px - c_px)
-                        pnl = round(diff * qty, 2)
-                    pnl_pct = round((pnl / max(e_px * qty, 1.0)) * 100.0, 2) if e_px > 0 else 0.0
+                        cs = 100.0 if any(x in p_sym for x in ("XAU", "GOLD", "PAXG")) else (5000.0 if any(x in p_sym for x in ("XAG", "SILVER")) else (1.0 if "BTC" in p_sym else 100000.0))
+                        pnl = round(diff * qty * cs, 2)
+                    cs_notional = 100.0 if any(x in p_sym for x in ("XAU", "GOLD", "PAXG")) else (5000.0 if any(x in p_sym for x in ("XAG", "SILVER")) else (1.0 if "BTC" in p_sym else 100000.0))
+                    pnl_pct = round((pnl / max(e_px * qty * cs_notional, 1.0)) * 100.0, 2) if e_px > 0 else 0.0
                     open_positions.append({
                         "ticket": getattr(p, "ticket", getattr(p, "id", "LIVE")),
                         "symbol": p_sym,
@@ -518,7 +520,8 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
                     qty = float(getattr(order, "lots", 0.01) or 0.01)
                     side_str = str(getattr(order, "direction", "BUY")).upper()
                     pnl = float(getattr(order, "unrealized_pnl", 0.0) or 0.0)
-                    pnl_pct = round((pnl / max(e_px * qty, 1.0)) * 100.0, 2) if e_px > 0 else 0.0
+                    cs_notional = 100.0 if any(x in o_sym for x in ("XAU", "GOLD", "PAXG")) else (5000.0 if any(x in o_sym for x in ("XAG", "SILVER")) else (1.0 if "BTC" in o_sym else 100000.0))
+                    pnl_pct = round((pnl / max(e_px * qty * cs_notional, 1.0)) * 100.0, 2) if e_px > 0 else 0.0
                     open_positions.append({
                         "ticket": t_id or "BOT-ORD",
                         "symbol": o_sym,

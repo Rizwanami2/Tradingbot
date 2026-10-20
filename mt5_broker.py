@@ -471,6 +471,7 @@ class MT5Broker(Broker):
         self._sim_tickets: Dict[str, int] = {}
         self._ticket_counter: int = 100000
         self.mark_prices: Dict[str, float] = {}
+        self._closed_deals: Dict[str, Dict[str, Any]] = {}
 
         # Auto-connect
         self.connect()
@@ -1235,6 +1236,31 @@ class MT5Broker(Broker):
                         req.update(params)
                     res = native_mt5.order_send(req)
                     if res and res.retcode == native_mt5.TRADE_RETCODE_DONE:
+                        deal_ticket = getattr(res, "deal", None)
+                        if deal_ticket:
+                            try:
+                                deals = native_mt5.history_deals_get(ticket=int(deal_ticket))
+                                if deals and len(deals) > 0:
+                                    d = deals[0]
+                                    profit = float(getattr(d, "profit", 0.0) or 0.0)
+                                    comm = float(getattr(d, "commission", 0.0) or 0.0)
+                                    swap = float(getattr(d, "swap", 0.0) or 0.0)
+                                    fee = float(getattr(d, "fee", 0.0) or 0.0)
+                                    net_pnl = round(profit + comm + swap + fee, 2)
+                                    exit_px = float(getattr(d, "price", close_price) or close_price)
+                                    tkt_key = str(getattr(pos, "ticket", "") or getattr(pos, "id", "") or "")
+                                    self._closed_deals[tkt_key] = {
+                                        "ticket": pos.ticket,
+                                        "deal_ticket": deal_ticket,
+                                        "profit": net_pnl,
+                                        "price": exit_px,
+                                        "commission": comm,
+                                        "swap": swap,
+                                        "comment": str(getattr(d, "comment", "") or ""),
+                                        "time": getattr(d, "time", None),
+                                    }
+                            except Exception as _cd_err:
+                                logger.debug("[MT5Broker] history_deals_get error: %s", _cd_err)
                         break
                     last_ret = getattr(res, "retcode", None)
                     if last_ret not in (
@@ -1258,7 +1284,15 @@ class MT5Broker(Broker):
                 if params:
                     req.update(params)
                 res = _gateway_request("POST", url, req)
-                return bool(res.get("closed", res.get("ok", False)))
+                ok = bool(res.get("closed", res.get("ok", False)))
+                if ok and ticket is not None and "profit" in res:
+                    self._closed_deals[str(ticket)] = {
+                        "ticket": ticket,
+                        "profit": float(res["profit"]),
+                        "price": float(res.get("price") or price or 0.0),
+                        "comment": res.get("comment", ""),
+                    }
+                return ok
             else:
                 target_key = None
                 if ticket is not None:
@@ -1276,8 +1310,16 @@ class MT5Broker(Broker):
                     pos = self._sim_positions[target_key]
                     close_qty = float(qty) if qty and 0 < qty <= pos.qty else pos.qty
                     close_price = float(price) if price and price > 0 else (pos.current_price or pos.entry_price)
-                    pnl = (close_price - pos.entry_price) * close_qty if pos.side == "buy" else (pos.entry_price - close_price) * close_qty
+                    cs = 100.0 if any(x in str(pos.symbol).upper() for x in ("XAU", "GOLD")) else (1.0 if "BTC" in str(pos.symbol).upper() else 100000.0)
+                    pnl = round(((close_price - pos.entry_price) if pos.side == "buy" else (pos.entry_price - close_price)) * close_qty * cs, 2)
                     self.balance += pnl
+                    tkt_key = str(getattr(pos, "ticket", "") or getattr(pos, "id", "") or target_key)
+                    self._closed_deals[tkt_key] = {
+                        "ticket": tkt_key,
+                        "profit": pnl,
+                        "price": close_price,
+                        "comment": "Cloud MT5 close",
+                    }
                     if close_qty >= pos.qty - 1e-6:
                         for k, p in list(self._sim_positions.items()):
                             if p is pos or k == target_key:
@@ -1293,6 +1335,57 @@ class MT5Broker(Broker):
                 return True
 
         return False
+
+    def get_closed_deal_info(self, ticket: Any) -> Optional[Dict[str, Any]]:
+        """Fetch exact realized PnL, exit price, and execution details for a closed MT5 position ticket."""
+        if not ticket:
+            return None
+        t_str = str(ticket).strip()
+        if hasattr(self, "_closed_deals") and t_str in self._closed_deals:
+            return dict(self._closed_deals[t_str])
+
+        if self.mode == "live" and native_mt5 is not None and self._connected:
+            try:
+                t_int = int(t_str)
+                deals = native_mt5.history_deals_get(position=t_int)
+                if not deals:
+                    deals = native_mt5.history_deals_get(ticket=t_int)
+                if deals:
+                    out_deals = [d for d in deals if getattr(d, "entry", None) == getattr(native_mt5, "DEAL_ENTRY_OUT", 1)]
+                    if not out_deals:
+                        out_deals = deals
+                    target_deal = out_deals[-1]
+                    profit = float(getattr(target_deal, "profit", 0.0) or 0.0)
+                    comm = float(getattr(target_deal, "commission", 0.0) or 0.0)
+                    swap = float(getattr(target_deal, "swap", 0.0) or 0.0)
+                    fee = float(getattr(target_deal, "fee", 0.0) or 0.0)
+                    total_pnl = round(profit + comm + swap + fee, 2)
+                    cum_profit = round(sum(
+                        float(getattr(d, "profit", 0.0) or 0.0) +
+                        float(getattr(d, "commission", 0.0) or 0.0) +
+                        float(getattr(d, "swap", 0.0) or 0.0) +
+                        float(getattr(d, "fee", 0.0) or 0.0)
+                        for d in out_deals
+                    ), 2)
+                    exit_px = float(getattr(target_deal, "price", 0.0) or 0.0)
+                    comment = str(getattr(target_deal, "comment", "") or "")
+                    deal_info = {
+                        "ticket": t_int,
+                        "deal_ticket": getattr(target_deal, "ticket", None),
+                        "profit": total_pnl,
+                        "total_profit": cum_profit,
+                        "price": exit_px,
+                        "comment": comment,
+                        "commission": comm,
+                        "swap": swap,
+                    }
+                    if not hasattr(self, "_closed_deals"):
+                        self._closed_deals = {}
+                    self._closed_deals[t_str] = deal_info
+                    return deal_info
+            except Exception as e:
+                logger.debug("[MT5Broker] get_closed_deal_info query error: %s", e)
+        return None
 
     def modify_position(
         self,
@@ -1400,6 +1493,29 @@ class MT5Broker(Broker):
             return True
         return False
 
+    def get_contract_size(self, symbol: str) -> float:
+        """Return contract size for a symbol from MT5 broker or standard defaults."""
+        sym = (symbol or "").upper()
+        if native_mt5 is not None and self._connected and self.effective_backend != "gateway":
+            try:
+                target_sym, _ = select_and_resolve_symbol(symbol)
+                sinfo = native_mt5.symbol_info(target_sym)
+                if sinfo is not None:
+                    tcs = getattr(sinfo, "trade_contract_size", None)
+                    if isinstance(tcs, (int, float)) and tcs > 0:
+                        return float(tcs)
+            except Exception:
+                pass
+        if any(x in sym for x in ("XAU", "GOLD", "GC")):
+            return 100.0
+        if any(x in sym for x in ("XAG", "SILVER")):
+            return 5000.0
+        if any(x in sym for x in ("BTC", "BITCOIN", "ETH", "SOL", "CRYPTO")):
+            return 1.0
+        if any(x in sym for x in ("USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF")):
+            return 100000.0
+        return 1.0
+
     def update_mark_price(self, symbol: str, price: float) -> None:
         """Update floating PnL on simulated open positions."""
         p = _safe_f(price)
@@ -1414,7 +1530,8 @@ class MT5Broker(Broker):
                 pos = self._sim_positions[key]
                 pos.current_price = p
                 diff = (p - pos.entry_price) if pos.side.lower() == "buy" else (pos.entry_price - p)
-                pos.unrealized_pnl = round(diff * pos.qty, 2)
+                cs = self.get_contract_size(pos.symbol)
+                pos.unrealized_pnl = round(diff * pos.qty * cs, 2)
 
     def mark_price(self, symbol: str, price: float) -> float:
         """Alias for update_mark_price returning current equity."""
@@ -1987,7 +2104,21 @@ class MockMT5Broker(Broker):
         self._positions: Dict[str, Position] = {}
         self._ticket_counter = 100000
         self.mark_prices: Dict[str, float] = {}
+        self._closed_deals: Dict[str, Dict[str, Any]] = {}
         set_active_broker(self)
+
+    def get_contract_size(self, symbol: str) -> float:
+        """Return contract size for a symbol."""
+        sym = (symbol or "").upper()
+        if any(x in sym for x in ("XAU", "GOLD", "GC")):
+            return 100.0
+        if any(x in sym for x in ("XAG", "SILVER")):
+            return 5000.0
+        if any(x in sym for x in ("BTC", "BITCOIN", "ETH", "SOL", "CRYPTO")):
+            return 1.0
+        if any(x in sym for x in ("USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF")):
+            return 100000.0
+        return 100.0
 
     def update_mark_price(self, symbol: str, price: float) -> None:
         p = float(price)
@@ -1996,6 +2127,13 @@ class MockMT5Broker(Broker):
             self.mark_prices[symbol.upper()] = p
             resolved = resolve_mt5_symbol(symbol)
             self.mark_prices[resolved] = p
+            for key in (resolved, symbol.upper(), symbol):
+                if key in self._positions:
+                    pos = self._positions[key]
+                    pos.current_price = p
+                    diff = (p - pos.entry_price) if str(getattr(pos, "side", "buy")).lower() in ("buy", "long") else (pos.entry_price - p)
+                    cs = self.get_contract_size(pos.symbol)
+                    pos.unrealized_pnl = round(diff * pos.qty * cs, 2)
 
     def mark_price(self, symbol: str, price: float) -> float:
         self.update_mark_price(symbol, price)
@@ -2136,6 +2274,26 @@ class MockMT5Broker(Broker):
             if key in self._positions:
                 pos = self._positions[key]
                 close_qty = float(qty) if qty and 0 < qty <= pos.qty else pos.qty
+                close_price = float(price) if price and price > 0 else (getattr(pos, "current_price", None) or pos.entry_price)
+                cs = 100.0 if any(x in str(pos.symbol).upper() for x in ("XAU", "GOLD")) else (1.0 if "BTC" in str(pos.symbol).upper() else 100000.0)
+                is_buy = str(getattr(pos, "side", "buy")).lower() in ("buy", "long")
+                pnl = round(((close_price - pos.entry_price) if is_buy else (pos.entry_price - close_price)) * close_qty * cs, 2)
+                self.balance += pnl
+                self.equity = self.balance
+                tkt_key = str(getattr(pos, "ticket", "") or getattr(pos, "id", "") or key)
+                deal_record = {
+                    "ticket": tkt_key,
+                    "profit": pnl,
+                    "total_profit": pnl,
+                    "price": close_price,
+                    "comment": "Mock MT5 Close",
+                }
+                self._closed_deals[tkt_key] = deal_record
+                if getattr(pos, "ticket", None):
+                    self._closed_deals[str(pos.ticket)] = deal_record
+                if getattr(pos, "id", None):
+                    self._closed_deals[str(pos.id)] = deal_record
+
                 if close_qty >= pos.qty - 1e-6:
                     for k, p in list(self._positions.items()):
                         if p is pos or k == key:
@@ -2143,6 +2301,15 @@ class MockMT5Broker(Broker):
                 else:
                     pos.qty -= close_qty
         return True
+
+    def get_closed_deal_info(self, ticket: Any) -> Optional[Dict[str, Any]]:
+        """Fetch simulated closed deal details for a position ticket."""
+        if not ticket:
+            return None
+        t_str = str(ticket).strip()
+        if hasattr(self, "_closed_deals") and t_str in self._closed_deals:
+            return dict(self._closed_deals[t_str])
+        return None
 
     def modify_position(
         self,

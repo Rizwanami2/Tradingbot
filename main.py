@@ -2988,8 +2988,14 @@ async def mt5_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     icon = "📈" if p.unrealized_pnl >= 0 else "📉"
                     curr_p = getattr(p, "current_price", None)
                     if not curr_p:
-                        if p.qty > 0:
-                            curr_p = p.entry_price + (p.unrealized_pnl / p.qty) if p.side.lower() == "buy" else p.entry_price - (p.unrealized_pnl / p.qty)
+                        cs = 100.0 if any(x in str(p.symbol).upper() for x in ("XAU", "GOLD", "GC")) else (5000.0 if any(x in str(p.symbol).upper() for x in ("XAG", "SILVER")) else (1.0 if "BTC" in str(p.symbol).upper() else 100000.0))
+                        if hasattr(engine, "get_contract_size"):
+                            try:
+                                cs = float(engine.get_contract_size(p.symbol))
+                            except Exception:
+                                pass
+                        if p.qty > 0 and cs > 0:
+                            curr_p = p.entry_price + (p.unrealized_pnl / (p.qty * cs)) if p.side.lower() == "buy" else p.entry_price - (p.unrealized_pnl / (p.qty * cs))
                         else:
                             curr_p = p.entry_price
                     curr_fmt = f"${curr_p:,.2f}" if curr_p >= 1.0 else f"${curr_p:,.4f}"

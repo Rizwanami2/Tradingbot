@@ -353,6 +353,51 @@ class ExecutionEngine:
         """Clear execution halt state so setups can be registered again."""
         self.execution_halted = False
 
+    def get_contract_size(self, symbol: str) -> float:
+        """Return standard contract size for a symbol (e.g. 100 for XAUUSD, 1 for BTCUSD, 100000 for FX)."""
+        sym = (symbol or "").upper()
+        if getattr(self, "broker", None) is not None and hasattr(self.broker, "get_contract_size"):
+            try:
+                b_cs = self.broker.get_contract_size(sym)
+                if isinstance(b_cs, (int, float)) and b_cs > 0:
+                    return float(b_cs)
+            except Exception:
+                pass
+        try:
+            from risk_manager import INSTRUMENTS
+            if sym in INSTRUMENTS:
+                return float(INSTRUMENTS[sym].get("contract_size", 100))
+            for k, v in INSTRUMENTS.items():
+                if k in sym or sym in k:
+                    return float(v.get("contract_size", 100))
+        except Exception:
+            pass
+        if any(x in sym for x in ("XAU", "GOLD", "GC")):
+            return 100.0
+        if any(x in sym for x in ("XAG", "SILVER")):
+            return 5000.0
+        if any(x in sym for x in ("BTC", "BITCOIN", "ETH", "SOL", "CRYPTO")):
+            return 1.0
+        if any(x in sym for x in ("USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF")):
+            return 100000.0
+        return 1.0
+
+    def calc_position_pnl(self, pos: TradeOrder, exit_price: float, closed_lots: Optional[float] = None) -> float:
+        """Calculate exact realized PnL in account currency for an order given exit price."""
+        entry = float(pos.executed_price or pos.entry_level or 0.0)
+        if entry <= 0:
+            return 0.0
+        is_long = "LONG" in str(pos.direction).upper() or "BUY" in str(pos.direction).upper()
+        diff = (exit_price - entry) if is_long else (entry - exit_price)
+
+        cs = self.get_contract_size(pos.symbol)
+        lots_to_use = float(closed_lots if closed_lots is not None else (pos.remaining_lots or pos.lots or 0.0))
+        if lots_to_use > 0:
+            return round(diff * lots_to_use * cs, 2)
+
+        rem_size = float(pos.remaining_size or pos.size or 0.0)
+        return round(diff * rem_size, 2)
+
     def _broker_close(
         self,
         symbol: str,
@@ -507,6 +552,9 @@ class ExecutionEngine:
                 entry_px = float(bp.entry_price or 0.0)
                 sl = float(bp.stop_loss) if bp.stop_loss is not None else (entry_px * 0.98 if direction == "LONG" else entry_px * 1.02)
                 tp = float(bp.take_profit) if bp.take_profit is not None else (entry_px * 1.04 if direction == "LONG" else entry_px * 0.96)
+                cs = self.get_contract_size(bp.symbol)
+                lots_val = float(bp.qty)
+                size_val = round(lots_val * cs, 4)
                 order = TradeOrder(
                     id=f"RECOVERED-{self._order_counter}",
                     symbol=bp.symbol,
@@ -516,20 +564,20 @@ class ExecutionEngine:
                     tp1=tp,
                     tp2=tp,
                     tp3=None,
-                    lots=float(bp.qty),
-                    size=float(bp.qty),
+                    lots=lots_val,
+                    size=size_val,
                     leverage=getattr(self.risk_manager, "leverage", 1.0) or 1.0,
                     margin_required=0.0,
                     liquidation_price=None,
-                    risk_amount=abs(entry_px - sl) * float(bp.qty),
+                    risk_amount=abs(entry_px - sl) * size_val,
                     rr_ratio=2.0,
                     setup_reason="Broker Recovery",
                     status=OrderStatus.OPEN,
                     executed_price=entry_px,
                     current_price=bp.current_price or entry_px,
                     unrealized_pnl=float(bp.unrealized_pnl or 0.0),
-                    remaining_size=float(bp.qty),
-                    remaining_lots=float(bp.qty),
+                    remaining_size=size_val,
+                    remaining_lots=lots_val,
                     ticket=bp_ticket or getattr(bp, "ticket", None),
                 )
                 self.active_positions[order.id] = order
@@ -577,6 +625,9 @@ class ExecutionEngine:
                     if bp.qty:
                         lp.lots = float(bp.qty)
                         lp.remaining_lots = float(bp.qty)
+                        cs = self.get_contract_size(lp.symbol)
+                        lp.remaining_size = round(lp.remaining_lots * cs, 4)
+                        lp.size = lp.remaining_size
                     if bp.stop_loss is not None:
                         lp.stop_loss = float(bp.stop_loss)
                     if bp.take_profit is not None:
@@ -595,12 +646,53 @@ class ExecutionEngine:
                 is_open_in_broker = local_pos.symbol.upper() in broker_symbols
 
             if not is_open_in_broker:
+                deal_info = None
+                if getattr(self, "broker", None) and hasattr(self.broker, "get_closed_deal_info"):
+                    try:
+                        deal_info = self.broker.get_closed_deal_info(local_pos.ticket or local_pos.id)
+                    except Exception as _dx:
+                        logger.debug("[reconcile] deal query note: %s", _dx)
+
+                if deal_info and "profit" in deal_info:
+                    local_pos.realized_pnl = float(deal_info.get("total_profit", deal_info["profit"]))
+                    local_pos.exit_price = float(deal_info.get("price") or local_pos.current_price or local_pos.executed_price or 0.0)
+                    close_comment = deal_info.get("comment", "")
+                    if "[sl" in close_comment.lower():
+                        local_pos.close_reason = f"MT5 Stop Loss Hit ({close_comment})"
+                    elif "[tp" in close_comment.lower():
+                        local_pos.close_reason = f"MT5 Take Profit Hit ({close_comment})"
+                    else:
+                        local_pos.close_reason = f"MT5 Closed ({close_comment})" if close_comment else "MT5 Closed Externally"
+                else:
+                    exit_px = float(local_pos.current_price or self.get_current_price(local_pos.symbol) or local_pos.executed_price or 0.0)
+                    local_pos.exit_price = exit_px
+                    if local_pos.realized_pnl == 0.0 and local_pos.unrealized_pnl != 0.0:
+                        local_pos.realized_pnl = float(local_pos.unrealized_pnl)
+                    elif local_pos.realized_pnl == 0.0:
+                        local_pos.realized_pnl = self.calc_position_pnl(local_pos, exit_px)
+                    local_pos.close_reason = "Reconciled with broker: closed externally"
+
                 local_pos.status = OrderStatus.CLOSED
                 local_pos.closed_at = datetime.now(timezone.utc).isoformat()
-                local_pos.close_reason = "Reconciled with broker: closed externally"
+
+                initial_risk = abs(float(local_pos.executed_price or local_pos.entry_level) - float(local_pos.stop_loss))
+                r_mult = local_pos.realized_pnl / (initial_risk * local_pos.size) if (initial_risk * local_pos.size) > 0 else 0.0
+                try:
+                    self.risk_manager.update_after_trade(local_pos.realized_pnl, r_multiple=r_mult)
+                except Exception:
+                    pass
+
+                self._notify_brain_close(local_pos, r_mult)
                 self.trade_history.append(local_pos)
                 self.active_positions.pop(k, None)
                 closed_locally.append(local_pos)
+
+                msg = (
+                    f"🏁 **TRADE CLOSED ON MT5** ({local_pos.symbol} [#{local_pos.id}])\n"
+                    f"Exit: `${local_pos.exit_price:,.2f}` | PnL: `${local_pos.realized_pnl:+,.2f}`\n"
+                    f"Reason: {local_pos.close_reason}"
+                )
+                self._dispatch_event("TRADE_CLOSED", local_pos, msg)
 
         adopted = self.recover_positions_from_broker()
         self.save_state()
@@ -898,6 +990,8 @@ class ExecutionEngine:
         if direction == "SHORT" and not (stop > entry > tp1 >= tp2):
             raise ValueError("Invalid SHORT levels: expected stop > entry > TP1 >= TP2.")
 
+        cs = self.get_contract_size(symbol)
+        actual_size = round(lots * cs, 4) if (cs > 1.0 and lots > 0) else size
         order = TradeOrder(
             id=self._next_order_id(),
             symbol=symbol,
@@ -908,14 +1002,14 @@ class ExecutionEngine:
             tp2=tp2,
             tp3=tp3,
             lots=lots,
-            size=size,
+            size=actual_size,
             leverage=leverage,
             margin_required=margin_required,
             liquidation_price=liq_price,
             risk_amount=risk_amt,
             rr_ratio=rr,
             setup_reason=reason or sig.get("reason", "Multi-Agent Consensus"),
-            remaining_size=size,
+            remaining_size=actual_size,
             remaining_lots=lots,
             highest_price=entry,
             lowest_price=entry,
@@ -1383,7 +1477,7 @@ class ExecutionEngine:
                         pos.remaining_size -= closed_size
                         pos.remaining_lots = round(pos.lots * (1.0 - close_fraction), 4)
                         pos.partials_done = 1
-                        partial_pnl = (pos.tp1 - entry) * closed_size if is_long else (entry - pos.tp1) * closed_size
+                        partial_pnl = self.calc_position_pnl(pos, pos.tp1, closed_lots=round(pos.lots * close_fraction, 4))
                         pos.realized_pnl += partial_pnl
                         pos.stop_loss = round(entry * 1.0005, 4) if is_long else round(entry * 0.9995, 4)
                         pos.be_stage = 2
@@ -1413,7 +1507,7 @@ class ExecutionEngine:
                             broker_ok = False
                         if broker_ok:
                             pos.exit_price = pos.tp1
-                            pos.realized_pnl = (pos.tp1 - entry) * pos.remaining_size if is_long else (entry - pos.tp1) * pos.remaining_size
+                            pos.realized_pnl += self.calc_position_pnl(pos, pos.tp1)
                             pos.status = OrderStatus.CLOSED
                             pos.closed_at = datetime.now(timezone.utc).isoformat()
                             pos.close_reason = f"Scalp TP1 Target Hit (+${pos.realized_pnl:+.2f})"
@@ -1445,7 +1539,7 @@ class ExecutionEngine:
                         broker_ok = False
                     if broker_ok:
                         pos.exit_price = pos.tp2
-                        tp2_pnl = (pos.tp2 - entry) * pos.remaining_size if is_long else (entry - pos.tp2) * pos.remaining_size
+                        tp2_pnl = self.calc_position_pnl(pos, pos.tp2)
                         pos.realized_pnl += tp2_pnl
                         pos.status = OrderStatus.CLOSED
                         pos.closed_at = datetime.now(timezone.utc).isoformat()
@@ -1587,7 +1681,7 @@ class ExecutionEngine:
                             continue
 
                         pos.exit_price = exit_price
-                        pos.realized_pnl = (exit_price - entry) * pos.remaining_size if is_long else (entry - exit_price) * pos.remaining_size
+                        pos.realized_pnl += self.calc_position_pnl(pos, exit_price)
                         pos.status = OrderStatus.CLOSED
                         pos.closed_at = datetime.now(timezone.utc).isoformat()
                         pos.close_reason = f"Scalp Trailing SL Exit (+${pos.realized_pnl:+.2f})"
@@ -1735,7 +1829,7 @@ class ExecutionEngine:
                 pos.remaining_lots = round(pos.lots * (1.0 - close_fraction), 4)
                 pos.partials_done = 1
 
-                partial_pnl = (pos.tp1 - entry) * closed_size if is_long else (entry - pos.tp1) * closed_size
+                partial_pnl = self.calc_position_pnl(pos, pos.tp1, closed_lots=round(pos.lots * close_fraction, 4))
                 pos.realized_pnl += partial_pnl
 
                 # Move stop to BE with buffer
@@ -1805,7 +1899,7 @@ class ExecutionEngine:
                 pos.remaining_lots = round(pos.lots * 0.20, 4)
                 pos.partials_done = 2
 
-                partial_pnl = (pos.tp2 - entry) * closed_size if is_long else (entry - pos.tp2) * closed_size
+                partial_pnl = self.calc_position_pnl(pos, pos.tp2, closed_lots=round(pos.lots * close_fraction, 4))
                 pos.realized_pnl += partial_pnl
 
                 # Start dynamic ATR/R trailing for remaining 20%
@@ -1928,9 +2022,20 @@ class ExecutionEngine:
                     self._dispatch_event("BROKER_CLOSE_FAILED", pos, msg)
                     continue
 
-                final_pnl = (exit_price - entry) * pos.remaining_size if is_long else (entry - exit_price) * pos.remaining_size
-                pos.realized_pnl += final_pnl
-                pos.exit_price = exit_price
+                deal_info = None
+                if getattr(self, "broker", None) and hasattr(self.broker, "get_closed_deal_info"):
+                    try:
+                        deal_info = self.broker.get_closed_deal_info(getattr(pos, "ticket", None) or pos.id)
+                    except Exception:
+                        pass
+
+                if deal_info and "profit" in deal_info:
+                    pos.realized_pnl += float(deal_info["profit"])
+                    pos.exit_price = float(deal_info.get("price") or exit_price)
+                else:
+                    final_pnl = self.calc_position_pnl(pos, exit_price)
+                    pos.realized_pnl += final_pnl
+                    pos.exit_price = exit_price
                 pos.status = OrderStatus.CLOSED
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.close_reason = v_reason if v_hit else "Stop Loss / Break-Even Exit"
@@ -2001,10 +2106,22 @@ class ExecutionEngine:
                         raise
                     raise OrderStateUnknownError(f"Broker close failed for {pos.symbol}: {ex}") from ex
 
-            final_pnl = (current_price - entry) * pos.remaining_size if is_long else (entry - current_price) * pos.remaining_size
+            deal_info = None
+            if getattr(self, "broker", None) and hasattr(self.broker, "get_closed_deal_info"):
+                try:
+                    deal_info = self.broker.get_closed_deal_info(getattr(pos, "ticket", None) or pos.id)
+                except Exception:
+                    pass
 
-            pos.realized_pnl += final_pnl
-            pos.exit_price = current_price
+            if deal_info and "profit" in deal_info:
+                pos.realized_pnl += float(deal_info["profit"])
+                pos.exit_price = float(deal_info.get("price") or current_price)
+                if deal_info.get("comment"):
+                    reason = f"{reason} ({deal_info['comment']})"
+            else:
+                final_pnl = self.calc_position_pnl(pos, current_price)
+                pos.realized_pnl += final_pnl
+                pos.exit_price = current_price
             pos.status = OrderStatus.CLOSED
             pos.closed_at = datetime.now(timezone.utc).isoformat()
             pos.close_reason = reason

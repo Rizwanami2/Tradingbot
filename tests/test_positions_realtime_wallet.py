@@ -8,6 +8,7 @@ import io
 import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from execution import Position
 from execution_engine import ExecutionEngine, TradeOrder, OrderStatus
 from risk_manager import RiskManager
 from mt5_broker import MockMT5Broker
@@ -159,6 +160,114 @@ class TestPositionsRealTimeWallet(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Wallet Balance:", out)
         self.assertIn("$500.00 USD", out)
         self.assertNotIn("$10,000.00", out)
+
+    def test_bot_and_mt5_pnl_alignment_on_manual_close(self):
+        """Verify that 0.01 lot XAUUSD trade buy at 2650, sell at 2660 yields exactly $10.00 realized PnL in bot and broker."""
+        self.broker.balance = 1000.0
+        self.broker.equity = 1000.0
+
+        pos = TradeOrder(
+            id="gold-pnl-1",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2640.0,
+            tp1=2670.0,
+            tp2=2680.0,
+            tp3=None,
+            lots=0.01,
+            size=1.0,
+            leverage=20.0,
+            margin_required=26.50,
+            liquidation_price=2600.0,
+            risk_amount=10.0,
+            rr_ratio=2.0,
+            setup_reason="Breakout",
+            executed_price=2650.0,
+            status=OrderStatus.OPEN,
+            remaining_size=1.0,
+            remaining_lots=0.01,
+            ticket=123456,
+        )
+        self.engine.active_positions[pos.id] = pos
+        self.broker._positions["123456"] = Position(
+            symbol="XAUUSD",
+            side="buy",
+            qty=0.01,
+            entry_price=2650.0,
+            current_price=2660.0,
+            unrealized_pnl=10.0,
+            ticket=123456,
+            id="123456",
+        )
+
+        closed = self.engine.close_manually(symbol="XAUUSD", current_price=2660.0, reason="Manual Take Profit")
+        self.assertIsNotNone(closed)
+        # 0.01 lots of Gold with 100 contract size = 1 oz. Gain of $10 on 1 oz = $10.00 (not $0.10)
+        self.assertEqual(closed.realized_pnl, 10.0)
+        self.assertEqual(closed.exit_price, 2660.0)
+        self.assertEqual(self.broker.balance, 1010.0)
+        wallet = self.engine.get_wallet_telemetry()
+        self.assertEqual(wallet["balance"], 1010.0)
+
+    def test_reconcile_external_mt5_close_syncs_pnl_and_journal(self):
+        """Verify that an external MT5 close (e.g. SL hit) reconciles exact deal profit into pos.realized_pnl and journal."""
+        self.broker.balance = 1000.0
+        self.broker.equity = 1000.0
+
+        pos = TradeOrder(
+            id="gold-ext-1",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2640.0,
+            tp1=2670.0,
+            tp2=2680.0,
+            tp3=None,
+            lots=0.01,
+            size=1.0,
+            leverage=20.0,
+            margin_required=26.50,
+            liquidation_price=2600.0,
+            risk_amount=10.0,
+            rr_ratio=2.0,
+            setup_reason="Breakout",
+            executed_price=2650.0,
+            status=OrderStatus.OPEN,
+            remaining_size=1.0,
+            remaining_lots=0.01,
+            ticket=999888,
+        )
+        self.engine.active_positions[pos.id] = pos
+        self.broker._positions["999888"] = Position(
+            symbol="XAUUSD",
+            side="buy",
+            qty=0.01,
+            entry_price=2650.0,
+            current_price=2650.0,
+            ticket=999888,
+            id="999888",
+        )
+
+        # External broker close event (e.g. SL hit at 2640)
+        self.broker.close_position("XAUUSD", qty=0.01, price=2640.0, ticket=999888)
+        self.assertEqual(len(self.broker._positions), 0)
+        self.assertEqual(self.broker.balance, 990.0)
+
+        # Engine reconciles with broker
+        with patch.object(self.engine, "_notify_brain_close") as mock_notify:
+            res = self.engine.reconcile_positions()
+            self.assertEqual(res["closed_locally"], 1)
+            mock_notify.assert_called_once()
+
+        self.assertEqual(len(self.engine.active_positions), 0)
+        self.assertEqual(len(self.engine.trade_history), 1)
+        hist_pos = self.engine.trade_history[-1]
+        self.assertEqual(hist_pos.id, "gold-ext-1")
+        self.assertEqual(hist_pos.realized_pnl, -10.0)
+        self.assertEqual(hist_pos.exit_price, 2640.0)
+        self.assertEqual(hist_pos.status, OrderStatus.CLOSED)
+        self.assertIn("MT5", hist_pos.close_reason)
 
 
 if __name__ == "__main__":

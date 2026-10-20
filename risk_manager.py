@@ -713,7 +713,7 @@ class RiskManager:
             risk_pct = round((risk_amount / self.state.equity) * 100.0, 2) if self.state.equity > 0 else 0.0
 
         contract_size = self.profile.get("contract_size", 100)
-        unit_size = (risk_amount / stop_dist) if (stop_dist > 0 and not is_manual) else (lots * contract_size)
+        unit_size = round(lots * contract_size, 6) if (lots > 0 and contract_size > 0) else ((risk_amount / stop_dist) if stop_dist > 0 else 0.0)
         direction = "long" if entry > stop else "short"
         tps = self.take_profits(entry, stop, direction)
 
@@ -748,6 +748,8 @@ class RiskManager:
                 lots = round(lots, 4)
             notional_value = round(lots * contract_size * entry, 2)
             margin_required = round(self.calc_margin(notional_value, lev), 2)
+            if contract_size > 0 and lots > 0:
+                unit_size = round(lots * contract_size, 6)
 
         liq_price = self.calc_liquidation_price(direction, entry, lev)
         if direction == "long" and liq_price > 0 and stop <= liq_price:

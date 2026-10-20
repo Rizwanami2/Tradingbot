@@ -568,6 +568,38 @@ class TestMT5Broker(unittest.TestCase):
             self.assertIn("10055086", err_msg)
             self.assertIn("Mtrading-Live", err_msg)
 
+    def test_get_contract_size_mt5_and_mock(self):
+        mock_b = MockMT5Broker()
+        self.assertEqual(mock_b.get_contract_size("XAUUSD"), 100.0)
+        self.assertEqual(mock_b.get_contract_size("GOLD"), 100.0)
+        self.assertEqual(mock_b.get_contract_size("BTCUSD"), 1.0)
+        self.assertEqual(mock_b.get_contract_size("EURUSD"), 100000.0)
+
+    def test_get_closed_deal_info_native_mt5(self):
+        import mt5_broker
+        mock_mt5 = MagicMock()
+        mock_mt5.initialize.return_value = True
+        mock_mt5.login.return_value = True
+        mock_acc = MagicMock(login=10055086, balance=15000.0, leverage=100.0, currency="USD", company="MTrading", trade_allowed=True, trade_expert=True)
+        mock_mt5.account_info.return_value = mock_acc
+        mock_mt5.terminal_info.return_value = MagicMock(trade_allowed=True)
+        mock_mt5.DEAL_ENTRY_OUT = 1
+
+        d1 = MagicMock(ticket=55501, entry=1, profit=15.0, commission=-0.50, swap=-0.25, fee=0.0, price=2665.0, comment="[sl 2665.0]")
+        mock_mt5.history_deals_get.return_value = [d1]
+
+        with patch.object(mt5_broker, "native_mt5", mock_mt5):
+            broker = MT5Broker(mode="live", login=10055086, password="Password123", server="Mtrading-Live")
+            deal_info = broker.get_closed_deal_info(123456)
+            self.assertIsNotNone(deal_info)
+            self.assertEqual(deal_info["ticket"], 123456)
+            self.assertEqual(deal_info["deal_ticket"], 55501)
+            # Net profit = 15.0 - 0.50 - 0.25 = 14.25
+            self.assertEqual(deal_info["profit"], 14.25)
+            self.assertEqual(deal_info["total_profit"], 14.25)
+            self.assertEqual(deal_info["price"], 2665.0)
+            self.assertEqual(deal_info["comment"], "[sl 2665.0]")
+
 
 if __name__ == "__main__":
     unittest.main()
