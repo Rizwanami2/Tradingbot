@@ -23,10 +23,7 @@ try:
     from news_agent import NewsAgent
     print("[Integration] Using improved news_agent.NewsAgent")
 except ImportError:
-    try:
-        from NewsAgent import NewsAgent
-    except ImportError:
-        NewsAgent = None
+    NewsAgent = None
 
 # Prefer execution layer
 try:
