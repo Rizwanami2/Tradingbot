@@ -31,42 +31,11 @@ _last_ai_veto: Dict[str, Tuple[str, float]] = {}
 
 
 def _ai_gate_signal(sig: dict, symbol: str, profile: str, dname: str = "", agree: int = 0, conv_val: float = 0.6):
-    """Run AI Advanced Suite; return (allow, sig_updated). Never raises."""
-    try:
-        from ai_advanced_suite import evaluate_signal_dict, get_ai_suite
-        suite = get_ai_suite()
-        if not getattr(suite, "enabled", True):
-            return True, sig
-        if not sig.get("direction") and dname:
-            sig["direction"] = dname
-        if not sig.get("agreement"):
-            sig["agreement"] = agree
-        if sig.get("conviction") is None:
-            sig["conviction"] = conv_val
-        sig.setdefault("symbol", symbol)
-        gate = evaluate_signal_dict(sig, profile=str(profile or "scalp"))
-        if not gate.allow:
-            reasons_str = "; ".join(gate.reasons)
-            now_ts = time.time()
-            last_r, last_ts = _last_ai_veto.get(symbol, ("", 0.0))
-            if reasons_str != last_r or (now_ts - last_ts) >= 60.0:
-                logger.info("Autotrade %s: AI suite veto — %s", symbol, reasons_str)
-                _last_ai_veto[symbol] = (reasons_str, now_ts)
-            return False, sig
-        if gate.size_mult < 1.0 and sig.get("lot_mode", "auto") != "manual":
-            for k in ("lots", "size"):
-                if sig.get(k):
-                    sig[k] = max(0.01, round(float(sig[k]) * gate.size_mult, 4))
-            try:
-                sig["lots"] = suite.apply_lot_ceiling(float(sig.get("lots") or sig.get("size") or 0.01))
-            except Exception:
-                pass
-        sig["ai_scorecard"] = gate.scorecard
-        sig["ai_gate_reasons"] = list(gate.reasons)
-        return True, sig
-    except Exception as e:
-        logger.debug("AI suite gate error: %s", e)
-        return True, sig
+    """
+    Pure Multi-Agent & Brain mode:
+    Secondary AI gating and vetoing are disabled; consensus signals flow cleanly.
+    """
+    return True, sig
 
 
 def _ai_on_open(symbol: str, direction: str, meta=None):
@@ -384,7 +353,8 @@ async def live_monitoring_worker(
                                     except Exception:
                                         conv_val = 0.6
                                 is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
-                                ok, reason, size_mult = brain.advise_signal(
+                                # Brain (Autonomous Learner): optimize regime lot sizing without vetoing consensus signals
+                                _, _, size_mult = brain.advise_signal(
                                     direction=dname,
                                     score=float(sig.get("score") or 0.0),
                                     rr=float(sig.get("rr") or 0.0),
@@ -395,10 +365,8 @@ async def live_monitoring_worker(
                                     is_scalp=is_scalp_sig,
                                     profile=current_profile_name,
                                 )
-                                if not ok:
-                                    logger.info("Autotrade %s: vetoed by Autonomous Learner — %s", symbol, reason)
-                                    continue
-                                if size_mult < 1.0 and sig.get("lot_mode", "auto") != "manual":
+                                # Pure Multi-Agent mode: apply Brain regime sizing multiplier without dropping trades
+                                if size_mult > 0.0 and size_mult != 1.0 and sig.get("lot_mode", "auto") != "manual":
                                     if sig.get("lots"):
                                         sig["lots"] = max(0.01, round(float(sig["lots"]) * size_mult, 4))
                                     if sig.get("size"):
@@ -406,11 +374,7 @@ async def live_monitoring_worker(
                             except Exception as _b_err:
                                 logger.debug("Autotrade brain check error: %s", _b_err)
 
-                            # Combined AI Advanced Suite (automatic)
-                            ok_ai, sig = _ai_gate_signal(sig, symbol, current_profile_name, dname=dname, agree=agree, conv_val=conv_val)
-                            if not ok_ai:
-                                continue
-
+                            # Pure Multi-Agent mode: secondary AI gating and vetoing removed; consensus signals flow directly
                             d = sig.get("direction")
                             dname = d.name if hasattr(d, "name") else str(d)
                             is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)

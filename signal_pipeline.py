@@ -230,22 +230,19 @@ def run_signal(
                 is_scalp=is_scalp_sig,
                 profile=prof_name,
             )
-            res["brain_allowed"] = ok
+            # Pure Multi-Agent mode: consensus signals are approved; Brain optimizes regime sizing
+            res["brain_allowed"] = True
             res["brain_reason"] = reason
             res["brain_size_mult"] = size_mult
-            if not ok:
-                sig["vetoed"] = True
-                sig["veto_reason"] = reason
-                res["status"] = f"{res.get('status', '')} | 🧠 Brain Veto: {reason}"
-            else:
-                if size_mult < 1.0:
-                    cur_lots = float(sig.get("lots") or 0.0)
-                    cur_size = float(sig.get("size") or 0.0)
-                    if cur_lots > 0:
-                        sig["lots"] = max(0.01, round(cur_lots * size_mult, 4))
-                    if cur_size > 0:
-                        sig["size"] = max(0.01, round(cur_size * size_mult, 4))
-                    res["status"] = f"{res.get('status', '')} | 🧠 Sized {size_mult:.0%} by Brain"
+            sig["vetoed"] = False
+            if size_mult > 0.0 and size_mult != 1.0:
+                cur_lots = float(sig.get("lots") or 0.0)
+                cur_size = float(sig.get("size") or 0.0)
+                if cur_lots > 0:
+                    sig["lots"] = max(0.01, round(cur_lots * size_mult, 4))
+                if cur_size > 0:
+                    sig["size"] = max(0.01, round(cur_size * size_mult, 4))
+                res["status"] = f"{res.get('status', '')} | 🧠 Sized {size_mult:.0%} by Brain"
     except Exception:
         pass
 
