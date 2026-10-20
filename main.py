@@ -341,7 +341,7 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("🛡️ Risk & Safety", callback_data="cmd:cat:risk"),
-                InlineKeyboardButton("🧠 Autonomous AI", callback_data="cmd:cat:ai"),
+                InlineKeyboardButton("🧠 Strategy Brain", callback_data="cmd:cat:ai"),
             ],
             [
                 InlineKeyboardButton("📈 Backtest & Research", callback_data="cmd:cat:research"),
@@ -419,12 +419,12 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("❤️ Health Telemetry", callback_data="cmd:run:health"),
             ],
             [
-                InlineKeyboardButton("🔴 Pause Veto", callback_data="learner:off"),
-                InlineKeyboardButton("🟢 Activate Veto", callback_data="learner:on"),
+                InlineKeyboardButton("🎯 Sizing & Risk", callback_data="cmd:run:risk"),
+                InlineKeyboardButton("⚡ Scalp Mode", callback_data="auto:scalp"),
             ],
             [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-                InlineKeyboardButton("🎯 Sizing & Risk", callback_data="cmd:run:risk"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
             ],
         ])
     elif cat in ("ai", "brain", "learner"):
@@ -490,7 +490,6 @@ def build_settings_dashboard() -> Tuple[str, InlineKeyboardMarkup]:
         f"• **Lot Sizing:** `{lot_mode} ({lot_val})`\n"
         f"• **Account Leverage:** `{lev:.0f}x`\n"
         f"• **Active Slot Limit:** `{max_slots} trades max`\n"
-        f"• **Learner Veto:** `{learner_st}`\n"
         f"• **Virtual Stops:** `{'🟢 Active' if getattr(engine, 'virtual_stops_enabled', True) else '⚪ Off'}`\n\n"
         "💡 _Tap buttons below for instant configuration:_"
     )
@@ -504,7 +503,7 @@ def build_settings_dashboard() -> Tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("🏦 Switch Broker", callback_data="mt5:refresh"),
         ],
         [
-            InlineKeyboardButton("🧠 Learner Veto Toggle", callback_data="learner:toggle"),
+            InlineKeyboardButton("📈 Performance", callback_data="cmd:run:performance"),
             InlineKeyboardButton("🔄 Refresh Settings", callback_data="settings:refresh"),
         ],
         [
@@ -610,13 +609,11 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
 
     elif cat in ("ai", "brain", "learner", "agent", "agents"):
         text = (
-            "🧠 **Autonomous AI & Multi-Agent Standings:**\n"
-            "• `/brain` — Autonomous learner knowledge, learned rules & win rates\n"
-            "• `/learner [on|off|unban|rules]` — Toggle learner veto filter & unban hours\n"
-            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
-            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
-            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n"
-            "• `/ai [status|mode|manual|auto|override|reset|help]` — AI Advanced Suite controls\n"
+            "🧠 **Multi-Agent Consensus & Strategy Standings:**\n"
+            "• `/brain` — Strategy brain knowledge, learned rules & win rates\n"
+            "• `/learner [rules|clearhours]` — View strategy rules & hour statistics\n"
+            "• `/train [heavy|quick]` — Multi-asset model & backtest training\n"
+            "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n"
             "• `/board` — Strategy board & agent standings\n"
             "• `/journal` — Trade journal analytics & history\n"
             "• `/agents` — Agent performance rankings & stats\n"
@@ -696,10 +693,9 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/reset` — Clear conversation context\n\n"
             "🧠 **Autonomous Brain & Multi-Agent Learning:**\n"
             "• `/brain` — Autonomous learner knowledge, learned rules & win rates\n"
-            "• `/learner [on|off|unban|rules]` — Toggle learner veto filter & unban hours\n"
-            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
-            "• `/train [heavy|quick]` — Deep multi-asset AI & autonomous training\n"
-            "• `/relearn [SYM|ALL]` — Force 5Y history retraining bootstrap\n\n"
+            "• `/learner [rules|clearhours]` — View strategy rules & hour statistics\n"
+            "• `/train [heavy|quick]` — Deep multi-asset model & autonomous training\n"
+            "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n\n"
             "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`, `/commands ai`_"
         )
         return text, build_help_keyboard("main")
@@ -735,6 +731,22 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(welcome, parse_mode="Markdown", reply_markup=markup)
     except Exception:
         await update.message.reply_text(welcome.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
+
+
+async def ai_veto_removed_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Inform user that secondary AI Suite & Veto filtering have been permanently removed."""
+    msg = (
+        "ℹ️ **AI Suite & Veto Removed**\n\n"
+        "• **Execution Engine:** Pure Multi-Agent Consensus (`multi_agent_trading_bot.py`)\n"
+        "  _Consensus signals flow directly to execution without secondary AI or veto blocks._\n\n"
+        "• **Learning Engine:** Autonomous Brain (`autonomous_learner.py`)\n"
+        "  _Background win-rate logging and regime sizing remain active without blocking trades._\n\n"
+        "• Use `/brain`, `/agents`, `/signal`, or `/autotrade` for active controls."
+    )
+    try:
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(msg.replace("*", "").replace("_", "").replace("`", ""))
 
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -6030,11 +6042,11 @@ def main():
     except Exception as _b_err:
         logger.warning("Failed to register brain commands: %s", _b_err)
 
+    # AI Suite & Veto Removed: friendly notice if legacy commands are invoked
     try:
-        from telegram_ai import register_ai_commands
-        register_ai_commands(app)
+        app.add_handler(CommandHandler(["ai", "aisuite", "veto", "learnerveto", "vedo"], ai_veto_removed_command))
     except Exception as _ai_err:
-        logger.warning("Failed to register AI commands: %s", _ai_err)
+        logger.warning("Failed to register AI removal notice handler: %s", _ai_err)
 
     # Conversational Assistant & Controls
     app.add_handler(CommandHandler(["ask", "chat"], ask_command))

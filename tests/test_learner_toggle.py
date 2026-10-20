@@ -105,14 +105,14 @@ class TestLearnerToggleAndUnban(unittest.TestCase):
         # By default allow_weekday_bans is False: weekday 0 (Monday) does NOT veto
         self.brain.knowledge.allow_weekday_bans = False
         self.brain.knowledge.banned_weekdays = [0]
-        ok, reason, mult = self.brain.advise_signal(weekday=0, score=2.5, rr=2.5, agreement=3, conviction=0.8)
+        ok, reason, mult = self.brain.advise_signal(hour=10, weekday=0, score=2.5, rr=2.5, agreement=3, conviction=0.8)
         self.assertTrue(ok)
         self.assertNotIn(0, self.brain.knowledge.banned_weekdays)  # auto-purged
 
         # When explicitly enabled, weekday ban vetoes
         self.brain.set_allow_weekday_bans(True)
         self.brain.knowledge.banned_weekdays = [0]
-        ok_veto, reason_veto, _ = self.brain.advise_signal(weekday=0, score=2.5, rr=2.5, agreement=3, conviction=0.8)
+        ok_veto, reason_veto, _ = self.brain.advise_signal(hour=10, weekday=0, score=2.5, rr=2.5, agreement=3, conviction=0.8)
         self.assertFalse(ok_veto)
         self.assertIn("banned weekday 0", reason_veto)
 
@@ -192,7 +192,8 @@ class TestLearnerTelegramHandlers(unittest.IsolatedAsyncioTestCase):
     async def test_veto_command_alias(self):
         self.ctx.args = ["off"]
         await veto_command(self.update, self.ctx)
-        self.assertFalse(self.test_brain.is_enabled())
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("AI Suite & Veto Removed", text)
 
     async def test_build_learner_block_keyboard(self):
         note = "AUTO: banned hour 14 UTC (learned)"

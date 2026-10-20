@@ -128,7 +128,6 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/brain", text)
         self.assertIn("/relearn", text)
         self.assertIn("/learner", text)
-        self.assertIn("/veto", text)
         self.assertIn("/train", text)
         self.assertIn("/reset", text)
         self.assertIn("/ask", text)
@@ -188,7 +187,7 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.ctx.args = ["ai"]
         await help_command(self.update, self.ctx)
         text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Autonomous AI & Multi-Agent Standings", text)
+        self.assertIn("Multi-Agent Consensus & Strategy Standings", text)
         self.assertIn("/brain", text)
         self.assertIn("/board", text)
         self.assertIn("/journal", text)
