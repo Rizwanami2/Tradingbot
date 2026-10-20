@@ -253,17 +253,20 @@ async def live_monitoring_worker(
                         "_history": df1,
                     }
 
+                    live_spread = 0.0
                     try:
                         from mt5_chart import fetch_mt5_live_quote
                         mt5_q = fetch_mt5_live_quote(symbol, broker=broker)
                         if mt5_q.get("ok") and float(mt5_q.get("mark") or 0.0) > 0.0:
                             mt5_mark = float(mt5_q["mark"])
+                            live_spread = float(mt5_q.get("spread", 0.0) or 0.0)
                             df1.loc[df1.index[-1], "close"] = mt5_mark
                             df1.loc[df1.index[-1], "high"] = max(float(df1.loc[df1.index[-1], "high"]), mt5_mark)
                             df1.loc[df1.index[-1], "low"] = min(float(df1.loc[df1.index[-1], "low"]), mt5_mark)
                             candle_dict["close"] = mt5_mark
                             candle_dict["high"] = max(candle_dict["high"], mt5_mark)
                             candle_dict["low"] = min(candle_dict["low"], mt5_mark)
+                            candle_dict["spread"] = live_spread
                     except Exception:
                         pass
 
@@ -428,7 +431,7 @@ async def live_monitoring_worker(
                                 sq_res = evaluate_signal_quality(
                                     df1,
                                     direction=dname,
-                                    spread=0.0,
+                                    spread=live_spread,
                                     expected_rr=float(sig.get("rr", 1.0 if is_scalp_sig else 2.0) or (1.0 if is_scalp_sig else 2.0)),
                                     is_scalp=is_scalp_sig,
                                 )
@@ -454,20 +457,39 @@ async def live_monitoring_worker(
                                 logger.info("Autotrade %s: register blocked — %s", symbol, reg_err)
                                 continue
 
+                            # Immediate broker market fill at live spread / market tick before any outbound network calls
+                            exec_events = engine.update_market_candle(symbol, candle_dict)
+                            for ev in exec_events:
+                                logger.info("Execution Event: %s - %s", ev["event"], ev.get("message"))
+                                etype = ev.get("event")
+                                if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
+                                    fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
+                                    if fpnl < 0:
+                                        limiter.record_loss(symbol, abs(fpnl))
+                                    else:
+                                        limiter.record_win(symbol)
+                                    _ai_on_close(symbol, fpnl, ev)
+                                elif etype == "TRADE_EXECUTED":
+                                    pos = ev.get("order")
+                                    eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
+                                    limiter.record_entry(symbol, eprice)
+                                await _send_alert(ev.get("message", ""))
+
                             is_scalp_order = getattr(engine, "scalp_mode", False) or getattr(order, "is_scalp", False)
                             lot_tag = " (Manual)" if getattr(order, "lot_mode", "auto") == "manual" else " (Auto)"
                             sc = sig.get("ai_scorecard")
                             sc_tag = f" | AI {sc:.0f}" if sc is not None else ""
+                            disp_entry = float(getattr(order, "executed_price", 0.0) or getattr(order, "entry_level", 0.0))
                             alert = (
                                 f"NEW SCALP SETUP ({open_n + 1}/{max_open})\n"
-                                f"{symbol} {order.direction} @ {order.entry_level:,.2f}\n"
+                                f"{symbol} {order.direction} @ {disp_entry:,.2f}\n"
                                 f"SL {order.stop_loss:,.2f} | TP {order.tp1:,.2f}\n"
                                 f"Lots {order.lots}{lot_tag} | Lev {order.leverage:.0f}x{sc_tag}\n"
                                 f"{order.setup_reason}"
                             ) if is_scalp_order else (
                                 f"NEW MULTI-AGENT SETUP ({open_n + 1}/{max_open})\n"
                                 f"{symbol} {order.direction}\n"
-                                f"Entry {order.entry_level:,.2f} | SL {order.stop_loss:,.2f}\n"
+                                f"Entry {disp_entry:,.2f} | SL {order.stop_loss:,.2f}\n"
                                 f"Lots {order.lots}{lot_tag} | Lev {order.leverage:.0f}x{sc_tag}\n"
                                 f"{order.setup_reason}"
                             )
@@ -489,7 +511,7 @@ async def live_monitoring_worker(
                                 rationale = _gem.generate_trade_rationale({
                                     "symbol": symbol,
                                     "direction": order.direction,
-                                    "entry": order.entry_level,
+                                    "entry": disp_entry,
                                     "stop_loss": order.stop_loss,
                                     "take_profit": order.tp1,
                                     "lots": order.lots,
@@ -502,20 +524,6 @@ async def live_monitoring_worker(
                             except Exception:
                                 pass
                             await _send_alert(alert)
-                            for ev in engine.update_market_candle(symbol, candle_dict):
-                                etype = ev.get("event")
-                                if etype in ("TRADE_CLOSED", "SCALP_SL", "SCALP_TRAIL_HIT", "STOP_LOSS_HIT"):
-                                    fpnl = float(ev.get("final_pnl", ev.get("realized_pnl", 0.0)) or 0.0)
-                                    if fpnl < 0:
-                                        limiter.record_loss(symbol, abs(fpnl))
-                                    else:
-                                        limiter.record_win(symbol)
-                                    _ai_on_close(symbol, fpnl, ev)
-                                elif etype == "TRADE_EXECUTED":
-                                    pos = ev.get("order")
-                                    eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
-                                    limiter.record_entry(symbol, eprice)
-                                await _send_alert(ev.get("message", ""))
                 except Exception as sym_err:
                     logger.error("Monitoring %s error: %s", symbol, sym_err)
 

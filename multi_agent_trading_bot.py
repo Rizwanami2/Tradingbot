@@ -1199,17 +1199,19 @@ def run_live(args=None):
 
                     if sig:
                         order = engine.register_setup(sig, reason=sig.get("reason", ""))
-                        alert = (
-                            f"⚡ [SETUP] {symbol} {order.direction} @ {order.entry_level:.2f} | "
-                            f"SL: {order.stop_loss:.2f} | Lots: {order.lots} | Lev: {order.leverage:.0f}x | {order.setup_reason}"
-                        )
-                        print(f"\n{alert}\n")
-                        send_telegram(alert)
-
+                        # Execute market candle immediately before sending outbound network alerts
                         trig_events = engine.update_market_candle(symbol, candle_dict)
                         for ev in trig_events:
                             print(f"[ExecutionEngine] {ev.get('event')}: {ev.get('message')}")
                             send_telegram(ev.get("message", ""))
+
+                        disp_entry = float(getattr(order, "executed_price", 0.0) or getattr(order, "entry_level", 0.0))
+                        alert = (
+                            f"⚡ [SETUP] {symbol} {order.direction} @ {disp_entry:.2f} | "
+                            f"SL: {order.stop_loss:.2f} | Lots: {order.lots} | Lev: {order.leverage:.0f}x | {order.setup_reason}"
+                        )
+                        print(f"\n{alert}\n")
+                        send_telegram(alert)
                     else:
                         if iteration % 12 == 1:
                             current_px = candle_dict["close"]

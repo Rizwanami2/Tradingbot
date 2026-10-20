@@ -59,7 +59,7 @@ class StrategyProfile:
     scalp_loss_cooldown_sec: float = 90.0
     scalp_global_cooldown_sec: float = 10.0
     scalp_max_positions_per_symbol: int = 3
-    scalp_min_price_distance_pct: float = 0.08
+    scalp_min_price_distance_pct: float = 0.03
 
 
 DEFAULT_PROFILES = {
@@ -128,7 +128,7 @@ DEFAULT_PROFILES = {
         scalp_loss_cooldown_sec=90.0,
         scalp_global_cooldown_sec=10.0,
         scalp_max_positions_per_symbol=3,
-        scalp_min_price_distance_pct=0.08,
+        scalp_min_price_distance_pct=0.03,
     ),
     "swing": StrategyProfile(
         name="swing",
@@ -365,7 +365,7 @@ def apply_profile(
             config.SCALP_LOSS_COOLDOWN_SEC = getattr(p, "scalp_loss_cooldown_sec", 90.0)
             config.SCALP_GLOBAL_COOLDOWN_SEC = getattr(p, "scalp_global_cooldown_sec", 10.0)
             config.SCALP_MAX_POSITIONS_PER_SYMBOL = getattr(p, "scalp_max_positions_per_symbol", 3)
-            config.SCALP_MIN_PRICE_DISTANCE_PCT = getattr(p, "scalp_min_price_distance_pct", 0.08)
+            config.SCALP_MIN_PRICE_DISTANCE_PCT = getattr(p, "scalp_min_price_distance_pct", 0.03)
 
     try:
         from anti_spam import get_anti_spam_limiter
@@ -374,7 +374,7 @@ def apply_profile(
         limiter.loss_cooldown_sec = int(getattr(p, "scalp_loss_cooldown_sec", 90))
         limiter.global_cooldown_sec = int(getattr(p, "scalp_global_cooldown_sec", 10))
         limiter.max_positions_per_symbol = int(getattr(p, "scalp_max_positions_per_symbol", 3))
-        limiter.min_price_distance_pct = float(getattr(p, "scalp_min_price_distance_pct", 0.08))
+        limiter.min_price_distance_pct = float(getattr(p, "scalp_min_price_distance_pct", 0.03))
     except Exception:
         pass
 

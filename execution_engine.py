@@ -1044,12 +1044,22 @@ class ExecutionEngine:
                 else:
                     setup.status = OrderStatus.OPEN
                     setup.executed_at = datetime.now(timezone.utc).isoformat()
+                    # Align setup entry level and protection brackets with actual executed spread price
+                    orig_req_price = float(setup.entry_level)
+                    price_shift = exec_price - orig_req_price
+                    setup.entry_level = exec_price
                     setup.executed_price = exec_price
                     setup.current_price = exec_price
                     setup.highest_price = exec_price
                     setup.lowest_price = exec_price
                     setup.remaining_size = setup.size
                     setup.remaining_lots = setup.lots
+                    if setup.stop_loss is not None and setup.stop_loss > 0:
+                        setup.stop_loss = round(setup.stop_loss + price_shift, 4)
+                    if setup.tp1 is not None and setup.tp1 > 0:
+                        setup.tp1 = round(setup.tp1 + price_shift, 4)
+                    if setup.tp2 is not None and setup.tp2 > 0:
+                        setup.tp2 = round(setup.tp2 + price_shift, 4)
                     setup.last_broker_sl = setup.stop_loss
                     setup.recent_highs = [exec_price]
                     setup.recent_lows = [exec_price]
@@ -1063,6 +1073,17 @@ class ExecutionEngine:
                     self.active_positions[setup.id] = setup
                     self.pending_setups.pop(setup.id, None)
 
+                    if abs(price_shift) > 1e-6:
+                        try:
+                            self._broker_modify(
+                                setup.symbol,
+                                stop_loss=setup.stop_loss,
+                                take_profit=setup.tp1,
+                                ticket=setup.ticket,
+                            )
+                        except Exception:
+                            pass
+
                     # 1. Realized slippage & execution latency analytics
                     try:
                         from execution_analytics import get_execution_tracker
@@ -1070,7 +1091,7 @@ class ExecutionEngine:
                             ticket=setup.ticket,
                             symbol=setup.symbol,
                             action="BUY" if setup.direction == "LONG" else "SELL",
-                            requested_price=setup.entry_level,
+                            requested_price=orig_req_price,
                             executed_price=exec_price,
                             volume=setup.lots,
                             latency_ms=12.5,

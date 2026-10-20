@@ -74,7 +74,7 @@ class AntiSpamRateLimiter:
         self.min_price_distance_pct = (
             min_price_distance_pct
             if min_price_distance_pct is not None
-            else float(os.getenv("SCALP_MIN_PRICE_DISTANCE_PCT", "0.08"))
+            else float(os.getenv("SCALP_MIN_PRICE_DISTANCE_PCT", "0.03"))
         )
         self.mode: str = self._normalize_mode(mode or os.getenv("ANTISPAM_MODE", "auto"))
         self.global_last_entry: float = 0.0
@@ -268,13 +268,28 @@ class AntiSpamRateLimiter:
         if curr_count >= self.max_positions_per_symbol:
             return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
 
-        # When bypass_cooldowns or mode is OFF: cooldowns and proximity checks are bypassed
+        # 3. Minimum price distance from existing active positions on this currency
+        # When bypass_cooldowns=True (e.g. scalping mode), time cooldowns are skipped,
+        # but micro price spacing is maintained so orders do not stack at the exact same price.
+        # Tight micro-gap (e.g. 0.03% = ~$0.80 on Gold) keeps positions near the chart move without excessive gap.
+        eff_min_dist = min(self.min_price_distance_pct, 0.03) if bypass_cooldowns else self.min_price_distance_pct
+        if eff_min_dist > 0 and matching_active and current_price > 0:
+            for pos in matching_active:
+                pos_entry = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or 0.0)
+                if pos_entry > 0:
+                    dist_pct = abs(current_price - pos_entry) / pos_entry * 100.0
+                    if dist_pct < eff_min_dist:
+                        return False, (
+                            f"Price too close to existing {curr} position ({dist_pct:.3f}% < {eff_min_dist:.2f}% required)"
+                        )
+
+        # When bypass_cooldowns or mode is OFF: time cooldowns are bypassed
         if bypass_cooldowns:
             return True, "OK (cooldowns bypassed)"
         if self.mode == "off":
             return True, "OK (anti-spam manual OFF)"
 
-        # 3. Symbol / currency loss cooldown (evaluated first so stop-out cooldown takes priority)
+        # 4. Symbol / currency loss cooldown (evaluated first so stop-out cooldown takes priority)
         effective_loss_cd = self.get_loss_cooldown_duration(sym)
         if effective_loss_cd > 0 and st.last_loss_time > 0:
             elapsed_loss = now - st.last_loss_time
@@ -282,7 +297,7 @@ class AntiSpamRateLimiter:
                 rem = int(effective_loss_cd - elapsed_loss)
                 return False, f"Loss cooldown for {sym} ({rem}s remaining after {st.consecutive_losses} SL hit)"
 
-        # 4. Global entry cooldown
+        # 5. Global entry cooldown
         eff_global_cd = self.get_global_cooldown_duration()
         if eff_global_cd > 0 and self.global_last_entry > 0:
             elapsed_global = now - self.global_last_entry
@@ -290,24 +305,13 @@ class AntiSpamRateLimiter:
                 rem = int(eff_global_cd - elapsed_global)
                 return False, f"Global cooldown active ({rem}s remaining)"
 
-        # 5. Symbol / currency entry cooldown
+        # 6. Symbol / currency entry cooldown
         eff_entry_cd = self.get_entry_cooldown_duration(sym)
         if eff_entry_cd > 0 and st.last_entry_time > 0:
             elapsed_entry = now - st.last_entry_time
             if elapsed_entry < eff_entry_cd:
                 rem = int(eff_entry_cd - elapsed_entry)
                 return False, f"Entry cooldown for {sym} ({rem}s remaining)"
-
-        # 6. Minimum price distance from existing active positions on this currency
-        if self.min_price_distance_pct > 0 and matching_active and current_price > 0:
-            for pos in matching_active:
-                pos_entry = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or 0.0)
-                if pos_entry > 0:
-                    dist_pct = abs(current_price - pos_entry) / pos_entry * 100.0
-                    if dist_pct < self.min_price_distance_pct:
-                        return False, (
-                            f"Price too close to existing {curr} position ({dist_pct:.3f}% < {self.min_price_distance_pct:.2f}% required)"
-                        )
 
         return True, "OK"
 

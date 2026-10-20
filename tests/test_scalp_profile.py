@@ -1282,6 +1282,58 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertEqual(engine.scalp_trail_activation_usd, 2.00)
         self.assertEqual(engine.scalp_be_lock_usd, 0.50)
 
+    def test_trade_executed_on_spread_and_brackets_shift(self):
+        """Verify that when an order executes at market spread/tick, entry_level, stop_loss, and TP shift accordingly."""
+        sig = {
+            "symbol": "XAUUSD", "direction": "LONG", "entry": 2650.0, "stop": 2645.0,
+            "tp1": 2655.0, "tp2": 2660.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+            "margin_required": 50.0, "risk_amount": 10.0, "rr": 1.0, "is_scalp": True, "fast_market_fill": True,
+        }
+        order = self.engine.register_setup(sig, reason="Spread alignment test")
+        self.assertEqual(order.entry_level, 2650.0)
+        self.assertEqual(order.stop_loss, 2645.0)
+        self.assertEqual(order.tp1, 2655.0)
+
+        # Market candle with execution at live spread price (2650.50)
+        candle = {"open": 2650.5, "high": 2651.0, "low": 2650.0, "close": 2650.5}
+        events = self.engine.update_market_candle("XAUUSD", candle)
+        self.assertTrue(any(e["event"] == "TRADE_EXECUTED" for e in events))
+        self.assertEqual(order.status, OrderStatus.OPEN)
+        self.assertEqual(order.executed_price, 2650.5)
+        self.assertEqual(order.entry_level, 2650.5)
+        # Verify brackets shifted by exactly +0.50 (2650.5 - 2650.0)
+        self.assertEqual(order.stop_loss, 2645.5)
+        self.assertEqual(order.tp1, 2655.5)
+        self.assertEqual(order.tp2, 2660.5)
+
+    def test_scalp_micro_gap_proximity_near_chart_move(self):
+        """Verify that scalping with bypass_cooldowns enforces a micro-gap near the chart move to avoid duplicate stacking."""
+        from anti_spam import AntiSpamRateLimiter
+        limiter = AntiSpamRateLimiter(
+            max_positions_per_symbol=2,
+            min_price_distance_pct=0.03,
+        )
+        # Position 1 at 2650.0
+        p1 = TradeOrder(
+            id="pos1", symbol="XAUUSD", direction="LONG", entry_level=2650.0,
+            stop_loss=2645.0, tp1=2655.0, tp2=2660.0, tp3=None, lots=0.02, size=2.0,
+            leverage=20.0, margin_required=50.0, liquidation_price=2600.0, risk_amount=10.0,
+            rr_ratio=1.0, setup_reason="First scalp", status=OrderStatus.OPEN, executed_price=2650.0,
+            remaining_size=2.0, is_scalp=True,
+        )
+        self.engine.active_positions[p1.id] = p1
+
+        # Attempt position 2 at 2650.10 (gap 0.0038% < 0.03%) with bypass_cooldowns=True
+        # Must be rejected because it's stacking at the same tick
+        can_open, reason = limiter.check_can_enter("XAUUSD", current_price=2650.10, engine=self.engine, max_open=4, bypass_cooldowns=True)
+        self.assertFalse(can_open)
+        self.assertIn("Price too close", reason)
+
+        # Attempt position 2 at 2651.0 (gap 0.0377% >= 0.03%) near the chart move
+        # Allowed cleanly without an excessive gap!
+        can_open, reason = limiter.check_can_enter("XAUUSD", current_price=2651.0, engine=self.engine, max_open=4, bypass_cooldowns=True)
+        self.assertTrue(can_open, reason)
+
 
 if __name__ == "__main__":
     unittest.main()
