@@ -104,6 +104,68 @@ DEFAULT_LEVERAGE = _safe_float(os.getenv("BOT_LEVERAGE"), 20.0)
 AUTOTRADE_ENABLED = os.getenv("BOT_AUTOTRADE", "false").lower() in ("true", "1", "yes", "on")
 AUTOTRADE_LIVE_OPT_IN = os.getenv("BOT_AUTOTRADE_LIVE_OPT_IN", "false").lower() in ("true", "1", "yes", "on")
 
+# Autotrade Execution Mode:
+# "signal" (default): Autotrade executes positions when /signal (or /asignal) is called.
+#                     Background worker auto-manages open positions (trailing SL, TP, SL, MT5 sync)
+#                     but NEVER opens unsolicited trades on its own ("otherwise not execute any trade").
+# "continuous": Autonomous 24/7 scanning where background loop also opens trades on its own.
+_AUTOTRADE_PERSIST_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".runtime",
+    "autotrade_mode.json",
+)
+
+
+def _load_persisted_autotrade_mode() -> str:
+    try:
+        p = Path(_AUTOTRADE_PERSIST_FILE)
+        if p.is_file():
+            import json
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "mode" in data:
+                return str(data["mode"]).lower().strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _save_persisted_autotrade_mode(mode: str) -> None:
+    try:
+        p = Path(_AUTOTRADE_PERSIST_FILE)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        from datetime import datetime, timezone
+        payload = {"mode": mode, "updated_at": datetime.now(timezone.utc).isoformat()}
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
+AUTOTRADE_MODE = (
+    _load_persisted_autotrade_mode()
+    or os.getenv("BOT_AUTOTRADE_MODE")
+    or "signal"
+).lower().strip()
+
+
+def get_autotrade_mode() -> str:
+    global AUTOTRADE_MODE
+    return str(AUTOTRADE_MODE or "signal").lower()
+
+
+def set_autotrade_mode(mode: str, persist: bool = True) -> str:
+    global AUTOTRADE_MODE
+    m = str(mode or "").strip().lower()
+    if m in ("continuous", "auto", "all", "background"):
+        AUTOTRADE_MODE = "continuous"
+    else:
+        AUTOTRADE_MODE = "signal"
+    if persist:
+        _save_persisted_autotrade_mode(AUTOTRADE_MODE)
+    return AUTOTRADE_MODE
+
 # Auto vs Manual Lot Sizing: "auto" (dynamic risk-based) or "manual" (fixed lot size)
 LOT_SIZE_MODE = (os.getenv("BOT_LOT_MODE") or os.getenv("LOT_SIZE_MODE") or "auto").lower()
 DEFAULT_MANUAL_LOT = _safe_float(os.getenv("BOT_MANUAL_LOT") or os.getenv("BOT_LOT_SIZE"), 0.01)

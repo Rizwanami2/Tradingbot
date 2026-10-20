@@ -189,6 +189,8 @@ async def live_monitoring_worker(
                     engine.cancel_setup(r, reason=f"Symbol {r} removed from watchlist")
             watchlist = list(current_watchlist)
         monitoring_health["watchlist"] = list(watchlist)
+        cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().lower()
+        monitoring_health["autotrade_mode"] = cur_auto_mode
 
         try:
             from session_reporter import check_and_generate_transition_report
@@ -311,7 +313,12 @@ async def live_monitoring_worker(
 
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
+                    cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().lower()
                     if not autotrade_active:
+                        can_open = False
+                    elif cur_mode == "signal":
+                        # In signal-driven mode, autotrade only executes when /signal is called;
+                        # background worker manages open positions (TP/SL/trailing) but does not open new trades.
                         can_open = False
                     elif is_scalping:
                         # Deterministic scalp slot management: total capacity & per-currency limits (cooldowns bypassed)

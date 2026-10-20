@@ -229,6 +229,19 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• Lots {sig.get('lots')} | Lev {sig.get('leverage', 1):.0f}x\n"
             f"• R:R 1:{sig.get('rr', 0):.1f} | {sig.get('profile')} / {sig.get('regime')}\n"
         )
+        try:
+            from signal_pipeline import try_paper_execute
+            from main import engine as _main_eng
+            import main as _main_mod
+            ok, note = try_paper_execute(_main_eng, sig, candle_price=price or sig.get("entry"))
+            tag = "✅" if ok else "⚠️"
+            box += f"\n• Autotrade: {tag} {note}\n"
+            if ok:
+                _main_mod.autotrade_active = True
+                if hasattr(_main_eng, "reset_halt"):
+                    _main_eng.reset_halt()
+        except Exception as _ex:
+            logger.debug("asignal autotrade execution note: %s", _ex)
     else:
         box = "\nNo trade — blocked or no consensus.\n"
 

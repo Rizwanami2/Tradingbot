@@ -315,13 +315,24 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await update.message.reply_text(msg.replace("*", "").replace("`", ""))
         sig = res.get("signal")
-        if sig and autotrade_active:
+        if sig:
+            # Autotrade executes positions when /signal is called
             ok, note = try_paper_execute(engine, sig, candle_price=res.get("price") or sig.get("entry"))
             tag = "✅" if ok else "⚠️"
+            if ok:
+                global autotrade_active
+                autotrade_active = True
+                try:
+                    engine.reset_halt()
+                except Exception:
+                    pass
+            exec_msg = f"{tag} Autotrade Executed: {note}" if ok else f"{tag} Autotrade: {note}"
             try:
-                await update.message.reply_text(f"{tag} Autotrade: {note}", parse_mode="Markdown")
+                await update.message.reply_text(exec_msg, parse_mode="Markdown")
             except Exception:
-                await update.message.reply_text(f"{tag} Autotrade: {note}")
+                await update.message.reply_text(exec_msg)
+        else:
+            logger.info("Signal %s: setup was flat or unconfirmed, no trade executed", sym)
     except Exception as e:
         logger.exception("signal_command failed")
         await update.message.reply_text(f"Signal error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
@@ -1095,7 +1106,13 @@ async def live_monitoring_worker(app):
                 is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                 max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 2)) or 2
                 open_n = len(engine.active_positions) + len(engine.pending_setups)
-                can_open = (autotrade_active and open_n < max_trades) if is_scalping else (autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups and open_n < max_trades)
+                cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().lower()
+                if cur_mode == "signal":
+                    can_open = False
+                elif is_scalping:
+                    can_open = (autotrade_active and open_n < max_trades)
+                else:
+                    can_open = (autotrade_active and symbol not in engine.active_positions and symbol not in engine.pending_setups and open_n < max_trades)
                 if can_open:
                     sig, why, votes = arbiter.decide(
                         df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr, symbol=symbol, on_demand=True

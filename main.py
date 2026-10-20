@@ -830,9 +830,17 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await update.message.reply_text(msg.replace("*", "").replace("`", ""), reply_markup=kb)
         sig = res.get("signal")
-        if sig and autotrade_active:
+        if sig:
+            # Autotrade executes positions when /signal is called
             ok, note = try_paper_execute(engine, sig, candle_price=res.get("price") or sig.get("entry"))
             tag = "✅" if ok else "⚠️"
+            if ok:
+                global autotrade_active
+                autotrade_active = True
+                try:
+                    engine.reset_halt()
+                except Exception:
+                    pass
             block_kb = None
             if not ok and "Autonomous Learner" in str(note):
                 try:
@@ -840,10 +848,13 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     block_kb = build_learner_block_keyboard(note)
                 except Exception:
                     block_kb = None
+            exec_msg = f"{tag} Autotrade Executed: {note}" if ok else f"{tag} Autotrade: {note}"
             try:
-                await update.message.reply_text(f"{tag} Autotrade: {note}", parse_mode="Markdown", reply_markup=block_kb)
+                await update.message.reply_text(exec_msg, parse_mode="Markdown", reply_markup=block_kb)
             except Exception:
-                await update.message.reply_text(f"{tag} Autotrade: {note}", reply_markup=block_kb)
+                await update.message.reply_text(exec_msg, reply_markup=block_kb)
+        else:
+            logger.info("Signal %s: setup was flat or unconfirmed, no trade executed", sym)
     except Exception as e:
         logger.exception("signal_command failed")
         await update.message.reply_text(f"Signal error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
@@ -853,7 +864,9 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = risk_mgr.state
     mode_icon = "🟢" if s.mode == "normal" else ("🟡" if s.mode == "reduced" else "🔴")
-    auto_status = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+    cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().upper()
+    mode_label = "Signal-Driven (/signal executes)" if cur_auto_mode == "SIGNAL" else "Continuous Autonomous"
+    auto_status = f"🟢 ACTIVE ({mode_label})" if autotrade_active else f"⚪ STOPPED ({mode_label})"
     summary = engine.get_portfolio_summary()
     max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
     slots = engine.slots_available()
@@ -1812,7 +1825,9 @@ def get_gold_market_status() -> tuple:
 def build_watchlist_dashboard() -> tuple:
     """Generate Markdown text and inline keyboard for the Watchlist Dashboard."""
     active_symbols = getattr(config, "get_autotrade_symbols", lambda: config.AUTOTRADE_SYMBOLS)()
-    auto_status = "🟢 ACTIVE" if autotrade_active else "⚪ STOPPED"
+    cur_auto_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().upper()
+    mode_label = "Signal-Driven (/signal executes)" if cur_auto_mode == "SIGNAL" else "Continuous Autonomous"
+    auto_status = f"🟢 ACTIVE ({mode_label})" if autotrade_active else f"⚪ STOPPED ({mode_label})"
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
     profile = getattr(config, "CURRENT_PROFILE", "scalp").upper()
     max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
@@ -2050,6 +2065,47 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"🔓 **Cleared all {c} banned hours** from Autonomous Learner.", parse_mode="Markdown")
         return
 
+    if arg in ("signal", "signal_only", "ondemand", "on_demand"):
+        config.set_autotrade_mode("signal")
+        autotrade_active = True
+        engine.reset_halt()
+        await update.message.reply_text(
+            "🎯 **Autotrade Mode: SIGNAL-DRIVEN**\n"
+            "• **Trigger:** Positions executed **ONLY on `/signal`** (or `/asignal`)\n"
+            "• **Background Autonomous Entries:** 🛑 **DISABLED** (no unsolicited trades)\n"
+            "• **Position Management:** 🟢 **ACTIVE** (auto trailing stop-loss, TP, SL, MT5 live sync)",
+            parse_mode="Markdown",
+        )
+        return
+    elif arg in ("auto", "continuous", "background"):
+        config.set_autotrade_mode("continuous")
+        autotrade_active = True
+        engine.reset_halt()
+        await update.message.reply_text(
+            "⚡ **Autotrade Mode: CONTINUOUS AUTONOMOUS**\n"
+            "• **Trigger:** Autonomous 24/7 background trade entry + `/signal` on-demand\n"
+            "• **Position Management:** 🟢 **ACTIVE** (auto trailing stop-loss, TP, SL, MT5 live sync)\n"
+            "• Switch back to signal-only anytime with `/autotrade signal`.",
+            parse_mode="Markdown",
+        )
+        return
+    elif arg in ("mode", "modes"):
+        cur_m = config.get_autotrade_mode().upper()
+        mode_desc = (
+            "Trades execute **only on `/signal`**; background worker monitors open positions with trailing SL."
+            if cur_m == "SIGNAL"
+            else "Background worker continuously opens trades autonomously 24/7."
+        )
+        await update.message.reply_text(
+            f"⚙️ **Autotrade Execution Mode:** `{cur_m}`\n"
+            f"• {mode_desc}\n\n"
+            f"• Use `/autotrade signal` to trade only on `/signal`\n"
+            f"• Use `/autotrade auto` for 24/7 continuous autonomous entry\n"
+            f"• State: `{'🟢 ACTIVE' if autotrade_active else '⚪ PAUSED'}`",
+            parse_mode="Markdown",
+        )
+        return
+
     broker_mode = getattr(config, "BROKER_MODE", "paper").upper()
     max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6))
 
@@ -2126,9 +2182,12 @@ async def autotrade_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif arg in ("on", "1", "true", "enable") or (sym_choice and arg in (sym_choice.lower(), "btc", "gold", "both", "all")):
         autotrade_active = True
         engine.reset_halt()
+        cur_m = config.get_autotrade_mode().upper()
+        mode_str = "SIGNAL-DRIVEN (Trades on /signal)" if cur_m == "SIGNAL" else "CONTINUOUS AUTONOMOUS (24/7 background)"
         await update.message.reply_text(
             f"🟢 **Autotrade ACTIVATED**\n"
             f"• **Execution Mode:** `{broker_mode}`\n"
+            f"• **Autotrade Trigger:** `{mode_str}`\n"
             f"• **Strategy Profile:** `{getattr(config, 'CURRENT_PROFILE', 'scalp').upper()}`\n"
             f"• **Active Trade Limit:** `{max_trades}` concurrent positions\n"
             f"• **Active Watchlist:** `{symbols_str}`\n"
@@ -4218,7 +4277,10 @@ async def live_monitoring_worker(app):
                 is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                 max_trades = getattr(engine, "max_open_trades", getattr(config, "MAX_OPEN_TRADES", 6)) or 6
                 open_n = len(engine.active_positions) + len(engine.pending_setups)
+                cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "signal"))().lower()
                 if not autotrade_active:
+                    can_open = False
+                elif cur_mode == "signal":
                     can_open = False
                 elif is_scalping:
                     can_open, spam_reason = limiter.check_can_enter(
@@ -4397,6 +4459,12 @@ def run_cli_interactive():
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE)
             print(res.get("status"), res.get("signal"))
+            sig = res.get("signal")
+            if sig:
+                from signal_pipeline import try_paper_execute
+                ok, note = try_paper_execute(engine, sig, candle_price=res.get("price") or sig.get("entry"))
+                autotrade_active = True
+                print(f"[Autotrade Executed] {'✅ ' if ok else '⚠️ '}{note}")
         elif name in ("backtest", "abacktest"):
             from auto_backtest import run_auto_backtest
             b_args = parts[1:]
@@ -4560,7 +4628,18 @@ def run_cli_interactive():
             if sym_choice:
                 config.set_autotrade_symbols(sym_choice)
                 print(f"Autotrade symbols set to: {', '.join(sym_choice)}")
-            if any(a in ("scalp",) for a in args):
+            if arg in ("signal", "signal_only", "ondemand"):
+                config.set_autotrade_mode("signal")
+                autotrade_active = True
+                print("Autotrade set to SIGNAL-DRIVEN mode (trades execute only on signal; positions auto-managed).")
+            elif arg in ("auto", "continuous", "background"):
+                config.set_autotrade_mode("continuous")
+                autotrade_active = True
+                print("Autotrade set to CONTINUOUS AUTONOMOUS mode (24/7 background trading).")
+            elif arg in ("mode", "modes"):
+                cur_m = config.get_autotrade_mode().upper()
+                print(f"Autotrade Execution Mode: {cur_m} ({'Signal-driven only' if cur_m == 'SIGNAL' else 'Continuous 24/7 scanning'})")
+            elif any(a in ("scalp",) for a in args):
                 try:
                     from strategy_profiles import apply_profile
                     apply_profile("scalp", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
