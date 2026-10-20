@@ -29,6 +29,8 @@ _CANDLE_CACHE: Dict[str, Tuple[float, List[Dict[str, float]]]] = {}
 _CANDLE_LOCK = threading.Lock()
 _CONTEXT_CACHE: Dict[str, Tuple[float, str]] = {}
 _CONTEXT_LOCK = threading.Lock()
+_CHART_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+_CHART_LOCK = threading.Lock()
 
 
 def normalize_mt5_symbol(symbol: str) -> str:
@@ -446,6 +448,15 @@ def compute_chart_technicals(candles: List[Dict[str, float]], live_mark: float =
 def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any] = None) -> Dict[str, Any]:
     """Compile comprehensive MT5 live chart data bundle for a symbol."""
     norm_sym, name, icon = get_display_names(symbol)
+    tf_norm = timeframe.strip().upper()
+    cache_key = (norm_sym, tf_norm)
+    now = time.time()
+    if broker is None:
+        with _CHART_LOCK:
+            if cache_key in _CHART_CACHE:
+                ts, cached_bundle = _CHART_CACHE[cache_key]
+                if (now - ts) < 3.0:
+                    return dict(cached_bundle)
 
     if broker is None:
         try:
@@ -572,7 +583,7 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
         except Exception:
             pass
 
-    return {
+    bundle = {
         "symbol": norm_sym,
         "name": name,
         "icon": icon,
@@ -580,7 +591,7 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
         "bid": quote["bid"],
         "ask": quote["ask"],
         "spread": quote["spread"],
-        "timeframe": timeframe.upper(),
+        "timeframe": tf_norm,
         "candles": candles,
         "ascii_chart": ascii_plot,
         "technicals": technicals,
@@ -594,6 +605,10 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
         "leverage": leverage,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
+    if broker is None:
+        with _CHART_LOCK:
+            _CHART_CACHE[cache_key] = (now, bundle)
+    return bundle
 
 
 def format_mt5_chart_card(chart_data: Dict[str, Any]) -> str:

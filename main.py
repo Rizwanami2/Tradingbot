@@ -609,16 +609,11 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
 
     elif cat in ("ai", "brain", "learner", "agent", "agents"):
         text = (
-            "🧠 **Multi-Agent Consensus & Strategy Standings:**\n"
+            "🧠 **Autonomous Brain & Multi-Agent Learning:**\n"
             "• `/brain` — Strategy brain knowledge, learned rules & win rates\n"
             "• `/learner [rules|clearhours]` — View strategy rules & hour statistics\n"
             "• `/train [heavy|quick]` — Multi-asset model & backtest training\n"
             "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n"
-            "• `/board` — Strategy board & agent standings\n"
-            "• `/journal` — Trade journal analytics & history\n"
-            "• `/agents` — Agent performance rankings & stats\n"
-            "• `/tiers` — Risk tier allocations\n"
-            "• `/digest` — Daily market performance digest\n"
             "• `/reset` — Clear conversation context\n"
             "• `/ask [question]` — Conversational assistant with Gemini AI"
         )
@@ -1461,14 +1456,14 @@ async def positions_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             elif args[0] in ("sync", "refresh", "reconcile", "wallet", "reload"):
                 if hasattr(engine, "reconcile_positions"):
                     try:
-                        engine.reconcile_positions()
+                        await _to_thread(engine.reconcile_positions)
                     except Exception as rx:
                         logger.debug("[positions_command] reconcile error: %s", rx)
 
         # Always ensure positions are reconciled with MT5/broker before displaying
         if hasattr(engine, "reconcile_positions"):
             try:
-                engine.reconcile_positions()
+                await _to_thread(engine.reconcile_positions)
             except Exception as rx:
                 logger.debug("[positions_command] auto reconcile note: %s", rx)
 
@@ -1798,9 +1793,10 @@ async def news_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         from news_agent import NewsAgent
         agent = NewsAgent(symbol=getattr(config, "DEFAULT_SYMBOL", "XAUUSD"))
         if hasattr(agent, "report"):
-            await update.message.reply_text(agent.report(), parse_mode="Markdown")
+            rep_text = await _to_thread(agent.report)
+            await update.message.reply_text(rep_text, parse_mode="Markdown")
             return
-        v = agent.vote()
+        v = await _to_thread(agent.vote)
         await update.message.reply_text(f"📰 **News**\n{v.direction.name}: {v.reason}", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"News error: {e}")
@@ -3113,7 +3109,7 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if sub == "ping":
         t0 = time.time()
-        res = ea_client.status(magic=magic, timeout=5.0)
+        res = await _to_thread(ea_client.status, magic=magic, timeout=2.0)
         elapsed = (time.time() - t0) * 1000.0
         if res.get("ok"):
             await update.message.reply_text(
@@ -3245,7 +3241,7 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Default: status dashboard
         cur_eff = getattr(b, "effective_backend", "N/A") if b else "N/A"
         cur_backend = getattr(b, "backend", getattr(config, "MT5_BACKEND", "auto")) if b else "auto"
-        res = ea_client.status(magic=magic, timeout=2.0)
+        res = await _to_thread(ea_client.status, magic=magic, timeout=1.5)
         is_responsive = res.get("ok", False)
         status_icon = "🟢 Responsive" if is_responsive else "⚪ Awaiting MT5 EA"
         lines = [
@@ -3694,9 +3690,6 @@ async def balance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     acc_server = getattr(acc_info, "server", getattr(b, "server", "MT5 Terminal")) or "MT5 Terminal"
 
     await update.message.reply_text(
-        "⚠️ **Paper Trading Wallet Removed**\n"
-        "Paper trading and manual wallet simulation have been removed.\n"
-        "MetaTrader 5 Live is the sole exclusive broker.\n\n"
         "🏦 **MetaTrader 5 Live Account Balance**\n"
         f"• **Account:** `#{acc_login}` | **Server:** `{acc_server}`\n"
         f"• **Live Balance:** `${bal:,.2f}` | **Equity:** `${eq:,.2f}`\n"
@@ -4087,7 +4080,7 @@ async def broker_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🇮🇳 **Delta Exchange India Live REST Engine:**\n"
             f"• `/broker delta` — Delta Exchange India Live REST engine\n"
             f"• `/switch delta` — Switch to Delta Exchange India\n\n"
-            f"⚠️ Note: Paper trading and legacy brokers (OANDA, Alpaca, CCXT) have been removed.",
+            f"• Active supported execution engines: MetaTrader 5 & Delta Exchange India.",
             parse_mode="Markdown",
         )
         return

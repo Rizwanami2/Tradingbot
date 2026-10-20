@@ -187,13 +187,11 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.ctx.args = ["ai"]
         await help_command(self.update, self.ctx)
         text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Multi-Agent Consensus & Strategy Standings", text)
+        self.assertIn("Autonomous Brain & Multi-Agent Learning", text)
         self.assertIn("/brain", text)
-        self.assertIn("/board", text)
-        self.assertIn("/journal", text)
-        self.assertIn("/agents", text)
-        self.assertIn("/tiers", text)
-        self.assertIn("/digest", text)
+        self.assertIn("/learner", text)
+        self.assertIn("/train", text)
+        self.assertIn("/relearn", text)
 
     async def test_start_command(self):
         await start_command(self.update, self.ctx)
@@ -453,13 +451,13 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
     async def test_balance_command_view_and_set(self):
-        # 1. View balance informs user paper trading wallet has been removed
+        # 1. View balance returns live MT5 balance card
         self.ctx.args = []
         await balance_command(self.update, self.ctx)
         self.message.reply_text.assert_called()
         view_text = self.message.reply_text.call_args[0][0]
-        self.assertIn("Paper Trading Wallet Removed", view_text)
-        self.assertIn("MetaTrader 5 Live is the sole exclusive broker", view_text)
+        self.assertIn("MetaTrader 5 Live Account Balance", view_text)
+        self.assertIn("Live Balance:", view_text)
 
         # 2. set_paper_wallet_balance fails-closed
         ok, msg, _ = set_paper_wallet_balance(25000)

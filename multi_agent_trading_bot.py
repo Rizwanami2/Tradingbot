@@ -1074,7 +1074,7 @@ class Arbiter:
 def evaluate_symbol(symbol="XAUUSD", source="demo", exchange_id="binance", leverage=None, on_demand: bool = True):
     symbol = _norm_trade_symbol(symbol)
     feed = MarketDataFeed(symbol=symbol, source=source, exchange_id=exchange_id)
-    data = feed.multi_tf(limit_1m=1500)
+    data = feed.multi_tf(limit_1m=400)
     if not data or data["1m"].empty:
         return {"symbol": symbol, "signal": None, "status": "No data", "votes": [], "price": 0.0}
     risk = RiskManager(equity=getattr(config, "INITIAL_EQUITY", 10000.0), symbol=symbol)

@@ -155,7 +155,7 @@ class DataFeed:
             "close": p, "volume": np.random.randint(100, 2000, limit)
         }, index=dates)
 
-    def multi_tf(self, limit_1m: int = 1500) -> Dict[str, pd.DataFrame]:
+    def multi_tf(self, limit_1m: int = 400) -> Dict[str, pd.DataFrame]:
         df1 = self.fetch(limit=limit_1m, timeframe="1m")
         if df1.empty:
             return {}

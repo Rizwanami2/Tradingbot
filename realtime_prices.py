@@ -40,6 +40,8 @@ _SPOT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _SPOT_LOCK = threading.Lock()
 _LEVELS_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _LEVELS_LOCK = threading.Lock()
+_OHLCV_CACHE: Dict[Tuple[str, str], Tuple[float, pd.DataFrame]] = {}
+_OHLCV_LOCK = threading.Lock()
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -254,26 +256,11 @@ def _tv_quote(symbol: str) -> Optional[Dict[str, Any]]:
 
 
 def fetch_ohlcv(symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataFrame:
-    """OHLCV prioritizing live MT5 broker candles with geo-safe Binance fallback.
+    """OHLCV prioritizing live MT5 broker candles with geo-safe Binance fallback (with TTL cache).
 
     For gold prefer PAXGUSDT klines (real daily/1h) over TV synthetic 1m bars if MT5 unavailable.
     """
-    # 0. Live MT5 Broker Candles (Primary source of truth)
-    try:
-        from mt5_broker import get_active_broker
-        b = get_active_broker()
-        if b is not None and hasattr(b, "get_candles"):
-            df_mt5 = b.get_candles(symbol, timeframe=interval, limit=limit)
-            if df_mt5 is not None and not df_mt5.empty and len(df_mt5) >= 3:
-                return df_mt5
-    except Exception:
-        pass
-
-    bsym = _binance_symbol(symbol)
-    if _is_gold(symbol):
-        bsym = "PAXGUSDT"
-
-    iv = interval.lower().replace("min", "m").replace("hour", "h").replace("day", "d")
+    iv = interval.lower().replace("min", "m").replace("hour", "h").replace("day", "d").strip()
     if iv in ("1d", "d", "1day", "daily"):
         iv = "1d"
     elif iv in ("1h", "h", "60m", "60min"):
@@ -284,6 +271,32 @@ def fetch_ohlcv(symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataF
         iv = "5m"
     elif iv in ("1m", "m", "1min"):
         iv = "1m"
+
+    norm_sym = _norm_symbol(symbol)
+    cache_key = (norm_sym, iv)
+    now = time.time()
+    with _OHLCV_LOCK:
+        if cache_key in _OHLCV_CACHE:
+            ts, cached_df = _OHLCV_CACHE[cache_key]
+            if (now - ts) < 5.0 and len(cached_df) >= min(limit, 30):
+                return cached_df.tail(limit).copy()
+
+    # 0. Live MT5 Broker Candles (Primary source of truth)
+    try:
+        from mt5_broker import get_active_broker
+        b = get_active_broker()
+        if b is not None and hasattr(b, "get_candles"):
+            df_mt5 = b.get_candles(symbol, timeframe=iv, limit=limit)
+            if df_mt5 is not None and not df_mt5.empty and len(df_mt5) >= 3:
+                with _OHLCV_LOCK:
+                    _OHLCV_CACHE[cache_key] = (now, df_mt5.copy())
+                return df_mt5
+    except Exception:
+        pass
+
+    bsym = _binance_symbol(norm_sym)
+    if _is_gold(norm_sym):
+        bsym = "PAXGUSDT"
 
     for base in ("https://data-api.binance.vision", "https://api.binance.us"):
         data = _get_json(
@@ -302,13 +315,17 @@ def fetch_ohlcv(symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataF
                     "volume": float(k[5]),
                 })
             df = pd.DataFrame(rows).set_index("timestamp")
+            with _OHLCV_LOCK:
+                _OHLCV_CACHE[cache_key] = (now, df.copy())
             return df.tail(limit)
 
-    if _is_gold(symbol):
+    if _is_gold(norm_sym):
         try:
             from tradingview_feed import fetch_tradingview_bars
             df = fetch_tradingview_bars("XAUUSD", limit=limit)
             if df is not None and len(df) >= 10:
+                with _OHLCV_LOCK:
+                    _OHLCV_CACHE[cache_key] = (now, df.copy())
                 return df.tail(limit)
         except Exception:
             pass

@@ -1,12 +1,21 @@
 """Autonomous Learner Telegram & CLI Interface."""
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 from typing import Any, List
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
 logger = logging.getLogger("TelegramBrain")
+
+
+async def _to_thread(func, *args, **kwargs):
+    if hasattr(asyncio, "to_thread"):
+        return await asyncio.to_thread(func, *args, **kwargs)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
 async def safe_reply(
@@ -703,7 +712,7 @@ async def train_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         from heavy_trainer import HeavyTrainer
         trainer = HeavyTrainer()
-        summary = trainer.train_all(heavy=heavy)
+        summary = await _to_thread(trainer.train_all, heavy=heavy)
         report = trainer.format_markdown_report(summary)
         await safe_reply(update, report, parse_mode="Markdown")
     except Exception as e:
@@ -728,7 +737,7 @@ async def relearn_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             from heavy_trainer import HeavyTrainer
             trainer = HeavyTrainer(years=years)
-            summary = trainer.train_all(heavy=True)
+            summary = await _to_thread(trainer.train_all, heavy=True)
             rep = trainer.format_markdown_report(summary)
             await safe_reply(update, rep, parse_mode="Markdown")
             return
@@ -740,7 +749,8 @@ async def relearn_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await safe_reply(update, f"⏳ Re-learning from {sym} history (up to {years:.1f}y)...", parse_mode=None)
     try:
         from autonomous_learner import get_brain
-        res = get_brain(auto_bootstrap=False).bootstrap(symbol=sym, years=years)
+        brain = get_brain(auto_bootstrap=False)
+        res = await _to_thread(brain.bootstrap, symbol=sym, years=years)
         rep = (
             f"✅ *Autonomous Retraining Complete ({sym})*\n"
             f"• Replayed Trades: `{res.get('trades', 0)}`\n"

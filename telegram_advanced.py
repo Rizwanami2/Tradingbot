@@ -9,6 +9,8 @@ Also starts AutonomousLearner (5y history self-correction) automatically.
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -21,6 +23,13 @@ logger = logging.getLogger("TelegramAdvanced")
 _MODES = {"single", "walkforward", "montecarlo", "multiagent", "sweep", "wf", "mc", "auto", "full", "all"}
 
 from telegram_brain import safe_reply
+
+
+async def _to_thread(func, *args, **kwargs):
+    if hasattr(asyncio, "to_thread"):
+        return await asyncio.to_thread(func, *args, **kwargs)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
 async def performance_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -168,7 +177,7 @@ async def asignal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         from advanced_integration import AdvancedEngine
         eng = AdvancedEngine(symbol=sym, profile=profile)
-        res = eng.evaluate(sym)
+        res = await _to_thread(eng.evaluate, sym)
         try:
             from autonomous_learner import get_brain
             brain = get_brain(auto_bootstrap=False)
@@ -286,7 +295,8 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         try:
             from auto_backtest import run_auto_backtest
-            report = run_auto_backtest(
+            report = await _to_thread(
+                run_auto_backtest,
                 symbol=symbol,
                 bars=bars,
                 source=getattr(config, "DEFAULT_DATA_SOURCE", "demo"),
@@ -309,33 +319,35 @@ async def abacktest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             load_data, SimConfig, AdvancedSimulator, ema_cross_signal,
             multiagent_proxy_signal, walk_forward, monte_carlo_from_trades, parameter_sweep,
         )
-        df = load_data(symbol, bars, getattr(config, "DEFAULT_DATA_SOURCE", "demo"), None)
-        cfg = SimConfig(
-            initial_equity=getattr(config, "INITIAL_EQUITY", 10000.0),
-            risk_per_trade=max(0.001, getattr(config, "DEFAULT_RISK_PCT", 0.18) / 100.0),
-        )
-        sim = AdvancedSimulator(cfg)
 
-        if mode == "walkforward":
-            if len(df) < 300:
-                text = f"Walk-forward requires at least 300 bars (got {len(df)}). Try /abacktest 500 wf {symbol}."
-            else:
-                text = walk_forward(df, ema_cross_signal, n_windows=4, cfg=cfg, symbol=symbol).summary()
-        elif mode == "montecarlo":
-            m, trades, _ = sim.run(df, ema_cross_signal, symbol)
-            if len(trades) < 5:
-                text = m.summary() + f"\n\nMonte Carlo requires at least 5 simulated trades (got {len(trades)})."
-            else:
+        def _execute_backtest() -> str:
+            df = load_data(symbol, bars, getattr(config, "DEFAULT_DATA_SOURCE", "demo"), None)
+            cfg = SimConfig(
+                initial_equity=getattr(config, "INITIAL_EQUITY", 10000.0),
+                risk_per_trade=max(0.001, getattr(config, "DEFAULT_RISK_PCT", 0.18) / 100.0),
+            )
+            sim = AdvancedSimulator(cfg)
+
+            if mode == "walkforward":
+                if len(df) < 300:
+                    return f"Walk-forward requires at least 300 bars (got {len(df)}). Try /abacktest 500 wf {symbol}."
+                return walk_forward(df, ema_cross_signal, n_windows=4, cfg=cfg, symbol=symbol).summary()
+            elif mode == "montecarlo":
+                m, trades, _ = sim.run(df, ema_cross_signal, symbol)
+                if len(trades) < 5:
+                    return m.summary() + f"\n\nMonte Carlo requires at least 5 simulated trades (got {len(trades)})."
                 mc = monte_carlo_from_trades(trades, initial_equity=cfg.initial_equity, n_runs=400)
-                text = m.summary() + mc.summary()
-        elif mode == "multiagent":
-            text = sim.run(df, multiagent_proxy_signal, symbol)[0].summary()
-        elif mode == "sweep":
-            table = parameter_sweep(df, cfg=cfg, symbol=symbol)
-            text = "Sweep top 10:\n" + table.head(10).to_string(index=False)
-        else:
-            m, trades, _ = sim.run(df, ema_cross_signal, symbol)
-            text = m.summary()
+                return m.summary() + mc.summary()
+            elif mode == "multiagent":
+                return sim.run(df, multiagent_proxy_signal, symbol)[0].summary()
+            elif mode == "sweep":
+                table = parameter_sweep(df, cfg=cfg, symbol=symbol)
+                return "Sweep top 10:\n" + table.head(10).to_string(index=False)
+            else:
+                m, trades, _ = sim.run(df, ema_cross_signal, symbol)
+                return m.summary()
+
+        text = await _to_thread(_execute_backtest)
 
         if len(text) > 4000:
             text = text[:3900] + "\n…(truncated)"
@@ -353,7 +365,7 @@ async def quality_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         from signal_quality import evaluate_signal_quality
         sym = (ctx.args[0] if ctx.args else config.DEFAULT_SYMBOL).upper()
         feed = MarketDataFeed(symbol=sym, source=getattr(config, "DEFAULT_DATA_SOURCE", "demo"))
-        data = feed.multi_tf(limit_1m=120)
+        data = await _to_thread(feed.multi_tf, limit_1m=120)
         df = data.get("1m") if data else None
         if df is None or df.empty:
             await safe_reply(update, "No data", parse_mode=None)
