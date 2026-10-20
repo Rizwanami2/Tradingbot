@@ -338,7 +338,7 @@ async def live_monitoring_worker(
                     if can_open:
                         sig, why, votes = arbiter.decide(
                             df1, data.get("5m"), data.get("15m"), data.get("1h"), daily, risk_mgr,
-                            symbol=symbol, on_demand=True,
+                            symbol=symbol, on_demand=True, engine=engine,
                         )
                         if not sig:
                             logger.info("Autotrade %s: no setup — %s", symbol, why)
@@ -390,6 +390,31 @@ async def live_monitoring_worker(
                             # Ensure fast market execution for autotrade consensus setups
                             sig["fast_market_fill"] = True
 
+                            # 1. Strict Single-Direction Rule: Do not buy and sell positions at the same time
+                            can_enter_dir, dir_reason = limiter.check_can_enter(
+                                symbol=symbol,
+                                current_price=candle_dict["close"],
+                                engine=engine,
+                                max_open=max_open,
+                                bypass_cooldowns=True,
+                                direction=dname,
+                            )
+                            if not can_enter_dir:
+                                logger.info("Autotrade %s: direction veto — %s", symbol, dir_reason)
+                                monitoring_health[f"{symbol}_eval"] = f"Direction veto: {dir_reason}"
+                                continue
+
+                            # 2. Strict 1m Candle Auto-Trend Following: Reject counter-trend trades
+                            try:
+                                from auto_trend_1m_strategy import verify_auto_trend_alignment
+                                trend_ok, trend_why = verify_auto_trend_alignment(df1, dname)
+                                if not trend_ok:
+                                    logger.info("Autotrade %s: vetoed by 1m Auto-Trend Filter — %s", symbol, trend_why)
+                                    monitoring_health[f"{symbol}_eval"] = f"Auto-Trend veto: {trend_why}"
+                                    continue
+                            except Exception as _at_err:
+                                logger.debug("Autotrade 1m auto-trend note: %s", _at_err)
+
                             # Multi-Timeframe Trend & Volatility Confluence Matrix check
                             try:
                                 from mtf_matrix import check_mtf_confluence
@@ -406,22 +431,19 @@ async def live_monitoring_worker(
                             except Exception as _mtf_err:
                                 logger.debug("Autotrade MTF check note: %s", _mtf_err)
 
-                            # MT5 live chart micro-trend bias check for scalps (reject counter-trend scalps)
+                            # MT5 live chart micro-trend bias check for scalps (strictly reject counter-trend scalps)
                             if is_scalp_sig:
                                 try:
                                     from mt5_chart import get_mt5_live_chart
                                     _cdata = get_mt5_live_chart(symbol, timeframe="1m")
                                     if _cdata and _cdata.get("ok", True):
                                         _tbias = str(_cdata.get("technicals", {}).get("trend_bias", "")).upper()
-                                        score_val = float(sig.get("score") or 0.0)
                                         is_opposing = ("BEARISH" in _tbias and ("BUY" in dname.upper() or "LONG" in dname.upper())) or \
                                                       ("BULLISH" in _tbias and ("SELL" in dname.upper() or "SHORT" in dname.upper()))
                                         if is_opposing:
-                                            if agree >= 2 or score_val >= 1.0:
-                                                logger.info("Autotrade %s: opposing MT5 live chart trend (%s) overridden by Arbiter consensus (score=%.2f, votes=%d)", symbol, _tbias, score_val, agree)
-                                            else:
-                                                logger.info("Autotrade %s: scalp vetoed by opposing MT5 live chart trend (%s)", symbol, _tbias)
-                                                continue
+                                            logger.info("Autotrade %s: scalp vetoed by opposing MT5 live chart trend (%s)", symbol, _tbias)
+                                            monitoring_health[f"{symbol}_eval"] = f"Opposing MT5 trend: {_tbias}"
+                                            continue
                                 except Exception as _mt5_err:
                                     logger.debug("Autotrade scalp MT5 chart check note: %s", _mt5_err)
 

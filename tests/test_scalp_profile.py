@@ -1334,6 +1334,126 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         can_open, reason = limiter.check_can_enter("XAUUSD", current_price=2651.0, engine=self.engine, max_open=4, bypass_cooldowns=True)
         self.assertTrue(can_open, reason)
 
+    def test_auto_trend_1m_strategy_detection(self):
+        """Verify that 1m Auto-Trend following strategy correctly identifies bullish and bearish auto-trends."""
+        from auto_trend_1m_strategy import detect_auto_trend_1m, AutoTrendDir
+        import numpy as np
+
+        # Create 60 candles in a strong upward auto-trend (EMA9 > 21 > 50)
+        prices = [2650.0 + i * 0.3 for i in range(60)]
+        bull_df = pd.DataFrame({
+            "open": [p - 0.1 for p in prices],
+            "high": [p + 0.2 for p in prices],
+            "low": [p - 0.15 for p in prices],
+            "close": prices,
+        })
+        vote_bull = detect_auto_trend_1m(bull_df)
+        self.assertEqual(vote_bull.direction, AutoTrendDir.LONG)
+        self.assertGreaterEqual(vote_bull.strength, 0.85)
+        self.assertIsNotNone(vote_bull.stop_price)
+        self.assertIsNotNone(vote_bull.tp_price)
+        self.assertLess(vote_bull.stop_price, prices[-1])
+        self.assertGreater(vote_bull.tp_price, prices[-1])
+        self.assertIn("BULLISH", vote_bull.reason)
+
+        # Create 60 candles in a strong downward auto-trend (EMA9 < 21 < 50)
+        prices_down = [2700.0 - i * 0.3 for i in range(60)]
+        bear_df = pd.DataFrame({
+            "open": [p + 0.1 for p in prices_down],
+            "high": [p + 0.15 for p in prices_down],
+            "low": [p - 0.2 for p in prices_down],
+            "close": prices_down,
+        })
+        vote_bear = detect_auto_trend_1m(bear_df)
+        self.assertEqual(vote_bear.direction, AutoTrendDir.SHORT)
+        self.assertGreaterEqual(vote_bear.strength, 0.85)
+        self.assertIsNotNone(vote_bear.stop_price)
+        self.assertIsNotNone(vote_bear.tp_price)
+        self.assertGreater(vote_bear.stop_price, prices_down[-1])
+        self.assertLess(vote_bear.tp_price, prices_down[-1])
+        self.assertIn("BEARISH", vote_bear.reason)
+
+    def test_auto_trend_alignment_verification(self):
+        """Verify that verify_auto_trend_alignment rejects counter-trend trades."""
+        from auto_trend_1m_strategy import verify_auto_trend_alignment
+
+        # Bullish data
+        prices = [2650.0 + i * 0.3 for i in range(60)]
+        bull_df = pd.DataFrame({
+            "open": [p - 0.1 for p in prices],
+            "high": [p + 0.2 for p in prices],
+            "low": [p - 0.15 for p in prices],
+            "close": prices,
+        })
+        # BUY allowed in bullish auto-trend
+        ok_buy, why_buy = verify_auto_trend_alignment(bull_df, "BUY")
+        self.assertTrue(ok_buy, why_buy)
+
+        # SELL rejected in bullish auto-trend
+        ok_sell, why_sell = verify_auto_trend_alignment(bull_df, "SELL")
+        self.assertFalse(ok_sell)
+        self.assertIn("Opposing 1m Auto-Trend", why_sell)
+
+    def test_no_simultaneous_buy_and_sell_positions(self):
+        """Verify that holding BUY and SELL positions at the same time on the same currency is strictly blocked."""
+        from anti_spam import AntiSpamRateLimiter
+        limiter = AntiSpamRateLimiter(max_positions_per_symbol=2)
+
+        # 1. Place active BUY position on Gold
+        p_buy = TradeOrder(
+            id="buy_xau_1", symbol="XAUUSD", direction="LONG", entry_level=2650.0,
+            stop_loss=2645.0, tp1=2655.0, tp2=2660.0, tp3=None, lots=0.02, size=2.0,
+            leverage=20.0, margin_required=50.0, liquidation_price=2600.0, risk_amount=10.0,
+            rr_ratio=1.0, setup_reason="Active long", status=OrderStatus.OPEN, executed_price=2650.0,
+            remaining_size=2.0, is_scalp=True,
+        )
+        self.engine.active_positions[p_buy.id] = p_buy
+
+        # Attempt to enter SHORT on Gold in anti_spam -> must be blocked
+        ok_short, reason_short = limiter.check_can_enter("XAUUSD", 2655.0, self.engine, max_open=4, direction="SHORT")
+        self.assertFalse(ok_short)
+        self.assertIn("cannot BUY and SELL at the same time", reason_short)
+
+        # Attempt to enter another LONG on Gold in anti_spam -> allowed
+        ok_long, reason_long = limiter.check_can_enter("XAUUSD", 2655.0, self.engine, max_open=4, direction="LONG")
+        self.assertTrue(ok_long, reason_long)
+
+        # In ExecutionEngine.register_setup, registering SHORT on Gold must raise RuntimeError
+        short_sig = {
+            "symbol": "XAUUSD", "direction": "SHORT", "entry": 2655.0, "stop": 2660.0,
+            "tp1": 2650.0, "tp2": 2645.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+            "margin_required": 50.0, "risk_amount": 10.0, "rr": 1.0, "is_scalp": True,
+        }
+        with self.assertRaises(RuntimeError) as ctx:
+            self.engine.register_setup(short_sig)
+        self.assertIn("cannot hold BUY and SELL at the same time", str(ctx.exception))
+
+        # Clear and test the reverse: active SHORT on BTC blocks LONG on BTC
+        self.engine.active_positions.clear()
+        p_sell = TradeOrder(
+            id="sell_btc_1", symbol="BTCUSDT", direction="SHORT", entry_level=65000.0,
+            stop_loss=65200.0, tp1=64800.0, tp2=64600.0, tp3=None, lots=0.01, size=0.01,
+            leverage=20.0, margin_required=32.5, liquidation_price=66000.0, risk_amount=5.0,
+            rr_ratio=1.0, setup_reason="Active short", status=OrderStatus.OPEN, executed_price=65000.0,
+            remaining_size=0.01, is_scalp=True,
+        )
+        self.engine.active_positions[p_sell.id] = p_sell
+
+        # Attempt to enter LONG on BTC in anti_spam -> must be blocked
+        ok_btc_long, reason_btc_long = limiter.check_can_enter("BTCUSDT", 64900.0, self.engine, max_open=4, direction="LONG")
+        self.assertFalse(ok_btc_long)
+        self.assertIn("cannot BUY and SELL at the same time", reason_btc_long)
+
+        # In ExecutionEngine.register_setup, registering LONG on BTC must raise RuntimeError
+        long_btc_sig = {
+            "symbol": "BTCUSDT", "direction": "LONG", "entry": 64900.0, "stop": 64700.0,
+            "tp1": 65100.0, "tp2": 65300.0, "lots": 0.01, "size": 0.01, "leverage": 20.0,
+            "margin_required": 32.5, "risk_amount": 5.0, "rr": 1.0, "is_scalp": True,
+        }
+        with self.assertRaises(RuntimeError) as ctx2:
+            self.engine.register_setup(long_btc_sig)
+        self.assertIn("cannot hold BUY and SELL at the same time", str(ctx2.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

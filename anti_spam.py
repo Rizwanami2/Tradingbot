@@ -235,12 +235,14 @@ class AntiSpamRateLimiter:
         max_open: int = 6,
         timestamp: Optional[float] = None,
         bypass_cooldowns: bool = False,
+        direction: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """
         Evaluate if a new trade can be opened for symbol.
         Enforces:
         - Total max concurrent positions (default 6)
         - Max 2 trades per currency (2 Gold, 2 BTC)
+        - Single direction isolation: never BUY and SELL same currency at the same time
         - Global, entry, and loss cooldowns (adapted in AUTO mode, bypassed in OFF mode or when bypass_cooldowns=True)
         - Price proximity distance protection
         Returns (can_enter: bool, reason: str).
@@ -267,6 +269,26 @@ class AntiSpamRateLimiter:
         curr_count, matching_active = self.count_currency_positions(engine, curr)
         if curr_count >= self.max_positions_per_symbol:
             return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
+
+        # 3. Strict Single-Direction Rule: Never hold BUY and SELL positions on the same currency at the same time
+        if direction:
+            dir_norm = str(direction).upper()
+            is_incoming_buy = dir_norm in ("LONG", "BUY")
+            is_incoming_sell = dir_norm in ("SHORT", "SELL")
+            if is_incoming_buy or is_incoming_sell:
+                all_matching = list(matching_active)
+                if hasattr(engine, "pending_setups") and engine.pending_setups:
+                    for p in engine.pending_setups.values():
+                        if canonical_currency(getattr(p, "symbol", "")) == curr:
+                            all_matching.append(p)
+                for pos in all_matching:
+                    pos_dir = str(getattr(pos, "direction", "")).upper()
+                    is_pos_buy = pos_dir in ("LONG", "BUY")
+                    is_pos_sell = pos_dir in ("SHORT", "SELL")
+                    if is_incoming_buy and is_pos_sell:
+                        return False, f"Opposing direction: active SELL position exists on {curr}; cannot BUY and SELL at the same time"
+                    if is_incoming_sell and is_pos_buy:
+                        return False, f"Opposing direction: active BUY position exists on {curr}; cannot BUY and SELL at the same time"
 
         # 3. Minimum price distance from existing active positions on this currency
         # When bypass_cooldowns=True (e.g. scalping mode), time cooldowns are skipped,

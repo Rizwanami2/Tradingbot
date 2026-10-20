@@ -123,6 +123,13 @@ except ImportError:
     StochRSIScalpAgent = None
     StochDir = None
 
+try:
+    from auto_trend_1m_strategy import AutoTrend1mAgent, AutoTrendDir, verify_auto_trend_alignment
+except ImportError:
+    AutoTrend1mAgent = None
+    AutoTrendDir = None
+    verify_auto_trend_alignment = None
+
 MEMORY_FILE = "multi_agent_memory.json"
 
 
@@ -634,6 +641,7 @@ class Arbiter:
         "VOLATILITY-SQUEEZE": 1.50,
         "RIBBON-SCALP": 1.45,
         "STOCH-RSI-SCALP": 1.50,
+        "AUTO-TREND-1M": 1.60,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -700,8 +708,9 @@ class Arbiter:
         self.sqz = SqueezeScalpAgent() if SqueezeScalpAgent is not None else None
         self.ribbon = RibbonScalpAgent() if RibbonScalpAgent is not None else None
         self.stoch = StochRSIScalpAgent() if StochRSIScalpAgent is not None else None
+        self.auto_trend_1m = AutoTrend1mAgent() if AutoTrend1mAgent is not None else None
 
-    def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False):
+    def decide(self, df1, df5, df15, df1h, daily, risk_mgr, symbol="XAUUSD", on_demand: bool = False, engine: Optional[Any] = None):
         votes = [
             self.trend.vote(df1),
             self.liq.vote(df1, daily if daily is not None else pd.DataFrame()),
@@ -845,6 +854,20 @@ class Arbiter:
             except Exception:
                 pass
 
+        if getattr(self, "auto_trend_1m", None) is not None:
+            try:
+                at_v = self.auto_trend_1m.vote(df1, daily=daily if daily is not None else pd.DataFrame())
+                dname = getattr(at_v.direction, "name", str(at_v.direction)).upper()
+                direction = Dir.LONG if "LONG" in dname else (Dir.SHORT if "SHORT" in dname else Dir.FLAT)
+                v = Vote(at_v.agent, direction, float(at_v.strength), at_v.reason)
+                if hasattr(at_v, "stop_price"):
+                    v.stop_price = at_v.stop_price
+                if hasattr(at_v, "tp_price"):
+                    v.tp_price = at_v.tp_price
+                votes.append(v)
+            except Exception:
+                pass
+
         session_warn = None
         if is_tradeable_session is not None:
             try:
@@ -872,9 +895,9 @@ class Arbiter:
                 short_n += 1
 
         # Institutional Synergy Booster:
-        # Multiple institutional smart-money confirmations (Liquidity, MTF, ORR, S/D, OTE)
+        # Multiple institutional smart-money confirmations (Liquidity, MTF, ORR, S/D, OTE, AutoTrend1M)
         # reinforce high-accuracy trade execution
-        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT", "VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP"}
+        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT", "VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP", "AUTO-TREND-1M"}
         long_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.LONG and v.strength >= 0.75)
         short_inst_n = sum(1 for v in votes if v.agent in INSTITUTIONAL_AGENTS and v.direction == Dir.SHORT and v.strength >= 0.75)
         if long_inst_n >= 2:
@@ -885,7 +908,7 @@ class Arbiter:
         # Scalp Velocity Booster:
         # In scalp mode, accelerate conviction when fast momentum triggers fire
         if getattr(self, "is_scalp", False):
-            SCALP_BURST_AGENTS = {"VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP", "MEAN-REVERSION"}
+            SCALP_BURST_AGENTS = {"VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP", "MEAN-REVERSION", "AUTO-TREND-1M"}
             if any(v.agent in SCALP_BURST_AGENTS and v.direction == Dir.LONG and v.strength >= 0.80 for v in votes):
                 long_score = round(long_score * 1.10, 3)
             if any(v.agent in SCALP_BURST_AGENTS and v.direction == Dir.SHORT and v.strength >= 0.80 for v in votes):
@@ -920,6 +943,38 @@ class Arbiter:
             if session_warn:
                 msg += f" | {session_warn}"
             return None, msg, votes
+
+        # Strict Auto-Trend Alignment Check: Reject counter-trend consensus setups
+        if direction != Dir.FLAT and verify_auto_trend_alignment is not None:
+            try:
+                trend_ok, trend_why = verify_auto_trend_alignment(df1, direction.name)
+                if not trend_ok:
+                    conflict_msg = f"Auto-Trend Filter: {trend_why}"
+                    if session_warn:
+                        conflict_msg += f" | {session_warn}"
+                    return None, conflict_msg, votes
+            except Exception:
+                pass
+
+        # Strict Single-Direction Rule: Do not BUY and SELL positions at the same time on the same currency
+        if direction != Dir.FLAT and engine is not None:
+            try:
+                from anti_spam import canonical_currency
+                curr = canonical_currency(symbol)
+                is_buy = direction == Dir.LONG
+                is_sell = direction == Dir.SHORT
+                active_curr = [p for p in getattr(engine, "active_positions", {}).values()
+                               if canonical_currency(getattr(p, "symbol", "")) == curr]
+                pending_curr = [p for p in getattr(engine, "pending_setups", {}).values()
+                                if canonical_currency(getattr(p, "symbol", "")) == curr]
+                for p in active_curr + pending_curr:
+                    p_dir = str(getattr(p, "direction", "")).upper()
+                    if is_buy and p_dir in ("SHORT", "SELL"):
+                        return None, f"Opposing direction: active SELL position exists on {curr} (cannot BUY and SELL same time)", votes
+                    if is_sell and p_dir in ("LONG", "BUY"):
+                        return None, f"Opposing direction: active BUY position exists on {curr} (cannot BUY and SELL same time)", votes
+            except Exception:
+                pass
 
         entry = float(df1["close"].iloc[-1])
         if getattr(self, "is_scalp", False):
