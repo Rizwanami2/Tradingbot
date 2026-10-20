@@ -314,8 +314,8 @@ async def live_monitoring_worker(
                     if not autotrade_active:
                         can_open = False
                     elif is_scalping:
-                        # Deterministic scalp slot management: total capacity, per-currency limit, minimum price distance
-                        can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open)
+                        # Deterministic scalp slot management: total capacity & per-currency limits (cooldowns bypassed)
+                        can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open, bypass_cooldowns=True)
                     else:
                         can_open = open_n < max_open and symbol not in engine.active_positions and symbol not in engine.pending_setups
                         if can_open:

@@ -234,13 +234,14 @@ class AntiSpamRateLimiter:
         engine: Any,
         max_open: int = 6,
         timestamp: Optional[float] = None,
+        bypass_cooldowns: bool = False,
     ) -> Tuple[bool, str]:
         """
         Evaluate if a new trade can be opened for symbol.
         Enforces:
         - Total max concurrent positions (default 6)
         - Max 2 trades per currency (2 Gold, 2 BTC)
-        - Global, entry, and loss cooldowns (adapted in AUTO mode, bypassed in OFF mode)
+        - Global, entry, and loss cooldowns (adapted in AUTO mode, bypassed in OFF mode or when bypass_cooldowns=True)
         - Price proximity distance protection
         Returns (can_enter: bool, reason: str).
         """
@@ -267,7 +268,9 @@ class AntiSpamRateLimiter:
         if curr_count >= self.max_positions_per_symbol:
             return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
 
-        # When mode is OFF: cooldowns and proximity checks are bypassed
+        # When bypass_cooldowns or mode is OFF: cooldowns and proximity checks are bypassed
+        if bypass_cooldowns:
+            return True, "OK (cooldowns bypassed)"
         if self.mode == "off":
             return True, "OK (anti-spam manual OFF)"
 
