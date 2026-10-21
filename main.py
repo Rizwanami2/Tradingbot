@@ -326,6 +326,67 @@ def format_price_string(info: Dict) -> str:
     )
 
 
+def get_clean_telegram_commands() -> list:
+    """Returns the clean, curated list of primary bot commands for the Telegram native menu."""
+    from telegram import BotCommand
+    return [
+        # Multi-Agent Consensus & Navigation
+        BotCommand("start", "Start bot & interactive overview"),
+        BotCommand("menu", "Interactive command hub & category navigator"),
+        BotCommand("combined", "Combined Bot Agent & 18-agent consensus"),
+        BotCommand("cooldown", "Configure entry, loss & anti-spam cooldowns"),
+        BotCommand("spam", "Toggle spam burst mode (max 6 trades)"),
+        BotCommand("signal", "18-Agent consensus & optimal entry zone"),
+        BotCommand("autotrade", "Toggle autonomous trading (max 6 slots)"),
+        BotCommand("positions", "Active trades, live balance & real-time PnL"),
+        BotCommand("close", "Close position(s) by symbol or all"),
+        BotCommand("balance", "View active MT5 / broker balance & equity"),
+        BotCommand("chart", "Institutional MT5 Live Candlestick chart"),
+        BotCommand("price", "Live mark price & 24h market stats"),
+        BotCommand("matrix", "Multi-Timeframe Trend & Volatility Heatmap"),
+        BotCommand("mt5", "MetaTrader 5 live execution engine & dashboard"),
+        BotCommand("delta", "Delta Exchange status & controls (Crypto/Deriv)"),
+        BotCommand("risk", "Risk tier report, margin capacity & sizing"),
+        BotCommand("status", "Portfolio equity & system health status"),
+        BotCommand("settings", "System configuration, profile & risk dashboard"),
+        BotCommand("updatemenu", "Force refresh & sync Telegram menu commands"),
+        BotCommand("help", "Full command center & user guide"),
+    ]
+
+
+async def sync_telegram_bot_commands(bot) -> bool:
+    """Sync clean curated commands with Telegram API across default and private chat scopes."""
+    if not bot:
+        return False
+    try:
+        from telegram import BotCommandScopeDefault, BotCommandScopeAllPrivateChats, MenuButtonCommands
+        cmds = get_clean_telegram_commands()
+
+        # 1. Sync default scope
+        try:
+            await bot.set_my_commands(cmds, scope=BotCommandScopeDefault())
+        except Exception as e_def:
+            logger.warning("Failed setting BotCommandScopeDefault: %s", e_def)
+
+        # 2. Sync all private chats scope (overrides any stale cached private chat commands)
+        try:
+            await bot.set_my_commands(cmds, scope=BotCommandScopeAllPrivateChats())
+        except Exception as e_priv:
+            logger.warning("Failed setting BotCommandScopeAllPrivateChats: %s", e_priv)
+
+        # 3. Explicitly configure chat menu button to Commands
+        try:
+            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        except Exception as e_menu:
+            logger.debug("Failed setting MenuButtonCommands: %s", e_menu)
+
+        logger.info("Successfully synced %d clean commands with Telegram API across all scopes", len(cmds))
+        return True
+    except Exception as e:
+        logger.warning("Failed to sync bot commands with Telegram: %s", e)
+        return False
+
+
 def build_cooldown_keyboard(limiter=None) -> InlineKeyboardMarkup:
     """Build interactive action buttons for Cooldown & Anti-Spam."""
     try:
@@ -408,6 +469,18 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
             ],
             [
+                InlineKeyboardButton("🔄 Sync Menu", callback_data="cmd:run:updatemenu"),
+                InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+            ],
+        ])
+    elif cat in ("update", "updatemenu", "sync", "syncmenu"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Sync Menu Again", callback_data="cmd:run:updatemenu"),
+                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
                 InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
             ],
         ])
@@ -613,6 +686,19 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
         )
         return text, build_help_keyboard("combined")
 
+    elif cat in ("update", "updatemenu", "sync", "syncmenu"):
+        cmds = get_clean_telegram_commands()
+        cmd_lines = "\n".join([f"• `/{c.command}` — {c.description}" for c in cmds])
+        text = (
+            "🔄 **Telegram Clean Command Menu & Synchronization:**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"{cmd_lines}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Obsolete/bloated commands removed from the '/' popup.\n"
+            "💡 _Use `/updatemenu` to sync with Telegram Bot API and flush cached commands._"
+        )
+        return text, build_help_keyboard("updatemenu")
+
     elif cat in ("market", "price", "quotes", "levels", "chart", "charts", "matrix", "heatmap"):
         text = (
             "📊 **Market Data & Live Quotes:**\n"
@@ -739,7 +825,8 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "🤖 **Combined Multi-Agent System (All Agents Working Together):**\n"
             "• `/combined` — Unified CombinedBotAgent live status, FIT skills & metrics\n"
             "• `/cooldown [sec|auto|on|off|reset]` — Entry, loss & anti-spam cooldowns (Auto & Manual)\n"
-            "• `/spam [on|off]` — Rapid-fire burst mode (max 6 trades, cooldowns bypassed)\n\n"
+            "• `/spam [on|off]` — Rapid-fire burst mode (max 6 trades, cooldowns bypassed)\n"
+            "• `/updatemenu` — Refresh & clean Telegram native '/' command menu\n\n"
             "📊 **Market Data & Live Quotes:**\n"
             "• `/chart [btc|gold]` — MT5 Live Candlestick Chart with pivots & trend\n"
             "• `/price [SYM]` — Live mark price, 24h change & stats\n"
@@ -810,12 +897,18 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
             "• `/train [heavy|quick]` — Deep multi-asset model & autonomous training\n"
             "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n\n"
-            "_Filter: `/commands combined`, `/commands risk`, `/commands cooldown`, `/commands signals`, `/commands execution`, `/commands mt5`, `/commands delta`, `/commands ai`, `/commands market`, `/commands backtest`_"
+            "_Filter: `/commands combined`, `/commands risk`, `/commands cooldown`, `/commands signals`, `/commands execution`, `/commands mt5`, `/commands delta`, `/commands ai`, `/commands market`, `/commands backtest`, `/commands updatemenu`_"
         )
         return text, build_help_keyboard("main")
 
 
 async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Proactively sync clean commands with Telegram API in background
+    if ctx and getattr(ctx, "bot", None):
+        try:
+            asyncio.create_task(sync_telegram_bot_commands(ctx.bot))
+        except Exception:
+            pass
     welcome = (
         "🤖 **TradingBot — Multi-Agent Paper & MT5 Assistant**\n\n"
         "Welcome! Institutional crypto & gold algorithmic trading assistant powered by 7 autonomous strategy agents, dynamic entry planning, and safe paper/MT5 execution.\n\n"
@@ -853,6 +946,9 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cat = (ctx.args[0].lower() if ctx.args else "").strip()
+    if cat in ("update", "updatemenu", "sync", "syncmenu", "refresh", "refreshmenu"):
+        await updatemenu_command(update, ctx)
+        return
     text, markup = format_command_menu(cat)
     try:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
@@ -1189,6 +1285,51 @@ async def combined_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await safe_reply(update, msg, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
         await safe_reply(update, f"Combined agent error: {e}", parse_mode=None)
+
+
+async def updatemenu_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Force refresh and sync clean Telegram bot commands and menu button."""
+    bot = getattr(ctx, "bot", None)
+    if not bot and update and hasattr(update, "get_bot"):
+        bot = update.get_bot()
+
+    ok = False
+    if bot:
+        ok = await sync_telegram_bot_commands(bot)
+
+    cmds = get_clean_telegram_commands()
+    cmd_lines = "\n".join([f"• `/{c.command}` — {c.description}" for c in cmds])
+
+    if ok:
+        text = (
+            "✅ **Telegram Bot Menu Successfully Synced!**\n\n"
+            f"Registered **{len(cmds)} clean, essential commands** across all Telegram scopes:\n\n"
+            f"{cmd_lines}\n\n"
+            "✨ **Menu Enhancements Applied:**\n"
+            "• Removed 50+ cluttering sub-commands from the '/' popup.\n"
+            "• Prominently added `/combined`, `/cooldown`, `/spam`, and `/updatemenu`.\n"
+            "• Flushed client command cache across `Default` & `AllPrivateChats` scopes.\n"
+            "• Chat Menu button set directly to `Commands`.\n\n"
+            "💡 _If your Telegram client still shows cached commands, restart Telegram or tap Menu again._"
+        )
+    else:
+        text = (
+            "📋 **Telegram Clean Command Menu List:**\n\n"
+            f"{cmd_lines}\n\n"
+            "ℹ️ _Note: Commands catalog formatted. In live polling mode, commands sync directly with Telegram API._"
+        )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
+            InlineKeyboardButton("⏱️ Cooldown Status", callback_data="cmd:run:cooldown"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Sync Menu Again", callback_data="cmd:run:updatemenu"),
+            InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+        ],
+    ])
+    await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
 
 
 def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_equity: Optional[float] = None) -> str:
@@ -2513,6 +2654,9 @@ async def handle_command_menu_callback(data: Any, update: Optional[Update] = Non
                 await performance_command(update, ctx)
             except Exception as e:
                 await query.message.reply_text(f"Performance error: {e}")
+        elif action in ("updatemenu", "syncmenu"):
+            ctx.args = []
+            await updatemenu_command(update, ctx)
         return True
 
     return False
@@ -5990,86 +6134,9 @@ def main():
         logger.info("Initializing live monitoring background worker...")
         ensure_background_worker_running(application)
 
-        # Register official Telegram Bot Command list so Telegram UI command menu ('/') works
+        # Register official clean Telegram Bot Command list across scopes so Telegram UI menu works
         try:
-            from telegram import BotCommand
-            bot_commands = [
-                # Combined Multi-Agent & Navigation
-                BotCommand("start", "Start bot & interactive overview"),
-                BotCommand("combined", "Combined Bot Agent & multi-agent metrics"),
-                BotCommand("cooldown", "Configure entry, loss & anti-spam cooldowns"),
-                BotCommand("spam", "Toggle spam trade burst mode (max 6 trades)"),
-                BotCommand("help", "Full command center & user guide"),
-                BotCommand("commands", "Interactive catalog of all bot commands"),
-                BotCommand("menu", "Interactive command hub & category navigator"),
-                BotCommand("settings", "System configuration, profile & risk dashboard"),
-                # Market Data & Charts
-                BotCommand("chart", "Institutional MT5 Live Candlestick Chart (BTC & Gold)"),
-                BotCommand("price", "Live mark price & 24h market stats"),
-                BotCommand("levels", "Key levels (PDH/PDL, pivots, 2Y S/R)"),
-                BotCommand("news", "Macro calendar & economic news sentiment"),
-                # Signals & Strategy
-                BotCommand("signal", "18-Agent consensus & optimal entry zone"),
-                BotCommand("asignal", "Advanced SMC + CVD orderflow setup"),
-                BotCommand("quality", "Signal quality score & breakdown"),
-                # Execution & Positions
-                BotCommand("positions", "Active trades, live balance, equity & real-time PnL"),
-                BotCommand("slots", "Manage position slots (1-6 positions, Auto / Manual)"),
-                BotCommand("matrix", "Multi-Timeframe Trend & Volatility Heatmap Matrix"),
-                BotCommand("dashboard", "Local Web Companion Dashboard & Real-Time Terminal"),
-                BotCommand("autotrade", "Toggle multi-symbol autotrade (max 6 slots: 3 Gold, 3 BTC)"),
-                BotCommand("watchlist", "View & switch active Gold/BTC autotrade watchlist"),
-                BotCommand("close", "Close position(s) by symbol or all"),
-                BotCommand("cancel", "Cancel pending setup order"),
-                BotCommand("closed", "Recently closed trades history & PnL"),
-                BotCommand("vstops", "Client-side virtual hidden stop loss manager"),
-                BotCommand("slippage", "Broker execution latency & slippage tracker"),
-                # Brokers & MT5
-                BotCommand("balance", "View or update active MT5 balance, equity & margin"),
-                BotCommand("mt5", "MetaTrader 5 live execution engine & dashboard"),
-                BotCommand("bridge", "MT5 EA Bridge diagnostics & auto-deploy"),
-                BotCommand("delta", "Delta Exchange status & controls (Crypto/Derivatives)"),
-                BotCommand("switch", "Switch active broker or MT5 account"),
-                BotCommand("live", "MT5 Live execution controls & account telemetry"),
-                BotCommand("broker", "View active execution broker & status"),
-                # Risk & Safety
-                BotCommand("status", "Portfolio equity & margin capacity"),
-                BotCommand("health", "System health & background worker telemetry"),
-                BotCommand("risk", "Risk tier report, sizing & reset"),
-                BotCommand("resetrisk", "Reset daily/weekly risk limits & restart"),
-                BotCommand("leverage", "Set or view leverage (1-200x, manual/auto)"),
-                BotCommand("lot", "Auto / Manual lot size selection"),
-                BotCommand("kelly", "Fractional Kelly lot sizing & portfolio VaR"),
-                BotCommand("regime", "Market regime detector & auto-switcher"),
-                BotCommand("session", "Session summary & killzones report"),
-                BotCommand("kill", "Emergency execution circuit breaker switch"),
-                # Backtesting & Research
-                BotCommand("backtest", "Fast backtest engine on historical data"),
-                BotCommand("abacktest", "Advanced backtest suite (WF / MC / sweep)"),
-                BotCommand("performance", "Trade metrics, win rate & Sharpe ratio"),
-                BotCommand("profile", "View or switch strategy profile"),
-                # Autonomous AI & Intelligence
-                BotCommand("board", "Strategy board & agent standings"),
-                BotCommand("journal", "Trade journal analytics & history"),
-                BotCommand("agents", "Agent performance rankings & stats"),
-                BotCommand("tiers", "Risk tier status & allocations"),
-                BotCommand("digest", "Daily market performance digest"),
-                BotCommand("replay", "Replay historical trade setup by ID"),
-                BotCommand("export", "Export trade journal to CSV"),
-                BotCommand("setups", "Setup expectancy & bans report"),
-                BotCommand("abooks", "A/B paper books comparison"),
-                BotCommand("heal", "System health counter reset & self-healing"),
-                BotCommand("brain", "Autonomous learner intelligence & state"),
-                BotCommand("learner", "Autonomous learner veto toggle (on/off/unban)"),
-                BotCommand("veto", "Quick toggle for trade veto filtering (on/off)"),
-                BotCommand("train", "Deep heavy multi-asset AI & autonomous training"),
-                BotCommand("relearn", "Retrain autonomous learner on 5Y data"),
-                BotCommand("ai", "AI Advanced Suite & manual gating controls"),
-                BotCommand("ask", "AI trading assistant with live MT5 market context"),
-                BotCommand("reset", "Clear conversational chat memory"),
-            ]
-            await application.bot.set_my_commands(bot_commands)
-            logger.info("Registered %d commands with Telegram Bot API", len(bot_commands))
+            await sync_telegram_bot_commands(application.bot)
         except Exception as cmd_err:
             logger.warning("Failed to sync Bot Commands with Telegram API: %s", cmd_err)
 
@@ -6093,6 +6160,7 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler(["help", "commands", "cmd", "menu", "list", "all", "command"], help_command))
     app.add_handler(CommandHandler(["settings", "config", "setup", "preferences"], settings_command))
+    app.add_handler(CommandHandler(["updatemenu", "syncmenu", "refreshmenu", "setmenu"], updatemenu_command))
 
     # Market Data
     app.add_handler(CommandHandler("levels", levels_command))

@@ -39,6 +39,9 @@ from main import (
     cooldown_command,
     spam_command,
     combined_command,
+    updatemenu_command,
+    sync_telegram_bot_commands,
+    get_clean_telegram_commands,
 )
 from execution_engine import TradeOrder, OrderStatus
 from telegram_feature_pack import board_command, journal_command, agents_command, tiers_command
@@ -740,6 +743,17 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         handled = await handle_command_menu_callback(update_mock, self.ctx)
         self.assertTrue(handled)
 
+        # Test updatemenu category callback
+        query_mock.data = "cmd:cat:updatemenu"
+        handled = await handle_command_menu_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+        self.assertIn("Telegram Clean Command Menu", query_mock.edit_message_text.call_args[0][0])
+
+        # Test updatemenu run callback
+        query_mock.data = "cmd:run:updatemenu"
+        handled = await handle_command_menu_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+
     async def test_unknown_command_with_smart_suggestions(self):
         self.message.text = "/signals"
         await unknown_command(self.update, self.ctx)
@@ -802,6 +816,48 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         await veto_command(self.update, self.ctx)
         self.message.reply_text.assert_called()
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
+
+    def test_get_clean_telegram_commands(self):
+        cmds = get_clean_telegram_commands()
+        self.assertIsInstance(cmds, list)
+        self.assertTrue(len(cmds) >= 15 and len(cmds) <= 25)
+        cmd_names = [c.command for c in cmds]
+        for expected in ("start", "menu", "combined", "cooldown", "spam", "signal", "autotrade", "positions", "close", "balance", "mt5", "risk", "status", "settings", "updatemenu", "help"):
+            self.assertIn(expected, cmd_names)
+        for c in cmds:
+            self.assertTrue(len(c.command) <= 32)
+            self.assertTrue(len(c.description) <= 256)
+
+    async def test_sync_telegram_bot_commands(self):
+        bot_mock = MagicMock()
+        bot_mock.set_my_commands = AsyncMock(return_value=True)
+        bot_mock.set_chat_menu_button = AsyncMock(return_value=True)
+
+        ok = await sync_telegram_bot_commands(bot_mock)
+        self.assertTrue(ok)
+        self.assertEqual(bot_mock.set_my_commands.await_count, 2)
+        bot_mock.set_chat_menu_button.assert_awaited_once()
+
+    async def test_updatemenu_command(self):
+        self.ctx.args = []
+        bot_mock = MagicMock()
+        bot_mock.set_my_commands = AsyncMock(return_value=True)
+        bot_mock.set_chat_menu_button = AsyncMock(return_value=True)
+        self.ctx.bot = bot_mock
+
+        await updatemenu_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        reply_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Telegram Bot Menu Successfully Synced", reply_text)
+        self.assertIn("/combined", reply_text)
+        self.assertIn("/cooldown", reply_text)
+        self.assertIn("/spam", reply_text)
+        self.assertIn("/updatemenu", reply_text)
+
+        # Also verify via /help update
+        self.ctx.args = ["update"]
+        await help_command(self.update, self.ctx)
+        self.assertIn("Telegram Bot Menu Successfully Synced", self.message.reply_text.call_args[0][0])
 
 
 if __name__ == "__main__":
