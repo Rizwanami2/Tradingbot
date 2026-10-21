@@ -87,7 +87,9 @@ class AntiSpamRateLimiter:
         m = str(mode or "").strip().lower()
         if m in ("auto", "adaptive", "dynamic"):
             return "auto"
-        if m in ("on", "enable", "enabled", "strict", "manual", "1", "true", "active", "activate", "activated"):
+        if m in ("manual", "custom"):
+            return "manual"
+        if m in ("on", "enable", "enabled", "strict", "1", "true", "active", "activate", "activated"):
             return "on"
         if m in ("off", "disable", "disabled", "bypass", "0", "false", "deactivate", "deactivated", "inactive"):
             return "off"
@@ -95,6 +97,12 @@ class AntiSpamRateLimiter:
 
     def set_mode(self, mode: str) -> str:
         self.mode = self._normalize_mode(mode)
+        if self.mode == "auto":
+            self._custom_entry_cd = False
+            self._custom_loss_cd = False
+            self._custom_global_cd = False
+        elif self.mode in ("manual", "on"):
+            self._custom_entry_cd = True
         logger.info("AntiSpam mode switched to: %s", self.mode)
         return self.mode
 
@@ -102,6 +110,8 @@ class AntiSpamRateLimiter:
         """Set explicit entry cooldown in seconds (enforced for both auto and manual)."""
         self.entry_cooldown_sec = max(5, int(seconds))
         self._custom_entry_cd = True
+        if self.mode != "off":
+            self.mode = "manual"
         logger.info("AntiSpam entry cooldown set to %ss (enforced for auto & manual)", self.entry_cooldown_sec)
         return self.entry_cooldown_sec
 
@@ -365,7 +375,7 @@ class AntiSpamRateLimiter:
 
     def get_status_report(self, engine: Optional[Any] = None) -> str:
         now = time.time()
-        mode_icon = "🤖 AUTO (Adaptive)" if self.mode == "auto" else ("🛡️ MANUAL ON" if self.mode == "on" else "⚠️ OFF (Bypassed)")
+        mode_icon = "🤖 AUTO (Adaptive)" if self.mode == "auto" else ("🔒 MANUAL (Fixed Cooldown)" if self.mode in ("on", "manual") else "⚠️ OFF (Bypassed)")
         spam_tag = f"⚡ ENABLED (Max {self.spam_trade_max_trades} Trades, No Cooldown)" if self.spam_trade_enabled else "🔒 DISABLED (Normal Protection)"
         max_total = self.spam_trade_max_trades if self.spam_trade_enabled else (int(getattr(engine, "max_open_trades", 6)) if engine is not None else 6)
         lines = [

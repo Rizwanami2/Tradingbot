@@ -202,6 +202,52 @@ class TestCooldownAndSingleDirection(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Entry cooldown set to `35s`", call_text)
         self.assertIn("BOTH Auto & Manual", call_text)
 
+    async def test_telegram_cooldown_manual_and_all(self):
+        from main import cooldown_command, build_cooldown_keyboard
+        update = MagicMock()
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+        ctx = MagicMock()
+
+        # 1. /cooldown manual 30
+        ctx.args = ["manual", "30"]
+        await cooldown_command(update, ctx)
+        self.assertEqual(self.limiter.entry_cooldown_sec, 30)
+        self.assertIn(self.limiter.get_mode(), ("manual", "on"))
+        call_text = update.message.reply_text.call_args[0][0]
+        self.assertIn("MANUAL ON", call_text)
+        self.assertIn("30s", call_text)
+
+        # 2. /cooldown all 60
+        update.message.reply_text.reset_mock()
+        ctx.args = ["all", "60"]
+        await cooldown_command(update, ctx)
+        self.assertEqual(self.limiter.entry_cooldown_sec, 60)
+        call_text = update.message.reply_text.call_args[0][0]
+        self.assertIn("ALL Symbols", call_text)
+        self.assertIn("60s", call_text)
+
+        # 3. /cooldown all reset
+        self.limiter.global_last_entry = 12345.0
+        update.message.reply_text.reset_mock()
+        ctx.args = ["all", "reset"]
+        await cooldown_command(update, ctx)
+        self.assertEqual(self.limiter.global_last_entry, 0.0)
+        call_text = update.message.reply_text.call_args[0][0]
+        self.assertIn("reset across ALL symbols globally", call_text)
+
+        # 4. Verify keyboard markup buttons
+        markup = build_cooldown_keyboard(self.limiter)
+        cb_datas = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertIn("cd:mode:auto", cb_datas)
+        self.assertIn("cd:mode:on", cb_datas)
+        self.assertIn("cd:sec:15", cb_datas)
+        self.assertIn("cd:sec:30", cb_datas)
+        self.assertIn("cd:sec:60", cb_datas)
+        self.assertIn("cd:sec:120", cb_datas)
+        self.assertIn("cd:reset", cb_datas)
+        self.assertIn("cd:view:all", cb_datas)
+
 
 if __name__ == "__main__":
     unittest.main()

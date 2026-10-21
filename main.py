@@ -454,31 +454,43 @@ def build_cooldown_keyboard(limiter=None) -> InlineKeyboardMarkup:
         limiter = limiter or get_anti_spam_limiter()
         is_spam = getattr(limiter, "spam_trade_enabled", False)
         mode = getattr(limiter, "mode", "auto")
+        cd_sec = getattr(limiter, "entry_cooldown_sec", 45)
     except Exception:
         is_spam = False
         mode = "auto"
+        cd_sec = 45
 
-    btn_spam = (
-        InlineKeyboardButton("🔒 Spam OFF (Protect)", callback_data="cd:spam:off")
-        if is_spam
-        else InlineKeyboardButton("⚡ Spam ON (Burst)", callback_data="cd:spam:on")
-    )
-    btn_mode = (
-        InlineKeyboardButton("🛡️ Switch to Strict", callback_data="cd:mode:on")
-        if mode == "auto"
-        else InlineKeyboardButton("🤖 Switch to Auto", callback_data="cd:mode:auto")
-    )
-    return InlineKeyboardMarkup([
-        [btn_spam, btn_mode],
-        [
-            InlineKeyboardButton("🔄 Reset Cooldowns", callback_data="cd:reset"),
-            InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-            InlineKeyboardButton("🛡️ Risk Menu", callback_data="cmd:cat:risk"),
-        ],
-    ])
+    # Row 1: Mode toggles (Auto vs Manual)
+    auto_lbl = "🟢 Mode: AUTO (Active)" if mode == "auto" else "⚪ Switch to AUTO"
+    manual_lbl = "🔒 Mode: MANUAL (Active)" if mode in ("manual", "on") else "⚪ Switch to MANUAL"
+    row1 = [
+        InlineKeyboardButton(auto_lbl, callback_data="cd:mode:auto"),
+        InlineKeyboardButton(manual_lbl, callback_data="cd:mode:on"),
+    ]
+
+    # Row 2: Manual Seconds Presets (All symbols)
+    row2 = [
+        InlineKeyboardButton(f"⚡ 15s{' ✓' if mode != 'auto' and cd_sec == 15 else ''}", callback_data="cd:sec:15"),
+        InlineKeyboardButton(f"⏱️ 30s{' ✓' if mode != 'auto' and cd_sec == 30 else ''}", callback_data="cd:sec:30"),
+        InlineKeyboardButton(f"⏱️ 60s{' ✓' if mode != 'auto' and cd_sec == 60 else ''}", callback_data="cd:sec:60"),
+        InlineKeyboardButton(f"🛡️ 120s{' ✓' if mode != 'auto' and cd_sec == 120 else ''}", callback_data="cd:sec:120"),
+    ]
+
+    # Row 3: Spam Mode Toggle & Reset All
+    spam_lbl = "🔒 Spam OFF (Protect)" if is_spam else "⚡ Spam ON (Burst)"
+    spam_data = "cd:spam:off" if is_spam else "cd:spam:on"
+    row3 = [
+        InlineKeyboardButton(spam_lbl, callback_data=spam_data),
+        InlineKeyboardButton("🔄 Reset Cooldowns", callback_data="cd:reset"),
+    ]
+
+    # Row 4: Navigation / Refresh
+    row4 = [
+        InlineKeyboardButton("🌐 Refresh / View All", callback_data="cd:view:all"),
+        InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+    ]
+
+    return InlineKeyboardMarkup([row1, row2, row3, row4])
 
 
 def build_combined_keyboard() -> InlineKeyboardMarkup:
@@ -1176,11 +1188,13 @@ async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """View or configure anti-spam rate limiting and concurrency mode."""
+    """View or configure anti-spam rate limiting and concurrency mode: /cooldown [auto|manual <sec>|all <sec>|<sec>|reset]"""
     try:
         from anti_spam import get_anti_spam_limiter
         limiter = get_anti_spam_limiter()
         args = ctx.args or []
+        markup = build_cooldown_keyboard(limiter)
+
         if args:
             sub = args[0].lower().strip()
             # 1. Spam Trade Mode (max 6 trades without cooldown, control on/off)
@@ -1188,84 +1202,156 @@ async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 action = (args[1].lower().strip() if len(args) > 1 else "toggle")
                 if action in ("on", "enable", "1", "true", "active", "activate"):
                     limiter.set_spam_mode(True, max_trades=6, engine=engine)
-                    await update.message.reply_text(
+                    await safe_reply(
+                        update,
                         "⚡ **Spam Trade Mode ACTIVATED**\n"
                         "• **Trade Capacity:** Max `6` concurrent trades\n"
                         "• **Cooldowns:** All entry, loss, and global cooldowns **BYPASSED**\n"
                         "• Rapid-fire trade executions enabled up to 6 positions.\n"
                         "• Use `/spam off` or `/cooldown spam off` to revert to protected mode.",
                         parse_mode="Markdown",
+                        reply_markup=build_cooldown_keyboard(limiter),
                     )
                     return
                 elif action in ("off", "disable", "0", "false", "deactivate", "inactive"):
                     limiter.set_spam_mode(False, engine=engine)
-                    await update.message.reply_text(
+                    await safe_reply(
+                        update,
                         "🔒 **Spam Trade Mode DEACTIVATED**\n"
                         "• Reverted to standard anti-spam rate limiting.\n"
                         "• Strict cooldowns active: max 4 positions total, max 2 per currency.",
                         parse_mode="Markdown",
+                        reply_markup=build_cooldown_keyboard(limiter),
                     )
                     return
                 else:
                     new_val = not limiter.spam_trade_enabled
                     limiter.set_spam_mode(new_val, max_trades=6, engine=engine)
                     state_str = "ACTIVATED (Max 6, No Cooldown) ⚡" if new_val else "DEACTIVATED (Protected) 🔒"
-                    await update.message.reply_text(
+                    await safe_reply(
+                        update,
                         f"⚡ **Spam Trade Mode:** `{state_str}`\n"
                         f"Usage: `/spam on` (enable max 6) or `/spam off` (disable)",
                         parse_mode="Markdown",
+                        reply_markup=build_cooldown_keyboard(limiter),
                     )
                     return
 
+            # 2. All symbols configuration or reset: /cooldown all [sec|reset|auto]
+            if sub == "all":
+                if len(args) > 1:
+                    sub2 = args[1].lower().strip()
+                    if sub2 in ("reset", "clear"):
+                        limiter.reset()
+                        await safe_reply(
+                            update,
+                            "✅ Anti-spam cooldowns and loss streaks have been reset across ALL symbols globally.",
+                            parse_mode="Markdown",
+                            reply_markup=build_cooldown_keyboard(limiter),
+                        )
+                        return
+                    elif sub2 in ("auto", "adaptive", "dynamic"):
+                        limiter.set_mode("auto")
+                        await safe_reply(
+                            update,
+                            "🤖 **Anti-Spam Mode set to AUTO (Adaptive) across ALL symbols**\n"
+                            "• Enforced on BOTH Auto & Manual trading.\n"
+                            "• Automatically adapts cooldowns to active profile.",
+                            parse_mode="Markdown",
+                            reply_markup=build_cooldown_keyboard(limiter),
+                        )
+                        return
+                    elif sub2.isdigit() or (sub2 in ("set", "sec") and len(args) > 2 and args[2].isdigit()):
+                        sec = int(sub2) if sub2.isdigit() else int(args[2])
+                        limiter.set_mode("on")
+                        limiter.set_entry_cooldown(sec)
+                        await safe_reply(
+                            update,
+                            f"⏱️ **Cooldown Updated for ALL Symbols**: Entry cooldown set to `{sec}s` (MANUAL mode active).\n"
+                            f"• **Scope:** Enforced on BOTH Auto & Manual trading across all symbols.\n"
+                            f"• **Mode:** Active (`{limiter.mode}`)",
+                            parse_mode="Markdown",
+                            reply_markup=build_cooldown_keyboard(limiter),
+                        )
+                        return
+                report = limiter.get_status_report(engine=engine)
+                await safe_reply(update, report, parse_mode="Markdown", reply_markup=build_cooldown_keyboard(limiter))
+                return
+
+            # 3. Direct numeric seconds or set: /cooldown 30 or /cooldown set 30
             if sub.isdigit() or (sub in ("set", "sec", "seconds") and len(args) > 1 and args[1].isdigit()):
                 sec = int(sub) if sub.isdigit() else int(args[1])
+                limiter.set_mode("on")
                 limiter.set_entry_cooldown(sec)
-                await update.message.reply_text(
+                await safe_reply(
+                    update,
                     f"⏱️ **Cooldown Updated**: Entry cooldown set to `{sec}s`.\n"
                     f"• **Scope:** Enforced on BOTH Auto & Manual trading.\n"
                     f"• **Single-Direction:** Simultaneous BUY and SELL strictly blocked.\n"
                     f"• **Mode:** Active (`{limiter.mode}`)",
                     parse_mode="Markdown",
+                    reply_markup=build_cooldown_keyboard(limiter),
                 )
                 return
 
+            # 4. Mode: AUTO (Adaptive)
             if sub in ("auto", "adaptive", "dynamic"):
                 limiter.set_mode("auto")
-                await update.message.reply_text(
+                await safe_reply(
+                    update,
                     "🤖 **Anti-Spam Mode set to AUTO (Adaptive)**\n"
                     "• Enforced on BOTH Auto & Manual trading.\n"
                     "• Single-Direction: Never hold BUY and SELL at the same time.\n"
                     "• Automatically adapts cooldowns to active profile (Scalp concession vs Swing tight).\n"
                     "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 6 total positions.",
                     parse_mode="Markdown",
+                    reply_markup=build_cooldown_keyboard(limiter),
                 )
                 return
-            elif sub in ("on", "enable", "manual", "1", "true", "active", "activate", "activated"):
+
+            # 5. Mode: MANUAL / ON
+            elif sub in ("on", "enable", "manual", "strict", "1", "true", "active", "activate", "activated"):
                 limiter.set_mode("on")
-                await update.message.reply_text(
-                    "🛡️ **Anti-Spam Mode set to MANUAL ON (Cooldown ACTIVATED)**\n"
-                    "• Enforced on BOTH Auto & Manual trading.\n"
-                    "• Single-Direction: Never hold BUY and SELL at the same time.\n"
-                    "• Strict configured cooldowns and price distance enforced.\n"
-                    "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 6 total positions.",
+                if len(args) > 1 and args[1].isdigit():
+                    limiter.set_entry_cooldown(int(args[1]))
+                await safe_reply(
+                    update,
+                    f"🛡️ **Anti-Spam Mode set to MANUAL ON (Cooldown ACTIVATED)**\n"
+                    f"• Entry Cooldown: `{limiter.entry_cooldown_sec}s`\n"
+                    f"• Enforced on BOTH Auto & Manual trading.\n"
+                    f"• Single-Direction: Never hold BUY and SELL at the same time.\n"
+                    f"• Strict configured cooldowns and price distance enforced.\n"
+                    f"• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 6 total positions.",
                     parse_mode="Markdown",
+                    reply_markup=build_cooldown_keyboard(limiter),
                 )
                 return
+
+            # 6. Mode: OFF (Bypassed)
             elif sub in ("off", "disable", "bypass", "0", "false", "deactivate", "deactivated", "inactive"):
                 limiter.set_mode("off")
-                await update.message.reply_text(
+                await safe_reply(
+                    update,
                     "⚠️ **Anti-Spam Mode set to OFF (Cooldown DEACTIVATED)**\n"
                     "• Cooldowns and price distance checks disabled.\n"
                     "• Single-Direction & capacity safety limits REMAIN ACTIVE: never BUY and SELL at the same time.\n"
                     "• Tip: Run `/spam on` to also expand capacity to 6 trades.",
                     parse_mode="Markdown",
+                    reply_markup=build_cooldown_keyboard(limiter),
                 )
                 return
+
+            # 7. Reset: /cooldown reset [symbol|all]
             elif sub in ("reset", "clear"):
-                sym = args[1].upper() if len(args) > 1 else None
+                sym = args[1].upper() if len(args) > 1 and args[1].upper() not in ("ALL", "GLOBAL") else None
                 limiter.reset(sym)
                 target = f"for `{sym}`" if sym else "globally"
-                await update.message.reply_text(f"✅ Anti-spam cooldowns and loss streaks have been reset {target}.", parse_mode="Markdown")
+                await safe_reply(
+                    update,
+                    f"✅ Anti-spam cooldowns and loss streaks have been reset {target}.",
+                    parse_mode="Markdown",
+                    reply_markup=build_cooldown_keyboard(limiter),
+                )
                 return
 
         report = limiter.get_status_report(engine=engine)
@@ -2793,28 +2879,42 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
             from anti_spam import get_anti_spam_limiter
             limiter = get_anti_spam_limiter()
             subaction = data.split(":", 1)[1]
+            notice = ""
             if subaction == "spam:on":
                 limiter.set_spam_mode(True, max_trades=6, engine=engine)
-                await query.message.reply_text("⚡ **Spam Trade Mode ACTIVATED** (Max 6, no cooldown)", parse_mode="Markdown")
+                notice = "⚡ Spam Trade Mode ACTIVATED (Max 6, no cooldown)"
             elif subaction == "spam:off":
                 limiter.set_spam_mode(False, engine=engine)
-                await query.message.reply_text("🔒 **Spam Trade Mode DEACTIVATED** (Protected mode)", parse_mode="Markdown")
+                notice = "🔒 Spam Trade Mode DEACTIVATED (Protected mode)"
+            elif subaction == "spam:toggle":
+                new_v = not limiter.spam_trade_enabled
+                limiter.set_spam_mode(new_v, max_trades=6, engine=engine)
+                notice = f"⚡ Spam Trade Mode set to {'ON (Burst)' if new_v else 'OFF (Protected)'}"
             elif subaction == "mode:auto":
                 limiter.set_mode("auto")
-                await query.message.reply_text("🤖 **Anti-Spam Mode set to AUTO (Adaptive)**", parse_mode="Markdown")
-            elif subaction == "mode:on":
+                notice = "🤖 Anti-Spam Mode set to AUTO (Adaptive)"
+            elif subaction in ("mode:on", "mode:manual"):
                 limiter.set_mode("on")
-                await query.message.reply_text("🛡️ **Anti-Spam Mode set to MANUAL ON**", parse_mode="Markdown")
-            elif subaction == "reset":
+                notice = f"🛡️ Anti-Spam Mode set to MANUAL ON ({limiter.entry_cooldown_sec}s Fixed)"
+            elif subaction.startswith("sec:"):
+                sec_v = int(subaction.split(":", 1)[1])
+                limiter.set_mode("on")
+                limiter.set_entry_cooldown(sec_v)
+                notice = f"⏱️ Cooldown set to {sec_v}s across all symbols (MANUAL mode)"
+            elif subaction in ("reset", "reset:all"):
                 limiter.reset()
-                await query.message.reply_text("✅ Anti-spam cooldowns and loss streaks have been reset globally.", parse_mode="Markdown")
+                notice = "✅ Anti-spam cooldowns and loss streaks have been reset globally."
+            elif subaction in ("view:all", "refresh"):
+                notice = "Refreshed cooldown telemetry for all symbols"
 
             report = limiter.get_status_report(engine=engine)
+            if notice:
+                report = f"ℹ️ *{notice}*\n\n" + report
             markup = build_cooldown_keyboard(limiter)
             try:
                 await query.edit_message_text(report, parse_mode="Markdown", reply_markup=markup)
             except Exception:
-                pass
+                await safe_reply(update, report, parse_mode="Markdown", reply_markup=markup)
             return
         except Exception as _cd_err:
             logger.warning("cooldown callback error: %s", _cd_err)
