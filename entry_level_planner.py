@@ -12,6 +12,7 @@ Uses all available market data to propose an entry *range* (not only mark price)
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -94,12 +95,186 @@ def _ema_levels(df: pd.DataFrame) -> Dict[str, float]:
         return {}
     c = df["close"].astype(float)
     out = {}
-    for span in (9, 21, 50):
+    for span in (9, 21, 50, 200):
         try:
             out[f"ema{span}"] = _safe(c.ewm(span=span, adjust=False).mean().iloc[-1])
         except Exception:
             pass
     return out
+
+
+def _mtf_confluence_levels(symbol: str) -> Tuple[Dict[str, float], float, str]:
+    """Extract key HTF levels and directional alignment from MTF Matrix."""
+    levels: Dict[str, float] = {}
+    score = 0.0
+    bias = "NEUTRAL"
+    try:
+        from mtf_matrix import _MATRIX_CACHE
+        sym_key = str(symbol or "").strip().upper()
+        snap = None
+        if sym_key in _MATRIX_CACHE:
+            snap = _MATRIX_CACHE[sym_key][1]
+        elif not os.getenv("PYTEST_CURRENT_TEST"):
+            from mtf_matrix import analyze_symbol_mtf
+            snap = analyze_symbol_mtf(symbol, force_refresh=False)
+        if snap and hasattr(snap, "timeframes"):
+            score = float(getattr(snap, "overall_score", 0.0) or 0.0)
+            bias = str(getattr(snap, "top_bias", "NEUTRAL") or "NEUTRAL").upper()
+            tfs = snap.timeframes
+            for tf_k in ("15m", "1h", "4h", "daily"):
+                if tf_k in tfs:
+                    item = tfs[tf_k]
+                    if item.ema21 > 0:
+                        levels[f"mtf_{tf_k}_ema21"] = _safe(item.ema21)
+                    if item.ema50 > 0:
+                        levels[f"mtf_{tf_k}_ema50"] = _safe(item.ema50)
+                    if item.ema200 > 0:
+                        levels[f"mtf_{tf_k}_ema200"] = _safe(item.ema200)
+    except Exception:
+        pass
+    return levels, score, bias
+
+
+def _institutional_pivot_levels(symbol: str, df: Optional[pd.DataFrame]) -> Dict[str, float]:
+    """Extract Floor Pivot points and technical levels from MT5 Chart engine."""
+    levels: Dict[str, float] = {}
+    try:
+        from mt5_chart import compute_technical_levels
+        candles = []
+        if df is not None and len(df) >= 15:
+            for _, r in df.iloc[-60:].iterrows():
+                candles.append({
+                    "open": _safe(r.get("open", r.get("close", 0.0))),
+                    "high": _safe(r.get("high", 0.0)),
+                    "low": _safe(r.get("low", 0.0)),
+                    "close": _safe(r.get("close", 0.0)),
+                })
+        if len(candles) >= 15:
+            tech = compute_technical_levels(candles)
+            if tech:
+                for k in ("pivot", "r1", "r2", "s1", "s2"):
+                    if tech.get(k) and float(tech[k]) > 0:
+                        levels[f"mt5_{k}"] = _safe(tech[k])
+    except Exception:
+        pass
+    return levels
+
+
+def _ote_fibonacci_levels(df: Optional[pd.DataFrame], direction: str) -> Dict[str, float]:
+    """Calculate ICT Optimal Trade Entry (OTE) 61.8% - 78.6% Golden Pocket levels."""
+    levels: Dict[str, float] = {}
+    if df is None or len(df) < 20:
+        return levels
+    try:
+        lookback = min(len(df), 50)
+        seg = df.iloc[-lookback:]
+        high_val = float(seg["high"].max())
+        low_val = float(seg["low"].min())
+        span = high_val - low_val
+        if span <= 0:
+            return levels
+        if direction == "LONG":
+            # Retracement from high down into discount
+            fib_50 = high_val - span * 0.50
+            fib_618 = high_val - span * 0.618
+            fib_705 = high_val - span * 0.705
+            fib_786 = high_val - span * 0.786
+            levels["ote_50"] = _safe(fib_50)
+            levels["ote_618"] = _safe(fib_618)
+            levels["ote_705"] = _safe(fib_705)
+            levels["ote_786"] = _safe(fib_786)
+            levels["ote_target"] = _safe(high_val + span * 0.27)
+        elif direction == "SHORT":
+            # Retracement from low up into premium
+            fib_50 = low_val + span * 0.50
+            fib_618 = low_val + span * 0.618
+            fib_705 = low_val + span * 0.705
+            fib_786 = low_val + span * 0.786
+            levels["ote_50"] = _safe(fib_50)
+            levels["ote_618"] = _safe(fib_618)
+            levels["ote_705"] = _safe(fib_705)
+            levels["ote_786"] = _safe(fib_786)
+            levels["ote_target"] = _safe(low_val - span * 0.27)
+    except Exception:
+        pass
+    return levels
+
+
+def _supply_demand_zone_levels(df: Optional[pd.DataFrame], mark: float, direction: str) -> Dict[str, float]:
+    """Extract fresh institutional Supply & Demand boundaries."""
+    levels: Dict[str, float] = {}
+    if df is None or len(df) < 15:
+        return levels
+    try:
+        from supply_demand_strategy import extract_supply_demand_zones, SDDir
+        zones = extract_supply_demand_zones(df)
+        for z in zones:
+            if not z.fresh:
+                continue
+            if direction == "LONG" and z.direction == SDDir.LONG:
+                if z.top <= mark * 1.002:
+                    levels["sd_demand_top"] = _safe(z.top)
+                    levels["sd_demand_base"] = _safe(z.bottom)
+            elif direction == "SHORT" and z.direction == SDDir.SHORT:
+                if z.bottom >= mark * 0.998:
+                    levels["sd_supply_bottom"] = _safe(z.bottom)
+                    levels["sd_supply_top"] = _safe(z.top)
+    except Exception:
+        pass
+    return levels
+
+
+def _asian_range_levels(df: Optional[pd.DataFrame]) -> Dict[str, float]:
+    """Extract Asian session liquidity extremes."""
+    levels: Dict[str, float] = {}
+    if df is None or len(df) < 20:
+        return levels
+    try:
+        from asian_range_breakout import compute_asian_range
+        ar = compute_asian_range(df)
+        if ar and ar.high > 0 and ar.low > 0:
+            levels["asian_high"] = _safe(ar.high)
+            levels["asian_low"] = _safe(ar.low)
+            levels["asian_mid"] = _safe(ar.mid)
+    except Exception:
+        pass
+    return levels
+
+
+def _brain_learning_insights(symbol: str, direction: str) -> Tuple[float, float, List[str]]:
+    """Query Autonomous Learner and Learning Edge for previous trade feedback."""
+    conf_boost = 0.0
+    min_rr = 1.5
+    notes: List[str] = []
+    try:
+        from autonomous_learner import get_brain
+        brain = get_brain(auto_bootstrap=False)
+        if brain and getattr(brain.knowledge, "enabled", True):
+            k = brain.knowledge
+            if k.min_rr > min_rr:
+                min_rr = float(k.min_rr)
+            setup_tag = f"{direction.lower()}|{symbol.lower()}"
+            if setup_tag in getattr(k, "banned_setups", {}):
+                conf_boost -= 0.15
+                notes.append(f"Brain caution: setup {setup_tag} previously flagged")
+    except Exception:
+        pass
+    try:
+        from learning_edge import LearningEdge
+        edge = LearningEdge()
+        tag = f"{direction.lower()}|{symbol.lower()}"
+        if tag in edge.setups:
+            stats = edge.setups[tag]
+            if stats.trades >= 3:
+                if stats.wr >= 60.0 or stats.exp > 0.3:
+                    conf_boost += 0.10
+                    notes.append(f"Brain edge: {tag} WR={stats.wr:.0f}%, Exp={stats.exp:+.2f}R")
+                elif stats.wr < 40.0 and stats.exp < -0.2:
+                    conf_boost -= 0.10
+                    notes.append(f"Brain drag: {tag} low WR={stats.wr:.0f}%")
+    except Exception:
+        pass
+    return conf_boost, min_rr, notes
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> float:
@@ -134,6 +309,9 @@ def plan_best_entry(
     mark: Optional[float] = None,
     stop_hint: Optional[float] = None,
     risk_r: float = 1.5,
+    profile: Optional[str] = None,
+    agent_levels: Optional[Dict[str, float]] = None,
+    votes: Optional[List[Any]] = None,
 ) -> EntryPlan:
     direction = str(direction or "FLAT").upper()
     if "LONG" in direction:
@@ -154,8 +332,13 @@ def plan_best_entry(
     if atr <= 0:
         atr = max(mark * 0.002, 1e-6)
 
+    prof_str = str(profile or "").lower()
+    is_swing = "swing" in prof_str
+    is_scalp_prof = "scalp" in prof_str
+    lookback = 60 if is_swing else 40
+
     daily = _daily_levels(symbol, df)
-    swings = _swing_levels(df) if df is not None else {}
+    swings = _swing_levels(df, lookback=lookback) if df is not None else {}
     emas = _ema_levels(df) if df is not None else {}
 
     candidates: List[Tuple[str, float, float]] = []
@@ -177,6 +360,48 @@ def plan_best_entry(
     except Exception:
         pass
 
+    # 2. Multi-Timeframe Matrix Confluence (1m to 1d)
+    mtf_levels, mtf_score, mtf_bias = _mtf_confluence_levels(symbol)
+    all_levels.update(mtf_levels)
+
+    # 3. Institutional MT5 Chart Floor Pivots & ATR Channels
+    pivot_levels = _institutional_pivot_levels(symbol, df)
+    all_levels.update(pivot_levels)
+
+    # 4. ICT Optimal Trade Entry (OTE) 61.8% - 78.6% Golden Pocket
+    ote_levels = _ote_fibonacci_levels(df, direction)
+    all_levels.update(ote_levels)
+
+    # 5. Institutional Supply & Demand Zones
+    sd_levels = _supply_demand_zone_levels(df, mark, direction)
+    all_levels.update(sd_levels)
+
+    # 6. Asian Session Range Liquidity Extremes
+    asian_levels = _asian_range_levels(df)
+    all_levels.update(asian_levels)
+
+    # 7. Agent-Proposed Specific Structural Levels (Unified Consensus)
+    if agent_levels and isinstance(agent_levels, dict):
+        for k, v in agent_levels.items():
+            if v and float(v) > 0:
+                all_levels[f"agent_{k}"] = _safe(v)
+
+    if votes:
+        for v in votes:
+            aname = str(getattr(v, "agent", "") or "").lower().replace("-", "_")
+            vdir = str(getattr(v, "direction", "")).upper()
+            if direction in vdir:
+                sp = getattr(v, "stop_price", None)
+                tp = getattr(v, "tp_price", None)
+                ep = getattr(v, "entry_price", None)
+                if sp and float(sp) > 0:
+                    all_levels[f"{aname}_stop"] = _safe(sp)
+                if tp and float(tp) > 0:
+                    all_levels[f"{aname}_tp"] = _safe(tp)
+                if ep and float(ep) > 0:
+                    all_levels[f"{aname}_entry"] = _safe(ep)
+
+    # 8. Historical 2Y High-Probability Key Levels
     try:
         from historical_2y import analyze_2y, history_levels_for_planner
         h2 = analyze_2y(symbol)
@@ -184,20 +409,29 @@ def plan_best_entry(
     except Exception:
         pass
 
+    # 9. Autonomous Brain Learning Insights & Expectancy
+    conf_boost, brain_min_rr, brain_notes = _brain_learning_insights(symbol, direction)
+    if brain_min_rr > risk_r:
+        risk_r = brain_min_rr
+    if is_swing and risk_r < 2.5:
+        risk_r = 2.5
+
     sym_u = str(symbol or "").upper()
     is_gold = any(x in sym_u for x in ("XAU", "GOLD", "PAXG"))
     is_btc = any(x in sym_u for x in ("BTC", "BITCOIN", "XBT"))
     if is_gold:
-        spread_buf = max(atr * 0.20, 0.35)
+        spread_buf = max(atr * 0.25, 0.40)
     elif is_btc:
-        spread_buf = max(atr * 0.20, 10.0)
+        spread_buf = max(atr * 0.25, 12.0)
     else:
-        spread_buf = max(atr * 0.20, mark * 0.0003)
+        spread_buf = max(atr * 0.22, mark * 0.0004)
 
     for name, px in list(all_levels.items()):
         if name in ("mark", "atr") or px <= 0:
             continue
         sc = _score_level(px, mark, direction, atr)
+        if any(tag in name for tag in ("ote_618", "ote_705", "sd_demand", "sd_supply", "mt5_pivot", "ob_")):
+            sc *= 1.25
         if sc > 0.15:
             candidates.append((name, px, sc))
 
@@ -228,7 +462,7 @@ def plan_best_entry(
         )
 
     candidates.sort(key=lambda x: x[2], reverse=True)
-    top = candidates[:5]
+    top = candidates[:6]
     weights = [c[2] for c in top]
     prices = [c[1] for c in top]
     wsum = sum(weights) or 1.0
@@ -237,6 +471,11 @@ def plan_best_entry(
     sw_h = swings.get("swing_high")
     sw_l = swings.get("swing_low")
 
+    demand_base = all_levels.get("sd_demand_base")
+    supply_top = all_levels.get("sd_supply_top")
+    pivot_s1 = all_levels.get("mt5_s1")
+    pivot_r1 = all_levels.get("mt5_r1")
+
     if direction == "LONG":
         entry_low = min(prices + [best, mark - atr * 0.25])
         entry_high = min(mark, best + atr * 0.15)
@@ -244,8 +483,9 @@ def plan_best_entry(
             entry_low, entry_high = mark - atr * 0.4, mark
         best_entry = (entry_low + entry_high) / 2
 
-        # Structure-based Stop Loss: below swing low / OB anchor with volatility/spread buffer
-        anchor_l = sw_l if (sw_l and sw_l < entry_low) else entry_low
+        # Structure-based Stop Loss: below swing low / demand base / pivot S1
+        anchors = [p for p in (sw_l, demand_base, pivot_s1) if p and p < entry_low]
+        anchor_l = min(anchors) if anchors else (sw_l if (sw_l and sw_l < entry_low) else entry_low)
         struct_stop = anchor_l - spread_buf
         if stop_hint and stop_hint < entry_low:
             stop = min(stop_hint, struct_stop)
@@ -256,14 +496,13 @@ def plan_best_entry(
 
         risk = abs(best_entry - stop) or atr
         min_tp1 = best_entry + risk * max(risk_r, 1.5)
-        # Target structural resistance if favorable
-        if sw_h and sw_h >= best_entry + risk * 1.2:
-            tp1 = max(min_tp1, sw_h)
-        else:
-            tp1 = min_tp1
+        # Target structural resistance or pivot R1/R2
+        targs = [p for p in (sw_h, pivot_r1, all_levels.get("mt5_r2")) if p and p >= best_entry + risk * 1.2]
+        tp1 = min(targs) if targs else min_tp1
+        tp1 = max(min_tp1, tp1)
 
-        tp2 = max(tp1 + risk * 0.8, best_entry + risk * 2.5)
-        tp3 = best_entry + risk * 4.0
+        tp2 = max(tp1 + risk * 0.8, best_entry + risk * (2.5 if not is_swing else 3.2))
+        tp3 = best_entry + risk * (4.0 if not is_swing else 5.0)
         invalid_below = stop
         invalid_above = best_entry + risk * 1.5
     else:
@@ -273,8 +512,9 @@ def plan_best_entry(
             entry_low, entry_high = mark, mark + atr * 0.4
         best_entry = (entry_low + entry_high) / 2
 
-        # Structure-based Stop Loss: above swing high / OB anchor with volatility/spread buffer
-        anchor_h = sw_h if (sw_h and sw_h > entry_high) else entry_high
+        # Structure-based Stop Loss: above swing high / supply ceiling / pivot R1
+        anchors = [p for p in (sw_h, supply_top, pivot_r1) if p and p > entry_high]
+        anchor_h = max(anchors) if anchors else (sw_h if (sw_h and sw_h > entry_high) else entry_high)
         struct_stop = anchor_h + spread_buf
         if stop_hint and stop_hint > entry_high:
             stop = max(stop_hint, struct_stop)
@@ -285,21 +525,29 @@ def plan_best_entry(
 
         risk = abs(stop - best_entry) or atr
         min_tp1 = best_entry - risk * max(risk_r, 1.5)
-        # Target structural support if favorable
-        if sw_l and sw_l <= best_entry - risk * 1.2:
-            tp1 = min(min_tp1, sw_l)
-        else:
-            tp1 = min_tp1
+        # Target structural support or pivot S1/S2
+        targs = [p for p in (sw_l, pivot_s1, all_levels.get("mt5_s2")) if p and p <= best_entry - risk * 1.2]
+        tp1 = max(targs) if targs else min_tp1
+        tp1 = min(min_tp1, tp1)
 
-        tp2 = min(tp1 - risk * 0.8, best_entry - risk * 2.5)
-        tp3 = best_entry - risk * 4.0
+        tp2 = min(tp1 - risk * 0.8, best_entry - risk * (2.5 if not is_swing else 3.2))
+        tp3 = best_entry - risk * (4.0 if not is_swing else 5.0)
         invalid_above = stop
         invalid_below = best_entry - risk * 1.5
 
     for name, px, sc in top[:3]:
         reasons.append(f"{name}@{px:,.2f} (score {sc:.2f})")
 
-    conf = min(0.95, 0.45 + 0.12 * len(top) + 0.15 * (top[0][2] if top else 0))
+    if mtf_bias == direction:
+        reasons.append(f"MTF {mtf_bias} aligned (score {mtf_score:+.0f})")
+        conf_boost += 0.08
+    elif mtf_bias != "NEUTRAL":
+        reasons.append(f"MTF divergence: HTF {mtf_bias}")
+        conf_boost -= 0.08
+
+    reasons.extend(brain_notes)
+
+    conf = min(0.98, max(0.35, 0.45 + 0.10 * len(top) + 0.15 * (top[0][2] if top else 0) + conf_boost))
     eff_rr = round(abs(tp2 - best_entry) / max(risk, 1e-9), 2)
 
     return EntryPlan(

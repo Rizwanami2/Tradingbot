@@ -25,14 +25,16 @@ def apply_structure_trail(
     df: Optional[pd.DataFrame] = None,
     atr_value: float = 0.0,
     current_price: Optional[float] = None,
+    allow_pre_be: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
-    Tighten stop using swing structure / ATR trailing after TP1 (partials_done >= 1).
+    Tighten stop using swing structure / ATR trailing after TP1 (partials_done >= 1),
+    or before TP1 if allow_pre_be is True and position is in favorable territory.
     Works with either dataframe history or internal rolling swing history.
     Returns event dict if stop moved in favorable direction, else None.
     """
-    if getattr(position, "partials_done", 0) < 1:
-        return None  # only trail after first partial
+    if getattr(position, "partials_done", 0) < 1 and not allow_pre_be:
+        return None  # only trail after first partial unless allow_pre_be
 
     has_df = df is not None and len(df) >= 5
     recent_l = getattr(position, "recent_lows", None)

@@ -459,6 +459,10 @@ def compute_chart_technicals(candles: List[Dict[str, float]], live_mark: float =
     }
 
 
+# Backwards-compatible alias
+compute_technical_levels = compute_chart_technicals
+
+
 def _extract_chart_positions_and_telemetry(norm_sym: str, mark_p: float, broker: Optional[Any]) -> Dict[str, Any]:
     """Extract live broker and engine open positions, pending setups, and account metadata in sub-millisecond time."""
     open_positions: List[Dict[str, Any]] = []

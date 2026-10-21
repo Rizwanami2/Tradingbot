@@ -309,6 +309,10 @@ class ExecutionEngine:
             self.scalp_let_profit_run = bool(getattr(_cfg_tr, "SCALP_LET_PROFIT_RUN", True))
         except Exception:
             pass
+        self._last_closed_trade: Dict[str, Dict[str, Any]] = {}
+        self.on_trade_closed_callback: Optional[Any] = None
+        self._staged_next_setups: Dict[str, Any] = {}
+
         if state_file:
             self.state_file: str = state_file
         elif os.getenv("EXECUTION_STATE_FILE"):
@@ -729,6 +733,26 @@ class ExecutionEngine:
         entry_px = float(pos.executed_price or pos.entry_level or 0.0)
         exit_px = float(pos.exit_price or entry_px)
 
+        # 0. Record detailed closed trade telemetry for post-trade cooldown analysis
+        if not hasattr(self, "_last_closed_trade") or self._last_closed_trade is None:
+            self._last_closed_trade = {}
+        self._last_closed_trade[pos.symbol] = {
+            "symbol": pos.symbol,
+            "direction": pos.direction,
+            "entry_price": entry_px,
+            "exit_price": exit_px,
+            "realized_pnl": float(pos.realized_pnl),
+            "r_multiple": float(r_mult),
+            "won": bool(won),
+            "close_reason": str(getattr(pos, "close_reason", "") or ""),
+            "closed_at": closed_at,
+            "closed_at_ts": time.time(),
+            "highest_profit_usd": float(getattr(pos, "highest_profit_usd", 0.0) or 0.0),
+            "agents": list(getattr(pos, "agents", []) or []),
+            "regime": str(getattr(pos, "regime", "") or ""),
+            "order": pos,
+        }
+
         # 1. Update Autonomous Learner
         try:
             from autonomous_learner import get_brain
@@ -737,10 +761,10 @@ class ExecutionEngine:
                 r_multiple=float(r_mult),
                 won=bool(won),
                 setup=setup,
-                regime="",
-                session="",
-                agents=[],
-                conf=0.6,
+                regime=str(getattr(pos, "regime", "") or ""),
+                session=str(getattr(pos, "session", "") or ""),
+                agents=list(getattr(pos, "agents", []) or []),
+                conf=float(getattr(pos, "conviction", 0.6) or 0.6),
             )
         except Exception:
             pass
@@ -757,15 +781,23 @@ class ExecutionEngine:
                 exit=exit_px,
                 r_multiple=float(r_mult),
                 pnl=float(pos.realized_pnl),
-                agents=[],
-                regime="",
-                session="",
+                agents=list(getattr(pos, "agents", []) or []),
+                regime=str(getattr(pos, "regime", "") or ""),
+                session=str(getattr(pos, "session", "") or ""),
                 closed_at=closed_at,
             ))
         except Exception:
             pass
 
-        # 3. Update Trade Journal
+        # 3. Update Learning Edge
+        try:
+            from learning_edge import LearningEdge
+            edge = LearningEdge()
+            edge.record_outcome(setup, won=bool(won), r_mult=float(r_mult))
+        except Exception:
+            pass
+
+        # 4. Update Trade Journal
         try:
             from trade_journal import TradeJournal
             journal = TradeJournal()
@@ -779,7 +811,7 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # 4. Remove from Virtual Stop Manager
+        # 5. Remove from Virtual Stop Manager
         try:
             from virtual_stops import get_virtual_stop_manager
             key = getattr(pos, "ticket", None) or getattr(pos, "id", None)
@@ -788,7 +820,7 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # 5. Update Anti-Spam Rate Limiter (loss/win tracking for cooldowns on auto & manual)
+        # 6. Update Anti-Spam Rate Limiter (loss/win tracking for cooldowns on auto & manual)
         try:
             from anti_spam import get_anti_spam_limiter
             limiter = get_anti_spam_limiter()
@@ -798,6 +830,13 @@ class ExecutionEngine:
                 limiter.record_win(pos.symbol)
         except Exception:
             pass
+
+        # 7. Invoke registered post-trade closed callback if present
+        if getattr(self, "on_trade_closed_callback", None) and callable(self.on_trade_closed_callback):
+            try:
+                self.on_trade_closed_callback(pos, r_mult)
+            except Exception as cb_err:
+                logger.debug("on_trade_closed_callback error: %s", cb_err)
 
     _notify_brain_close = _notify_trade_closed
 
@@ -2094,6 +2133,46 @@ class ExecutionEngine:
                         }
                         events.append(ev_trail)
                         self._dispatch_event(ev_trail["event"], pos, ev_trail["message"])
+
+            # (E2) Check TP3 Final Target Runner Hit
+            if pos.partials_done == 2 and pos.tp3:
+                eval_high = curr_price if just_executed else high
+                eval_low = curr_price if just_executed else low
+                tp3_hit = (eval_high >= pos.tp3) if is_long else (eval_low <= pos.tp3)
+                if tp3_hit:
+                    broker_ok = True
+                    exit_price = pos.tp3
+                    pos_ticket = getattr(pos, "ticket", None) or pos.id
+                    try:
+                        res = self._broker_close(pos.symbol, price=exit_price, ticket=pos_ticket)
+                        if res is False:
+                            broker_ok = False
+                    except Exception as ex:
+                        broker_ok = False
+                        logger.error("[ExecutionEngine] Broker TP3 close failed for %s: %s", pos.symbol, ex)
+                    if broker_ok:
+                        final_pnl = self.calc_position_pnl(pos, exit_price)
+                        pos.realized_pnl += final_pnl
+                        pos.exit_price = exit_price
+                        pos.status = OrderStatus.CLOSED
+                        pos.closed_at = datetime.now(timezone.utc).isoformat()
+                        pos.close_reason = f"TP3 Runner Final Hit (+${pos.realized_pnl:+.2f})"
+                        try:
+                            self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=3.5)
+                        except Exception:
+                            pass
+                        self._notify_brain_close(pos, 3.5)
+                        self.trade_history.append(pos)
+                        self.active_positions.pop(pos.id, None)
+                        self.save_state()
+                        tp3_msg = (
+                            f"🏆 **TARGET 3 RUNNER HIT (+3.5R+)** ({pos.symbol} [#{pos.id}])\n"
+                            f"Final Exit: `${exit_price:,.2f}` | Realized PnL: `+${pos.realized_pnl:,.2f}`\n"
+                            f"_Full structural multi-target swing cycle complete!_"
+                        )
+                        events.append({"event": "TP3_CLOSE", "order": pos, "price": exit_price, "message": tp3_msg})
+                        self._dispatch_event("TP3_CLOSE", pos, tp3_msg)
+                        continue
 
             # (F) Stop Loss / Break-Even / Exit Hit / Virtual Stop Hit
             v_hit = False

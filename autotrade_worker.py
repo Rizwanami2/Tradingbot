@@ -138,6 +138,113 @@ def _ai_on_close(symbol: str, fpnl: float, ev: dict = None) -> str:
     return chr(10).join(lines)
 
 
+async def execute_post_trade_cooldown_workflow(
+    symbol: str,
+    engine: Any,
+    arbiter: Any,
+    risk_mgr: Any,
+    df1: pd.DataFrame,
+    data: Dict[str, pd.DataFrame],
+    candle_dict: Dict[str, Any],
+    last_trade: Dict[str, Any],
+    profile: str = "scalp",
+) -> Optional[str]:
+    """
+    Pillar 3 Post-Trade Close Cooldown Workflow:
+    Executes deep post-trade evaluation, updates brain memory, reassesses
+    market structure on fresh bars, and pre-plans the next optimal entry setup.
+    """
+    if not last_trade:
+        return None
+
+    try:
+        sym = str(symbol).upper()
+        fpnl = float(last_trade.get("realized_pnl", 0.0) or 0.0)
+        r_mult = float(last_trade.get("r_multiple", 0.0) or 0.0)
+        close_reason = str(last_trade.get("close_reason", "Position Closed"))
+        won = fpnl >= 0.0
+        outcome = "PROFIT 🎯" if won else "LOSS 🛑"
+
+        # 1. Market Structure Reassessment
+        close_px = float(candle_dict.get("close") or (df1["close"].iloc[-1] if df1 is not None and len(df1) else 0.0))
+        if df1 is not None and len(df1) >= 10:
+            lookback = min(len(df1), 30)
+            seg = df1.iloc[-lookback:]
+            sw_h = float(seg["high"].max())
+            sw_l = float(seg["low"].min())
+            mid = (sw_h + sw_l) / 2.0
+            if close_px >= sw_h - (sw_h - sw_l) * 0.20:
+                struct_state = "Bullish Premium / Breakout Extension"
+            elif close_px <= sw_l + (sw_h - sw_l) * 0.20:
+                struct_state = "Bearish Discount / Breakdown Extension"
+            else:
+                struct_state = "Consolidation / Equilibrium"
+        else:
+            sw_h = close_px * 1.002
+            sw_l = close_px * 0.998
+            struct_state = "Structure Evaluating"
+
+        # 2. Multi-Timeframe Confluence Reassessment
+        mtf_bias = "NEUTRAL"
+        mtf_score = 0.0
+        try:
+            from mtf_matrix import analyze_symbol_mtf
+            snap = analyze_symbol_mtf(sym, force_refresh=False)
+            if snap:
+                mtf_bias = str(getattr(snap, "top_bias", "NEUTRAL") or "NEUTRAL").upper()
+                mtf_score = float(getattr(snap, "overall_score", 0.0) or 0.0)
+        except Exception:
+            pass
+
+        # 3. Next Optimal Setup Pre-Calculation
+        if mtf_bias == "BULLISH":
+            next_dir = "LONG"
+        elif mtf_bias == "BEARISH":
+            next_dir = "SHORT"
+        else:
+            next_dir = "LONG" if close_px >= ((sw_h + sw_l) / 2.0) else "SHORT"
+
+        from entry_level_planner import plan_best_entry
+        next_plan = plan_best_entry(
+            sym,
+            df1,
+            direction=next_dir,
+            mark=close_px,
+            profile=profile,
+        )
+
+        if not hasattr(engine, "_staged_next_setups") or engine._staged_next_setups is None:
+            engine._staged_next_setups = {}
+        engine._staged_next_setups[sym] = next_plan
+
+        # 4. Cooldown time remaining
+        from anti_spam import get_anti_spam_limiter
+        limiter = get_anti_spam_limiter()
+        cd_rem = 0.0
+        try:
+            cd_rem = float(limiter.get_symbol_cooldown(sym) or 0.0)
+        except Exception:
+            cd_rem = 30.0
+
+        why_str = ", ".join(next_plan.reasons[:2]) if next_plan.reasons else "Confluence level setup"
+        lines = [
+            f"🔄 **POST-TRADE COOLDOWN WORKFLOW & PRE-PLAN** (`{sym}`)",
+            f"• **Previous Result:** {outcome} (`${fpnl:+,.2f}` | `{r_mult:+.2f}R`)",
+            f"• **Close Note:** _{close_reason}_",
+            f"• **Market Structure:** {struct_state} (`[{sw_l:,.2f} – {sw_h:,.2f}]`)",
+            f"• **MTF Confluence:** {mtf_bias} (Score: `{mtf_score:+.0f}`)",
+            f"• **Staged Next Setup ({next_plan.direction}):**",
+            f"  - Entry Zone: `${next_plan.entry_low:,.2f}` – `${next_plan.entry_high:,.2f}` (Optimal: `${next_plan.best_entry:,.2f}`)",
+            f"  - Stop Loss: `${next_plan.stop:,.2f}` | TP1: `${next_plan.tp1:,.2f}` | TP2: `${next_plan.tp2:,.2f}`",
+            f"  - Confluence: _{why_str}_",
+            f"⏳ _Cooldown in progress (~{cd_rem:.0f}s left). Setup pre-validated and staged for instant evaluation upon timer expiry._",
+        ]
+        return "\n".join(lines)
+    except Exception as ex:
+        logger.debug("Post-trade cooldown workflow error: %s", ex)
+        return None
+
+
 
 async def live_monitoring_worker(
     app,
@@ -384,6 +491,30 @@ async def live_monitoring_worker(
                     is_scalping = getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                     open_n = len(engine.active_positions) + len(engine.pending_setups)
                     cur_mode = getattr(config, "get_autotrade_mode", lambda: getattr(config, "AUTOTRADE_MODE", "continuous"))().lower()
+
+                    # Pillar 3: Post-Trade Close Cooldown Workflow
+                    # While symbol is in active cooldown, perform deep analysis, update learning,
+                    # reassess market structure, and pre-plan the next optimal entry setup.
+                    last_closed = getattr(engine, "_last_closed_trade", {}).get(symbol)
+                    if last_closed and not last_closed.get("cooldown_workflow_done"):
+                        last_closed["cooldown_workflow_done"] = True
+                        try:
+                            wf_report = await execute_post_trade_cooldown_workflow(
+                                symbol=symbol,
+                                engine=engine,
+                                arbiter=arbiter,
+                                risk_mgr=risk_mgr,
+                                df1=df1,
+                                data=data,
+                                candle_dict=candle_dict,
+                                last_trade=last_closed,
+                                profile=current_profile_name,
+                            )
+                            if wf_report:
+                                await _send_alert(wf_report)
+                        except Exception as _wf_err:
+                            logger.debug("Post-trade cooldown workflow note: %s", _wf_err)
+
                     if not autotrade_active:
                         can_open = False
                         monitoring_health[f"{symbol}_eval"] = "Autotrade paused"
@@ -473,8 +604,13 @@ async def live_monitoring_worker(
                                     from entry_level_planner import plan_best_entry, attach_plan_to_signal
                                     mark_px = float(candle_dict.get("close") or sig.get("entry") or 0.0)
                                     stop_h = float(sig["stop"]) if sig.get("stop") else None
-                                    eplan = plan_best_entry(symbol, df1, direction=dname, mark=mark_px, stop_hint=stop_h)
+                                    eplan = plan_best_entry(
+                                        symbol, df1, direction=dname, mark=mark_px, stop_hint=stop_h,
+                                        profile=current_profile_name, votes=votes
+                                    )
                                     sig = attach_plan_to_signal(sig, eplan)
+                                    if hasattr(engine, "_staged_next_setups") and isinstance(engine._staged_next_setups, dict):
+                                        engine._staged_next_setups.pop(symbol, None)
                                 except Exception as _ep_err:
                                     logger.debug("Autotrade entry plan attachment note: %s", _ep_err)
 
