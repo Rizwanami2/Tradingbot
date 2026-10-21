@@ -354,27 +354,87 @@ def get_clean_telegram_commands() -> list:
     ]
 
 
-async def sync_telegram_bot_commands(bot) -> bool:
-    """Sync clean curated commands with Telegram API across default and private chat scopes."""
+async def delete_all_stale_telegram_commands(bot, chat_id: Optional[int] = None) -> bool:
+    """Aggressively purges and deletes all stale command registrations from Telegram Bot API across all scopes and language variations."""
     if not bot:
         return False
     try:
-        from telegram import BotCommandScopeDefault, BotCommandScopeAllPrivateChats, MenuButtonCommands
+        from telegram import (
+            BotCommandScopeDefault,
+            BotCommandScopeAllPrivateChats,
+            BotCommandScopeAllGroupChats,
+            BotCommandScopeAllChatAdministrators,
+            BotCommandScopeChat,
+        )
+        scopes = [
+            BotCommandScopeDefault(),
+            BotCommandScopeAllPrivateChats(),
+            BotCommandScopeAllGroupChats(),
+            BotCommandScopeAllChatAdministrators(),
+        ]
+        if chat_id:
+            try:
+                scopes.append(BotCommandScopeChat(chat_id=chat_id))
+            except Exception:
+                pass
+
+        for sc in scopes:
+            for lang in (None, "", "en"):
+                try:
+                    await bot.delete_my_commands(scope=sc, language_code=lang)
+                except Exception as e_del:
+                    logger.debug("delete_my_commands scope=%s lang=%s: %s", sc, lang, e_del)
+        logger.info("Successfully purged stale Telegram bot commands across all scopes and language codes")
+        return True
+    except Exception as e:
+        logger.warning("Error purging stale Telegram bot commands: %s", e)
+        return False
+
+
+async def sync_telegram_bot_commands(bot, chat_id: Optional[int] = None) -> bool:
+    """Sync clean curated commands with Telegram API across default, private, group, and chat-specific scopes after deleting stale commands."""
+    if not bot:
+        return False
+    try:
+        from telegram import (
+            BotCommandScopeDefault,
+            BotCommandScopeAllPrivateChats,
+            BotCommandScopeAllGroupChats,
+            BotCommandScopeChat,
+            MenuButtonCommands,
+        )
+        # 1. Purge all existing/stale commands first so old commands are permanently deleted
+        await delete_all_stale_telegram_commands(bot, chat_id=chat_id)
+
         cmds = get_clean_telegram_commands()
 
-        # 1. Sync default scope
+        # 2. Sync default scope
         try:
             await bot.set_my_commands(cmds, scope=BotCommandScopeDefault())
         except Exception as e_def:
             logger.warning("Failed setting BotCommandScopeDefault: %s", e_def)
 
-        # 2. Sync all private chats scope (overrides any stale cached private chat commands)
+        # 3. Sync all private chats scope (overrides any stale cached private chat commands)
         try:
             await bot.set_my_commands(cmds, scope=BotCommandScopeAllPrivateChats())
         except Exception as e_priv:
             logger.warning("Failed setting BotCommandScopeAllPrivateChats: %s", e_priv)
 
-        # 3. Explicitly configure chat menu button to Commands
+        # 4. Sync all group chats scope
+        try:
+            await bot.set_my_commands(cmds, scope=BotCommandScopeAllGroupChats())
+        except Exception as e_grp:
+            logger.debug("Failed setting BotCommandScopeAllGroupChats: %s", e_grp)
+
+        # 5. Direct per-chat sync (highest precedence in Telegram API)
+        if chat_id:
+            try:
+                await bot.set_my_commands(cmds, scope=BotCommandScopeChat(chat_id=chat_id))
+                await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonCommands())
+            except Exception as e_chat:
+                logger.debug("Failed setting BotCommandScopeChat: %s", e_chat)
+
+        # 6. Explicitly configure global chat menu button to Commands
         try:
             await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
         except Exception as e_menu:
@@ -473,15 +533,15 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
             ],
         ])
-    elif cat in ("update", "updatemenu", "sync", "syncmenu"):
+    elif cat in ("update", "updatemenu", "sync", "syncmenu", "clear", "clearmenu", "deletemenu"):
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🔄 Sync Menu Again", callback_data="cmd:run:updatemenu"),
-                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
+                InlineKeyboardButton("🔄 Sync Menu", callback_data="cmd:run:updatemenu"),
+                InlineKeyboardButton("🗑️ Clear All", callback_data="cmd:run:clearmenu"),
             ],
             [
+                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-                InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
             ],
         ])
     elif cat in ("combined", "cba", "combine", "together", "multiagent"):
@@ -903,10 +963,11 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
 
 
 async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Proactively sync clean commands with Telegram API in background
+    # Proactively sync clean commands with Telegram API in background for this specific chat
     if ctx and getattr(ctx, "bot", None):
         try:
-            asyncio.create_task(sync_telegram_bot_commands(ctx.bot))
+            cid = update.effective_chat.id if update and getattr(update, "effective_chat", None) else None
+            asyncio.create_task(sync_telegram_bot_commands(ctx.bot, chat_id=cid))
         except Exception:
             pass
     welcome = (
@@ -948,6 +1009,9 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cat = (ctx.args[0].lower() if ctx.args else "").strip()
     if cat in ("update", "updatemenu", "sync", "syncmenu", "refresh", "refreshmenu"):
         await updatemenu_command(update, ctx)
+        return
+    if cat in ("clear", "clearmenu", "delete", "deletemenu", "purge", "purgemenu"):
+        await clearmenu_command(update, ctx)
         return
     text, markup = format_command_menu(cat)
     try:
@@ -1288,14 +1352,16 @@ async def combined_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def updatemenu_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Force refresh and sync clean Telegram bot commands and menu button."""
+    """Force refresh, purge stale commands, and sync clean Telegram bot commands."""
     bot = getattr(ctx, "bot", None)
     if not bot and update and hasattr(update, "get_bot"):
         bot = update.get_bot()
 
+    chat_id = update.effective_chat.id if update and getattr(update, "effective_chat", None) else None
+
     ok = False
     if bot:
-        ok = await sync_telegram_bot_commands(bot)
+        ok = await sync_telegram_bot_commands(bot, chat_id=chat_id)
 
     cmds = get_clean_telegram_commands()
     cmd_lines = "\n".join([f"• `/{c.command}` — {c.description}" for c in cmds])
@@ -1303,14 +1369,16 @@ async def updatemenu_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ok:
         text = (
             "✅ **Telegram Bot Menu Successfully Synced!**\n\n"
-            f"Registered **{len(cmds)} clean, essential commands** across all Telegram scopes:\n\n"
+            "🗑️ **Stale Commands Deleted:**\n"
+            "• Old & removed commands purged across `Default`, `Private`, `Group`, and direct `Chat` scopes.\n"
+            "• Language codes (`en`, default) cleared.\n\n"
+            f"✨ **Active Clean Commands ({len(cmds)} total):**\n\n"
             f"{cmd_lines}\n\n"
-            "✨ **Menu Enhancements Applied:**\n"
-            "• Removed 50+ cluttering sub-commands from the '/' popup.\n"
-            "• Prominently added `/combined`, `/cooldown`, `/spam`, and `/updatemenu`.\n"
-            "• Flushed client command cache across `Default` & `AllPrivateChats` scopes.\n"
-            "• Chat Menu button set directly to `Commands`.\n\n"
-            "💡 _If your Telegram client still shows cached commands, restart Telegram or tap Menu again._"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 **If Old Commands Still Appear in Telegram:**\n"
+            "1. **@BotFather Static Commands:** If you created commands with @BotFather, Telegram keeps showing them until cleared in BotFather. Open [@BotFather](https://t.me/BotFather) ➡️ `/setcommands` ➡️ select your bot ➡️ send `/empty`.\n"
+            "2. **App Cache:** Force close & reopen your Telegram app (or pull down to refresh) to fetch fresh commands.\n"
+            "3. **Complete Purge:** Send `/clearmenu` if you want to completely erase all bot commands."
         )
     else:
         text = (
@@ -1326,7 +1394,50 @@ async def updatemenu_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("🔄 Sync Menu Again", callback_data="cmd:run:updatemenu"),
+            InlineKeyboardButton("🗑️ Clear All Commands", callback_data="cmd:run:clearmenu"),
+        ],
+        [
             InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+        ],
+    ])
+    await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
+
+
+async def clearmenu_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Aggressively purges and deletes all commands from Telegram API across all scopes."""
+    bot = getattr(ctx, "bot", None)
+    if not bot and update and hasattr(update, "get_bot"):
+        bot = update.get_bot()
+
+    chat_id = update.effective_chat.id if update and getattr(update, "effective_chat", None) else None
+    ok = False
+    if bot:
+        ok = await delete_all_stale_telegram_commands(bot, chat_id=chat_id)
+        try:
+            from telegram import MenuButtonCommands
+            if chat_id:
+                await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonCommands())
+            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        except Exception:
+            pass
+
+    text = (
+        "🗑️ **All Telegram Bot Commands Successfully Deleted!**\n\n"
+        "• All command scopes (`Default`, `PrivateChats`, `GroupChats`, `Chat`) have been purged.\n"
+        "• Telegram server command cache has been wiped.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 **To Ensure Complete Deletion:**\n"
+        "1. **@BotFather Static Commands:** If you created commands with @BotFather, Telegram displays them even when API commands are deleted. Open [@BotFather](https://t.me/BotFather) ➡️ `/setcommands` ➡️ select this bot ➡️ send `/empty`.\n"
+        "2. **Refresh Telegram Client:** Force-close and reopen Telegram on your phone or PC.\n"
+        "3. **Restore Clean Menu:** Send `/updatemenu` at any time to restore the clean 20-command menu."
+    )
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Restore Clean Menu", callback_data="cmd:run:updatemenu"),
+            InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
         ],
     ])
     await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
@@ -2657,6 +2768,9 @@ async def handle_command_menu_callback(data: Any, update: Optional[Update] = Non
         elif action in ("updatemenu", "syncmenu"):
             ctx.args = []
             await updatemenu_command(update, ctx)
+        elif action in ("clearmenu", "deletemenu", "resetmenu", "purgemenu"):
+            ctx.args = []
+            await clearmenu_command(update, ctx)
         return True
 
     return False
@@ -6161,6 +6275,7 @@ def main():
     app.add_handler(CommandHandler(["help", "commands", "cmd", "menu", "list", "all", "command"], help_command))
     app.add_handler(CommandHandler(["settings", "config", "setup", "preferences"], settings_command))
     app.add_handler(CommandHandler(["updatemenu", "syncmenu", "refreshmenu", "setmenu"], updatemenu_command))
+    app.add_handler(CommandHandler(["clearmenu", "deletemenu", "resetmenu", "purgemenu"], clearmenu_command))
 
     # Market Data
     app.add_handler(CommandHandler("levels", levels_command))
@@ -6201,9 +6316,6 @@ def main():
     app.add_handler(CommandHandler(["switch", "switchbroker"], switch_command))
     app.add_handler(CommandHandler(["live", "livetrade"], live_command))
     app.add_handler(CommandHandler("broker", broker_command))
-    app.add_handler(CommandHandler("oanda", oanda_command))
-    app.add_handler(CommandHandler("alpaca", alpaca_command))
-    app.add_handler(CommandHandler("ccxt", ccxt_command))
     app.add_handler(CommandHandler(["slippage", "analytics"], slippage_command))
     app.add_handler(CommandHandler(["vstops", "vstop"], vstops_command))
 

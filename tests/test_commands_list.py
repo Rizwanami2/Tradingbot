@@ -40,7 +40,9 @@ from main import (
     spam_command,
     combined_command,
     updatemenu_command,
+    clearmenu_command,
     sync_telegram_bot_commands,
+    delete_all_stale_telegram_commands,
     get_clean_telegram_commands,
 )
 from execution_engine import TradeOrder, OrderStatus
@@ -830,17 +832,46 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_telegram_bot_commands(self):
         bot_mock = MagicMock()
+        bot_mock.delete_my_commands = AsyncMock(return_value=True)
         bot_mock.set_my_commands = AsyncMock(return_value=True)
         bot_mock.set_chat_menu_button = AsyncMock(return_value=True)
 
-        ok = await sync_telegram_bot_commands(bot_mock)
+        ok = await sync_telegram_bot_commands(bot_mock, chat_id=123456)
         self.assertTrue(ok)
-        self.assertEqual(bot_mock.set_my_commands.await_count, 2)
-        bot_mock.set_chat_menu_button.assert_awaited_once()
+        self.assertTrue(bot_mock.delete_my_commands.await_count >= 4)
+        self.assertTrue(bot_mock.set_my_commands.await_count >= 3)
+        self.assertTrue(bot_mock.set_chat_menu_button.await_count >= 1)
+
+    async def test_delete_all_stale_telegram_commands(self):
+        bot_mock = MagicMock()
+        bot_mock.delete_my_commands = AsyncMock(return_value=True)
+
+        ok = await delete_all_stale_telegram_commands(bot_mock, chat_id=123456)
+        self.assertTrue(ok)
+        self.assertTrue(bot_mock.delete_my_commands.await_count >= 5)
+
+    async def test_clearmenu_command(self):
+        self.ctx.args = []
+        bot_mock = MagicMock()
+        bot_mock.delete_my_commands = AsyncMock(return_value=True)
+        bot_mock.set_chat_menu_button = AsyncMock(return_value=True)
+        self.ctx.bot = bot_mock
+
+        await clearmenu_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        reply_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("All Telegram Bot Commands Successfully Deleted", reply_text)
+        self.assertIn("BotFather", reply_text)
+
+        # Also verify via /help clear
+        self.ctx.args = ["clear"]
+        await help_command(self.update, self.ctx)
+        self.assertIn("All Telegram Bot Commands Successfully Deleted", self.message.reply_text.call_args[0][0])
 
     async def test_updatemenu_command(self):
         self.ctx.args = []
         bot_mock = MagicMock()
+        bot_mock.delete_my_commands = AsyncMock(return_value=True)
         bot_mock.set_my_commands = AsyncMock(return_value=True)
         bot_mock.set_chat_menu_button = AsyncMock(return_value=True)
         self.ctx.bot = bot_mock

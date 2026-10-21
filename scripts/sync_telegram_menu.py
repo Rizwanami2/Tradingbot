@@ -2,6 +2,9 @@
 """
 Standalone Telegram Bot Command Menu Synchronizer.
 Connects directly to Telegram Bot API and sets clean, curated commands across all scopes.
+Usage:
+  python3 scripts/sync_telegram_menu.py           # Purges stale commands and syncs clean commands
+  python3 scripts/sync_telegram_menu.py --clear   # Completely deletes all commands across all scopes
 """
 import os
 import sys
@@ -23,29 +26,54 @@ async def run_sync():
         print("Please configure TELEGRAM_TOKEN in /workspace/nimble-darwin/.env to sync with Telegram Bot API.")
         sys.exit(1)
 
+    action = "clear" if any(arg in sys.argv for arg in ("--clear", "--delete", "-d")) else "sync"
+
     print(f"🔄 Connecting to Telegram Bot API with token: {token[:8]}***...")
     try:
         from telegram import Bot
-        from main import sync_telegram_bot_commands, get_clean_telegram_commands
+        from main import (
+            sync_telegram_bot_commands,
+            delete_all_stale_telegram_commands,
+            get_clean_telegram_commands,
+        )
 
         bot = Bot(token=token)
         async with bot:
-            cmds = get_clean_telegram_commands()
-            print(f"📋 Curated {len(cmds)} clean primary commands:")
-            for c in cmds:
-                print(f"   /{c.command:<12} — {c.description}")
-
-            ok = await sync_telegram_bot_commands(bot)
-            if ok:
-                print("\n✅ Successfully synchronized clean commands with Telegram API across all scopes!")
-                print("✨ Scopes updated: BotCommandScopeDefault & BotCommandScopeAllPrivateChats")
-                print("✨ Chat Menu Button set to: MenuButtonCommands")
-                print("💡 Telegram client menu button and '/' autocomplete are now clean and up to date.")
+            if action == "clear":
+                print("🗑️ Purging all command registrations across all scopes...")
+                ok = await delete_all_stale_telegram_commands(bot)
+                if ok:
+                    print("\n✅ Successfully deleted all commands across Default, Private, and Group scopes!")
+                else:
+                    print("\n⚠️ Failed to delete some commands.")
             else:
-                print("\n⚠️ Failed to synchronize commands. Check logs above.")
-                sys.exit(1)
+                cmds = get_clean_telegram_commands()
+                print(f"📋 Curated {len(cmds)} clean primary commands:")
+                for c in cmds:
+                    print(f"   /{c.command:<12} — {c.description}")
+
+                print("\n1️⃣ Step 1: Purging all old/stale command scopes...")
+                await delete_all_stale_telegram_commands(bot)
+
+                print("2️⃣ Step 2: Registering clean commands across all scopes...")
+                ok = await sync_telegram_bot_commands(bot)
+                if ok:
+                    print("\n✅ Successfully synchronized clean commands with Telegram API across all scopes!")
+                    print("✨ Scopes updated: BotCommandScopeDefault, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats")
+                    print("✨ Chat Menu Button set to: MenuButtonCommands")
+                    print("💡 Telegram client menu button and '/' autocomplete are now clean and up to date.")
+                else:
+                    print("\n⚠️ Failed to synchronize commands. Check logs above.")
+                    sys.exit(1)
+
+            print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("💡 TIP: If old commands still appear in Telegram:")
+            print("1. If commands were added via @BotFather in Telegram:")
+            print("   • Open @BotFather -> send /setcommands -> select your bot -> send /empty")
+            print("2. Force-restart the Telegram app on your device to refresh its cache.")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     except Exception as e:
-        print(f"\n❌ Error during Telegram command sync: {e}")
+        print(f"\n❌ Error during Telegram command operation: {e}")
         sys.exit(1)
 
 
