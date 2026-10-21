@@ -340,11 +340,12 @@ async def live_monitoring_worker(
                         engine.cancel_setup(symbol, reason="Autotrade disabled; pending entry cancelled")
 
                     try:
+                        from config import is_regime_auto
                         profile_locked = bool(
                             getattr(config, "PROFILE_LOCKED", False)
                             or getattr(arbiter, "profile_locked", False)
                         )
-                        if not profile_locked and len(watchlist) == 1:
+                        if is_regime_auto() and not profile_locked:
                             from regime_auto_switcher import RegimeAutoSwitcher
                             if not hasattr(arbiter, "_regime_switcher") or arbiter._regime_switcher is None:
                                 arbiter._regime_switcher = RegimeAutoSwitcher(cooldown_seconds=300.0)

@@ -2827,6 +2827,73 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
         except Exception as _cba_err:
             logger.warning("combined metrics callback error: %s", _cba_err)
 
+    if data.startswith("regime:"):
+        try:
+            from config import is_regime_auto, set_regime_auto
+            from strategy_profiles import get_current_profile, apply_profile, DEFAULT_PROFILES
+            from regime_auto_switcher import RegimeAutoSwitcher, compute_regime_indicators
+            from multi_agent_trading_bot import MarketDataFeed
+
+            action = data.split(":", 1)[1]
+            notice = ""
+            if action == "mode:auto":
+                set_regime_auto(True)
+                if arbiter is not None:
+                    arbiter.profile_locked = False
+                feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
+                data_m = await _to_thread(feed.multi_tf, limit_1m=60)
+                df1 = data_m.get("1m") if data_m else None
+                switcher = getattr(arbiter, "_regime_switcher", None) or RegimeAutoSwitcher()
+                if df1 is not None and not df1.empty:
+                    res = switcher.evaluate_and_switch(df1, symbol="XAUUSD", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+                    notice = f"Enabled AUTO mode -> {res.current_profile}"
+                else:
+                    notice = "Enabled AUTO adaptive regime mode"
+            elif action == "mode:manual":
+                set_regime_auto(False)
+                if arbiter is not None:
+                    arbiter.profile_locked = True
+                cur = get_current_profile().name
+                notice = f"Locked {cur} in MANUAL mode"
+            elif action.startswith("set:"):
+                target = action.split(":", 1)[1]
+                if target in DEFAULT_PROFILES:
+                    set_regime_auto(False)
+                    if arbiter is not None:
+                        arbiter.profile_locked = True
+                    apply_profile(target, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
+                    notice = f"Profile manually set to {target} (Locked)"
+            elif action == "eval":
+                feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
+                data_m = await _to_thread(feed.multi_tf, limit_1m=60)
+                df1 = data_m.get("1m") if data_m else None
+                if is_regime_auto():
+                    switcher = getattr(arbiter, "_regime_switcher", None) or RegimeAutoSwitcher()
+                    if df1 is not None and not df1.empty:
+                        res = switcher.evaluate_and_switch(df1, symbol="XAUUSD", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
+                        notice = f"Auto-evaluated: {res.current_profile} ({res.reason})"
+                else:
+                    notice = "Refreshed metrics (Manual lock maintained)"
+
+            # Refresh dashboard view
+            feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
+            data_m = await _to_thread(feed.multi_tf, limit_1m=60)
+            df1 = data_m.get("1m") if data_m else None
+            metrics = compute_regime_indicators(df1) if df1 is not None else {"adx": 22.0, "atr_pct": 0.15, "bb_width": 0.005}
+            regime_desc = "Strong Trend" if metrics["adx"] >= 28 else ("Range / Chop" if metrics["adx"] < 20 else "Balanced Consolidation")
+            cur_prof = get_current_profile()
+            auto_now = is_regime_auto()
+            text = format_regime_dashboard(metrics, regime_desc, cur_prof, auto_now, status_note=notice)
+            markup = build_regime_keyboard(auto_now, cur_prof.name)
+
+            try:
+                await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+            except Exception:
+                await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
+            return
+        except Exception as _reg_err:
+            logger.warning("regime callback error: %s", _reg_err)
+
     if data.startswith("cmd:") or data.startswith("settings:"):
         try:
             handled = await handle_command_menu_callback(data, update, ctx)
@@ -3789,15 +3856,82 @@ async def bridge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 _REGIME_CACHE: Dict[str, Tuple[float, Any]] = {}
 
 
+def build_regime_keyboard(is_auto: bool, current_profile: str) -> InlineKeyboardMarkup:
+    """Build interactive inline keyboard for Regime Auto vs Manual selection."""
+    prof = (current_profile or "").lower().strip()
+    auto_btn = InlineKeyboardButton("🟢 AUTO (Active)" if is_auto else "⚪ Enable AUTO", callback_data="regime:mode:auto")
+    manual_btn = InlineKeyboardButton("🔒 MANUAL (Active)" if not is_auto else "⚪ Lock MANUAL", callback_data="regime:mode:manual")
+    
+    scalp_lbl = "⚡ Scalp ✓" if prof == "scalp" else "⚡ Scalp"
+    bal_lbl = "⚖️ Balanced ✓" if prof == "balanced" else "⚖️ Balanced"
+    swing_lbl = "📈 Swing ✓" if prof == "swing" else "📈 Swing"
+    
+    gold_lbl = "🥇 Gold Only ✓" if prof in ("gold_only", "xau_scalp") else "🥇 Gold Only"
+    crypto_lbl = "🪙 Crypto ✓" if prof == "crypto" else "🪙 Crypto"
+    eval_lbl = "🔄 Re-Evaluate"
+
+    return InlineKeyboardMarkup([
+        [auto_btn, manual_btn],
+        [
+            InlineKeyboardButton(scalp_lbl, callback_data="regime:set:scalp"),
+            InlineKeyboardButton(bal_lbl, callback_data="regime:set:balanced"),
+            InlineKeyboardButton(swing_lbl, callback_data="regime:set:swing"),
+        ],
+        [
+            InlineKeyboardButton(gold_lbl, callback_data="regime:set:gold_only"),
+            InlineKeyboardButton(crypto_lbl, callback_data="regime:set:crypto"),
+            InlineKeyboardButton(eval_lbl, callback_data="regime:eval"),
+        ],
+    ])
+
+
+def format_regime_dashboard(
+    metrics: Dict[str, float],
+    regime_desc: str,
+    cur_prof: Any,
+    is_auto: bool,
+    status_note: str = "",
+) -> str:
+    mode_text = "🟢 AUTO (Adaptive Switching)" if is_auto else "🔒 MANUAL (Fixed Selection)"
+    desc_clean = str(getattr(cur_prof, "description", "")).replace("_", " ")
+    lines = [
+        f"📊 **Market Regime & Strategy Profile**",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"• **Regime Mode:** `{mode_text}`",
+        f"• **Active Profile:** `{cur_prof.name.upper()}` ({desc_clean})",
+        f"• **Detected Regime:** `{regime_desc}`",
+        f"• **Trend Strength (ADX):** `{metrics.get('adx', 0.0):.1f}`",
+        f"• **ATR Volatility:** `{metrics.get('atr_pct', 0.0):.3f}%`",
+        f"• **Bollinger Width:** `{metrics.get('bb_width', 0.0):.4f}`",
+        f"• **Min Agreement:** `{cur_prof.min_agreement}` agents (Min Score: `{cur_prof.min_score}`)",
+    ]
+    if status_note:
+        lines.append(f"• **Notice:** {status_note.replace('_', ' ')}")
+    lines.extend([
+        f"",
+        f"**Selection Options:**",
+        f"• `/regime auto` — Adaptive market regime detection & auto-switching",
+        f"• `/regime manual [profile]` — Lock specific profile (Manual)",
+        f"• `/regime switch <profile>` — Switch profile (`scalp`, `balanced`, `swing`, `gold_only`, `crypto`)",
+        f"• `/regime calibrate` — Recalibrate weights by Rolling Sharpe",
+        f"• _Use buttons below to switch mode or profile instantly._",
+    ])
+    return "\n".join(lines)
+
+
 async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """View and control market regime auto-switcher: /regime [auto|calibrate|switch <profile>]"""
+    """View and control market regime auto-switcher: /regime [auto|manual|calibrate|switch <profile>]"""
     from regime_auto_switcher import compute_regime_indicators, RegimeAutoSwitcher, calibrate_rolling_sharpe_weights
     from strategy_profiles import get_current_profile, apply_profile, DEFAULT_PROFILES
     from multi_agent_trading_bot import MarketDataFeed
+    from config import is_regime_auto, set_regime_auto
     args = ctx.args or []
     sub = args[0].lower() if args else ""
 
-    if sub in ("auto", "evaluate", "check"):
+    if sub in ("auto", "evaluate", "check", "on"):
+        set_regime_auto(True)
+        if arbiter is not None:
+            arbiter.profile_locked = False
         feed = MarketDataFeed(symbol="XAUUSD", source=config.DEFAULT_DATA_SOURCE)
         data = await _to_thread(feed.multi_tf, limit_1m=100)
         df1 = data.get("1m") if data else None
@@ -3810,6 +3944,7 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines = [
             f"🌐 **Market Regime Auto-Evaluation**",
             f"━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"• **Regime Mode:** `🟢 AUTO (Adaptive Switching Active)`",
             f"• **Regime Detected:** `{res.regime_detected}`",
             f"• **ADX (14):** `{res.metrics.get('adx', 0.0):.1f}`",
             f"• **ATR Volatility:** `{res.metrics.get('atr_pct', 0.0):.3f}%`",
@@ -3817,7 +3952,24 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **Action:** {sw_text}",
             f"• **Rationale:** {res.reason.replace('_', ' ')}",
         ]
-        await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
+        markup = build_regime_keyboard(True, res.current_profile)
+        await safe_reply(update, "\n".join(lines), parse_mode="Markdown", reply_markup=markup)
+        return
+
+    if sub in ("manual", "lock", "off"):
+        set_regime_auto(False)
+        if arbiter is not None:
+            arbiter.profile_locked = True
+        target = args[1].lower() if len(args) > 1 else None
+        if target and target in DEFAULT_PROFILES:
+            apply_profile(target, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
+            msg = f"🔒 Strategy profile manually switched and locked to `{target}` (MANUAL mode)."
+        else:
+            cur_p = get_current_profile().name
+            msg = f"🔒 Active profile `{cur_p}` locked in MANUAL mode. Auto-switching disabled."
+        cur_prof = get_current_profile()
+        markup = build_regime_keyboard(False, cur_prof.name)
+        await safe_reply(update, f"{msg}\n\nUse `/regime auto` or buttons below to re-enable adaptive switching.", parse_mode="Markdown", reply_markup=markup)
         return
 
     if sub in ("calibrate", "weights", "sharpe"):
@@ -3829,19 +3981,36 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for agent, w in new_weights.items():
             lines.append(f"• `{agent:<15}` : **{w:.2f}x**")
         lines.append("\nWeights applied to active multi-agent Arbiter.")
-        await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
+        markup = build_regime_keyboard(is_regime_auto(), get_current_profile().name)
+        await safe_reply(update, "\n".join(lines), parse_mode="Markdown", reply_markup=markup)
         return
 
     if sub in ("switch", "set") and len(args) > 1:
         target = args[1].lower()
         if target in DEFAULT_PROFILES:
-            apply_profile(target, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
-            await safe_reply(update, f"✅ Active strategy profile switched to `{target}`.", parse_mode="Markdown")
+            set_regime_auto(False)
+            if arbiter is not None:
+                arbiter.profile_locked = True
+            apply_profile(target, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
+            markup = build_regime_keyboard(False, target)
+            await safe_reply(update, f"✅ Active strategy profile switched to `{target}` (MANUAL locked).", parse_mode="Markdown", reply_markup=markup)
         else:
             valid = ", ".join(f"`{k}`" for k in DEFAULT_PROFILES.keys())
             await safe_reply(update, f"❌ Unknown profile `{target}`. Valid: {valid}", parse_mode="Markdown")
         return
 
+    # Direct profile name as argument (e.g. /regime scalp or /regime balanced)
+    if sub in DEFAULT_PROFILES:
+        target = sub
+        set_regime_auto(False)
+        if arbiter is not None:
+            arbiter.profile_locked = True
+        apply_profile(target, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config, lock=True)
+        markup = build_regime_keyboard(False, target)
+        await safe_reply(update, f"✅ Active strategy profile switched to `{target}` (MANUAL locked).", parse_mode="Markdown", reply_markup=markup)
+        return
+
+    # Default: Show full dashboard with both AUTO & MANUAL options
     now_r = time.time()
     cached_r = _REGIME_CACHE.get("regime")
     if cached_r and (now_r - cached_r[0] < 30.0):
@@ -3853,24 +4022,12 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         metrics = compute_regime_indicators(df1) if df1 is not None else {"adx": 22.0, "atr_pct": 0.15, "bb_width": 0.005}
         regime_desc = "Strong Trend" if metrics["adx"] >= 28 else ("Range / Chop" if metrics["adx"] < 20 else "Balanced Consolidation")
         _REGIME_CACHE["regime"] = (now_r, (metrics, regime_desc))
-    cur_prof = get_current_profile()
 
-    lines = [
-        f"📊 **Market Regime & Strategy Profile**",
-        f"━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"• **Active Profile:** `{cur_prof.name.upper()}` ({cur_prof.description})",
-        f"• **Detected Regime:** `{regime_desc}`",
-        f"• **Trend Strength (ADX):** `{metrics['adx']:.1f}`",
-        f"• **ATR Volatility:** `{metrics['atr_pct']:.3f}%`",
-        f"• **Bollinger Width:** `{metrics['bb_width']:.4f}`",
-        f"• **Min Agreement:** `{cur_prof.min_agreement}` agents (Min Score: `{cur_prof.min_score}`)",
-        f"",
-        f"**Controls:**",
-        f"• `/regime auto` — Evaluate regime and auto-switch profile",
-        f"• `/regime calibrate` — Recalibrate weights by Rolling Sharpe",
-        f"• `/regime switch <profile>` — Switch profile (`scalp` / `swing` / `gold_only` / `crypto` / `balanced`)",
-    ]
-    await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
+    cur_prof = get_current_profile()
+    is_auto = is_regime_auto()
+    text = format_regime_dashboard(metrics, regime_desc, cur_prof, is_auto)
+    markup = build_regime_keyboard(is_auto, cur_prof.name)
+    await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
 
 
 async def session_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3947,7 +4104,7 @@ async def kelly_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Portfolio Equity:** `${eq:,.2f}` (Leverage: {risk_mgr.get_leverage():.0f}x)",
         f"• **Symbol:** `{sym}` @ `${px:,.2f}`",
         f"• **Kelly Mode:** `{kelly_res.fraction_mode}`",
-        f"• **Raw Kelly f*:** `{kelly_res.raw_kelly_fraction:.2%}`",
+        f"• **Raw Kelly Fraction:** `{kelly_res.raw_kelly_fraction:.2%}`",
         f"• **Applied Sizing:** `{kelly_res.applied_kelly_fraction:.2%}` (`${kelly_res.dollar_risk:,.2f}` risk)",
         f"• **Recommended Lots:** `{kelly_res.recommended_lots}` lots",
         f"• **Model Win Rate:** `{kelly_res.win_rate:.1%}` | Payoff: `{kelly_res.payoff_ratio:.2f}:1`",

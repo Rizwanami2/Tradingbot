@@ -65,6 +65,38 @@ class TestLiveUnifiedIntegration(unittest.IsolatedAsyncioTestCase):
         call_text = self.message.reply_text.call_args[0][0]
         self.assertIn("switched to `scalp`", call_text)
 
+    async def test_regime_command_manual(self):
+        from config import is_regime_auto
+        self.context.args = ["manual", "balanced"]
+        await regime_command(self.update, self.context)
+        self.assertTrue(self.message.reply_text.called)
+        call_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("MANUAL", call_text)
+        self.assertFalse(is_regime_auto())
+
+    def test_build_regime_keyboard_has_both_modes_and_profiles(self):
+        from main import build_regime_keyboard
+        markup = build_regime_keyboard(is_auto=True, current_profile="scalp")
+        buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertIn("regime:mode:auto", buttons)
+        self.assertIn("regime:mode:manual", buttons)
+        self.assertIn("regime:set:scalp", buttons)
+        self.assertIn("regime:set:balanced", buttons)
+        self.assertIn("regime:set:swing", buttons)
+        self.assertIn("regime:set:gold_only", buttons)
+        self.assertIn("regime:set:crypto", buttons)
+        self.assertIn("regime:eval", buttons)
+
+    async def test_kelly_command_formatting_safe(self):
+        from main import kelly_command
+        self.context.args = ["XAUUSD"]
+        await kelly_command(self.update, self.context)
+        self.assertTrue(self.message.reply_text.called)
+        call_text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Fractional Kelly Criterion", call_text)
+        self.assertIn("Raw Kelly Fraction", call_text)
+        self.assertNotIn("Raw Kelly f*", call_text)
+
     async def test_session_command_default(self):
         self.context.args = []
         await session_command(self.update, self.context)

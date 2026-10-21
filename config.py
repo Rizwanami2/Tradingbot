@@ -6,7 +6,7 @@ Loads configuration from environment variables and an optional .env file.
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 ROOT_DIR = Path(__file__).resolve().parent
 _STRATEGIES_DIR = str(ROOT_DIR / "strategies")
@@ -466,8 +466,69 @@ SCALP_STOP_LOSS_USD = _safe_float(os.getenv("BOT_SCALP_SL_USD"), 3.0)
 SCALP_STOP_LOSS_PCT = _safe_float(os.getenv("BOT_SCALP_SL_PCT"), 0.12)
 SCALP_ENABLED = os.getenv("BOT_SCALP", "true").lower() in ("true", "1", "yes", "on")
 CURRENT_PROFILE = os.getenv("BOT_PROFILE", "scalp").lower()
-PROFILE_LOCKED = os.getenv("BOT_PROFILE_LOCKED", "true" if os.getenv("BOT_PROFILE", "scalp").lower() == "scalp" else "false").lower() in ("true", "1", "yes", "on")
+
+_REGIME_SETTINGS_PERSIST_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".runtime",
+    "regime_settings.json",
+)
+
+
+def _load_persisted_regime_settings() -> Dict[str, Any]:
+    try:
+        p = Path(_REGIME_SETTINGS_PERSIST_FILE)
+        if p.is_file():
+            import json
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_persisted_regime_settings(settings: Dict[str, Any]) -> None:
+    try:
+        p = Path(_REGIME_SETTINGS_PERSIST_FILE)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        from datetime import datetime, timezone
+        payload = dict(settings)
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
+_persisted_regime = _load_persisted_regime_settings()
+if "is_auto" in _persisted_regime:
+    PROFILE_LOCKED = not bool(_persisted_regime["is_auto"])
+else:
+    PROFILE_LOCKED = os.getenv("BOT_PROFILE_LOCKED", "true" if os.getenv("BOT_PROFILE", "scalp").lower() == "scalp" else "false").lower() in ("true", "1", "yes", "on")
+
 REGIME_AUTO_UNLOCKED = os.getenv("BOT_REGIME_AUTO_UNLOCKED", "false").lower() in ("true", "1", "yes", "on")
+
+
+def is_regime_auto() -> bool:
+    """Return True if regime auto-switching is enabled (adaptive), False if manual (locked)."""
+    global PROFILE_LOCKED
+    persisted = _load_persisted_regime_settings()
+    if "is_auto" in persisted:
+        return bool(persisted["is_auto"])
+    return not bool(PROFILE_LOCKED)
+
+
+def set_regime_auto(is_auto: bool, persist: bool = True) -> bool:
+    """Configure regime mode: True for AUTO (adaptive), False for MANUAL (locked)."""
+    global PROFILE_LOCKED
+    PROFILE_LOCKED = not bool(is_auto)
+    if persist:
+        cur = _load_persisted_regime_settings()
+        cur["is_auto"] = bool(is_auto)
+        _save_persisted_regime_settings(cur)
+    return bool(is_auto)
 
 # Scalp Trailing Stop Loss Configuration
 SCALP_TRAIL_ENABLED = os.getenv("BOT_SCALP_TRAIL_ENABLED", "true").lower() in ("true", "1", "yes", "on")
