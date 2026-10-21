@@ -792,6 +792,15 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertTrue(ok_scalp)
         self.assertIn("spread ok", reason_scalp)
 
+        # In scalp mode with min_effective_rr=1.15 (accuracy mode threshold):
+        ok_acc_low, r_acc_low = spread_slippage_veto(spread=0.0, atr=1.0, expected_rr=1.0, min_effective_rr=1.15, is_scalp=True)
+        self.assertFalse(ok_acc_low)
+        self.assertIn("kills R:R", r_acc_low)
+
+        ok_acc_high, r_acc_high = spread_slippage_veto(spread=0.0, atr=1.0, expected_rr=1.25, min_effective_rr=1.15, is_scalp=True)
+        self.assertTrue(ok_acc_high)
+        self.assertIn("spread ok", r_acc_high)
+
     def test_scalp_concession_candle_and_volume(self):
         """Verify candle quality and volume node concessions in scalp mode."""
         from signal_quality import candle_quality, session_volume_node_ok

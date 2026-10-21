@@ -171,7 +171,11 @@ async def live_monitoring_worker(
             arbiter.scalp_tp_pct = getattr(_active_prof, "scalp_tp_pct", 0.10)
             arbiter.scalp_tp_usd = getattr(_active_prof, "scalp_tp_usd", 2.50)
             arbiter.scalp_sl_usd = getattr(_active_prof, "scalp_sl_usd", 3.00)
-            arbiter.min_effective_rr = 0.85 if getattr(_active_prof, "is_scalp", False) else 1.4
+            acc_on = str(getattr(config, "ACCURACY_MODE", "") or os.getenv("BOT_ACCURACY_MODE", "")).lower() in ("true", "1", "yes", "on")
+            if getattr(_active_prof, "is_scalp", False):
+                arbiter.min_effective_rr = 1.15 if acc_on else max(0.85, float(getattr(_active_prof, "min_rr", 1.0) or 1.0) - 0.15)
+            else:
+                arbiter.min_effective_rr = 1.4
             if hasattr(engine, "scalp_mode"):
                 engine.scalp_mode = getattr(_active_prof, "is_scalp", False)
             if hasattr(engine, "fast_market_fill"):

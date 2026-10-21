@@ -291,7 +291,11 @@ def apply_profile(
         arbiter.MIN_AGREEMENT = p.min_agreement
         arbiter.MIN_SCORE = p.min_score
         arbiter.min_rr = p.min_rr
-        arbiter.min_effective_rr = 0.85 if getattr(p, "is_scalp", False) else 1.4
+        acc_on = str(getattr(config, "ACCURACY_MODE", "") or os.getenv("BOT_ACCURACY_MODE", "")).lower() in ("true", "1", "yes", "on")
+        if getattr(p, "is_scalp", False):
+            arbiter.min_effective_rr = 1.15 if acc_on else max(0.85, float(getattr(p, "min_rr", 1.0) or 1.0) - 0.15)
+        else:
+            arbiter.min_effective_rr = 1.4
         arbiter.require_killzone = p.require_killzone
         arbiter.allow_asian = p.allow_asian
         arbiter.strict_htf = p.strict_htf

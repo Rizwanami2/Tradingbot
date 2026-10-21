@@ -93,7 +93,7 @@ def spread_slippage_veto(
         return False, f"spread {ratio:.2%} ATR > limit {spread_limit:.0%}"
     # rough R:R degradation
     effective_rr = expected_rr * (1.0 - (slippage_atr + ratio))
-    rr_threshold = 0.80 if is_scalp else min_effective_rr
+    rr_threshold = (min_effective_rr if min_effective_rr != 1.4 else 0.80) if is_scalp else min_effective_rr
     if effective_rr < rr_threshold:
         return False, f"slippage+spread kills R:R to ~{effective_rr:.2f}"
     return True, f"spread ok ({ratio:.2%} ATR)"
