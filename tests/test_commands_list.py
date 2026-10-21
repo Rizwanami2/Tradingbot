@@ -229,6 +229,21 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/train", text)
         self.assertIn("/relearn", text)
 
+        # Combined category
+        self.ctx.args = ["combined"]
+        await help_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Combined Multi-Agent System & Consensus", text)
+        self.assertIn("/combined", text)
+        self.assertIn("/cooldown", text)
+
+        # Cooldown category filter
+        self.ctx.args = ["cooldown"]
+        await help_command(self.update, self.ctx)
+        text = self.message.reply_text.call_args[0][0]
+        self.assertIn("Risk & Safety Management", text)
+        self.assertIn("/cooldown", text)
+
     async def test_start_command(self):
         await start_command(self.update, self.ctx)
         self.message.reply_text.assert_called_once()
@@ -708,6 +723,22 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         handled = await handle_command_menu_callback(update_mock, self.ctx)
         self.assertTrue(handled)
         self.assertIn("TradingBot System Configuration & Settings", query_mock.edit_message_text.call_args[0][0])
+
+        # Test combined category callback
+        query_mock.data = "cmd:cat:combined"
+        handled = await handle_command_menu_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+        self.assertIn("Combined Multi-Agent System", query_mock.edit_message_text.call_args[0][0])
+
+        # Test combined run callback
+        query_mock.data = "cmd:run:combined"
+        handled = await handle_command_menu_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
+
+        # Test cooldown run callback
+        query_mock.data = "cmd:run:cooldown"
+        handled = await handle_command_menu_callback(update_mock, self.ctx)
+        self.assertTrue(handled)
 
     async def test_unknown_command_with_smart_suggestions(self):
         self.message.text = "/signals"

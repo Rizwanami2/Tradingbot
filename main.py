@@ -326,32 +326,93 @@ def format_price_string(info: Dict) -> str:
     )
 
 
+def build_cooldown_keyboard(limiter=None) -> InlineKeyboardMarkup:
+    """Build interactive action buttons for Cooldown & Anti-Spam."""
+    try:
+        from anti_spam import get_anti_spam_limiter
+        limiter = limiter or get_anti_spam_limiter()
+        is_spam = getattr(limiter, "spam_trade_enabled", False)
+        mode = getattr(limiter, "mode", "auto")
+    except Exception:
+        is_spam = False
+        mode = "auto"
+
+    btn_spam = (
+        InlineKeyboardButton("🔒 Spam OFF (Protect)", callback_data="cd:spam:off")
+        if is_spam
+        else InlineKeyboardButton("⚡ Spam ON (Burst)", callback_data="cd:spam:on")
+    )
+    btn_mode = (
+        InlineKeyboardButton("🛡️ Switch to Strict", callback_data="cd:mode:on")
+        if mode == "auto"
+        else InlineKeyboardButton("🤖 Switch to Auto", callback_data="cd:mode:auto")
+    )
+    return InlineKeyboardMarkup([
+        [btn_spam, btn_mode],
+        [
+            InlineKeyboardButton("🔄 Reset Cooldowns", callback_data="cd:reset"),
+            InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+            InlineKeyboardButton("🛡️ Risk Menu", callback_data="cmd:cat:risk"),
+        ],
+    ])
+
+
+def build_combined_keyboard() -> InlineKeyboardMarkup:
+    """Build interactive action buttons for Combined Bot Agent."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 CBA Metrics", callback_data="combined:metrics"),
+            InlineKeyboardButton("⏱️ Cooldown Status", callback_data="cmd:run:cooldown"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Signal BTC", callback_data="cmd:run:signal_btc"),
+            InlineKeyboardButton("🟡 Signal Gold", callback_data="cmd:run:signal_gold"),
+        ],
+        [
+            InlineKeyboardButton("🧠 AI Suite", callback_data="cmd:run:ai"),
+            InlineKeyboardButton("📜 Strategy Board", callback_data="cmd:run:board"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+            InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+        ],
+    ])
+
+
 def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
     """Build modern interactive category navigation keyboard for commands."""
     cat = (active_cat or "main").lower().strip()
     if cat in ("main", "all", "menu", ""):
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📊 Market Data", callback_data="cmd:cat:market"),
+                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
                 InlineKeyboardButton("🎯 Signals", callback_data="cmd:cat:signals"),
             ],
             [
                 InlineKeyboardButton("⚡ Execution", callback_data="cmd:cat:execution"),
-                InlineKeyboardButton("🏦 MT5 & Brokers", callback_data="cmd:cat:mt5"),
+                InlineKeyboardButton("🛡️ Risk & Cooldown", callback_data="cmd:cat:risk"),
             ],
             [
-                InlineKeyboardButton("🛡️ Risk & Safety", callback_data="cmd:cat:risk"),
+                InlineKeyboardButton("🏦 MT5 & Brokers", callback_data="cmd:cat:mt5"),
                 InlineKeyboardButton("🧠 Strategy Brain", callback_data="cmd:cat:ai"),
             ],
             [
+                InlineKeyboardButton("📊 Market Data", callback_data="cmd:cat:market"),
                 InlineKeyboardButton("📈 Backtest & Research", callback_data="cmd:cat:research"),
-                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
             ],
             [
                 InlineKeyboardButton("⚡ Quick Start", callback_data="cmd:cat:quick"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
+            ],
+            [
                 InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
             ],
         ])
+    elif cat in ("combined", "cba", "combine", "together", "multiagent"):
+        return build_combined_keyboard()
     elif cat in ("market", "quotes"):
         return InlineKeyboardMarkup([
             [
@@ -378,8 +439,8 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🔍 Quality Score", callback_data="cmd:run:quality"),
             ],
             [
+                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-                InlineKeyboardButton("⚡ Execution Menu", callback_data="cmd:cat:execution"),
             ],
         ])
     elif cat in ("execution", "orders", "trades"):
@@ -393,7 +454,7 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📜 Closed History", callback_data="cmd:run:closed"),
             ],
             [
-                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
+                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
                 InlineKeyboardButton("🛡️ Risk Menu", callback_data="cmd:cat:risk"),
             ],
         ])
@@ -412,15 +473,19 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
             ],
         ])
-    elif cat in ("risk", "safety"):
+    elif cat in ("risk", "safety", "limits", "cooldown", "spam", "cd", "antispam"):
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🛡️ Portfolio Status", callback_data="cmd:run:status"),
-                InlineKeyboardButton("❤️ Health Telemetry", callback_data="cmd:run:health"),
+                InlineKeyboardButton("⏱️ Cooldown Status", callback_data="cmd:run:cooldown"),
             ],
             [
+                InlineKeyboardButton("⚡ Spam Burst Mode", callback_data="cmd:run:spam"),
                 InlineKeyboardButton("🎯 Sizing & Risk", callback_data="cmd:run:risk"),
-                InlineKeyboardButton("⚡ Scalp Mode", callback_data="auto:scalp"),
+            ],
+            [
+                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
+                InlineKeyboardButton("❤️ Health Telemetry", callback_data="cmd:run:health"),
             ],
             [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
@@ -430,16 +495,20 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
     elif cat in ("ai", "brain", "learner"):
         return InlineKeyboardMarkup([
             [
+                InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
                 InlineKeyboardButton("🧠 Brain Status", callback_data="learner:status"),
-                InlineKeyboardButton("📜 Learned Rules", callback_data="learner:rules"),
             ],
             [
+                InlineKeyboardButton("📜 Learned Rules", callback_data="learner:rules"),
                 InlineKeyboardButton("🔍 Mined Flaws", callback_data="learner:flaws"),
+            ],
+            [
                 InlineKeyboardButton("🔓 Clear Hour Bans", callback_data="learner:clearhours"),
+                InlineKeyboardButton("🧹 Reset Baseline", callback_data="learner:reset"),
             ],
             [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
-                InlineKeyboardButton("🧹 Reset Baseline", callback_data="learner:reset"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
             ],
         ])
     elif cat in ("research", "backtest"):
@@ -526,7 +595,25 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
     """Generate categorized command catalog text with interactive inline keyboard."""
     cat = (cat or "main").lower().strip()
 
-    if cat in ("market", "price", "quotes", "levels", "chart", "charts", "matrix", "heatmap"):
+    if cat in ("combined", "cba", "combine", "together", "multiagent", "arbiter"):
+        text = (
+            "🤖 **Combined Multi-Agent System & Consensus:**\n"
+            "• `/combined` — Live status, FIT skills gate (Session, Spread, Risk, Structure) & metrics\n"
+            "• `/combined metrics` — Detailed execution win rates, journal R-multiples & performance\n"
+            "• `/cooldown [sec|auto|on|off|reset]` — Anti-spam single-direction & adaptive rate limits\n"
+            "• `/spam [on|off]` — High-speed burst mode (bypasses cooldowns, max 6 positions)\n"
+            "• `/signal [SYM]` — 18-Agent institutional consensus execution (all strategies working together)\n"
+            "• `/autotrade [on|off|scalp]` — 24/7 continuous autonomous multi-agent execution\n"
+            "• `/ai [status|mode|auto|manual]` — AI Advanced Suite gating & safety circuit breakers\n"
+            "• `/brain` — Strategy brain knowledge, learned rules & flaw bans\n"
+            "• `/veto [on|off]` — Autonomous learner trade veto filter\n"
+            "• `/board` — Strategy board & agent standings\n"
+            "• `/agents` — Agent performance rankings & stats\n\n"
+            "💡 _All 18 institutional strategies work together under unified consensus; individual/single mode is superseded by CombinedBotAgent._"
+        )
+        return text, build_help_keyboard("combined")
+
+    elif cat in ("market", "price", "quotes", "levels", "chart", "charts", "matrix", "heatmap"):
         text = (
             "📊 **Market Data & Live Quotes:**\n"
             "• `/matrix [SYM]` or `/heatmap` — Multi-Timeframe Trend & Volatility Heatmap Matrix (M1..D1)\n"
@@ -540,10 +627,11 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
     elif cat in ("signal", "signals", "setup", "confluence"):
         text = (
             "🎯 **Signals & Strategy Confluence:**\n"
-            "• `/signal [SYM]` — 7-Agent consensus & optimal entry zone\n"
+            "• `/signal [SYM]` — 18-Agent institutional consensus & optimal entry zone\n"
             "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
             "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n"
-            "• `/matrix [SYM]` — Multi-Timeframe Trend & Volatility Confluence Matrix"
+            "• `/matrix [SYM]` — Multi-Timeframe Trend & Volatility Confluence Matrix\n"
+            "• `/combined` — Unified CombinedBotAgent FIT skills & metrics"
         )
         return text, build_help_keyboard("signals")
 
@@ -562,7 +650,7 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
         )
         return text, build_help_keyboard("execution")
 
-    elif cat in ("mt5", "broker", "brokers", "balance", "wallet", "equity", "oanda", "ccxt", "alpaca", "switch", "live", "delta", "bridge"):
+    elif cat in ("mt5", "broker", "brokers", "balance", "wallet", "equity", "switch", "live", "delta", "bridge"):
         text = (
             "🏦 **MetaTrader 5 & Broker Accounts:**\n"
             "• `/bridge [ping|test|deploy|on|off|dir]` — MT5 EA Bridge diagnostics & auto-deploy\n"
@@ -580,7 +668,7 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
         )
         return text, build_help_keyboard("mt5")
 
-    elif cat in ("risk", "safety", "limits"):
+    elif cat in ("risk", "safety", "limits", "cooldown", "spam", "cd", "antispam"):
         text = (
             "🛡️ **Risk & Safety Management:**\n"
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
@@ -613,6 +701,7 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
     elif cat in ("ai", "brain", "learner", "agent", "agents"):
         text = (
             "🧠 **Autonomous Brain & Multi-Agent Learning:**\n"
+            "• `/combined` — CombinedBotAgent FIT skills & metrics\n"
             "• `/ai [status|mode|manual|auto|override|reset|help]` — AI Advanced Suite & manual controls\n"
             "• `/board` — Strategy board & agent standings\n"
             "• `/journal` — Trade journal analytics & history\n"
@@ -622,7 +711,6 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/brain` — Strategy brain knowledge, learned rules & win rates\n"
             "• `/learner [rules|clearhours]` — View strategy rules & hour statistics\n"
             "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
-            "• `/combined` — CombinedBotAgent FIT skills & metrics\n"
             "• `/train [heavy|quick]` — Multi-asset model & backtest training\n"
             "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n"
             "• `/reset` — Clear conversation context\n"
@@ -635,10 +723,11 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "⚡ **TradingBot Quick Start Guide**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "1️⃣ **Analyze Setups:** Run `/signal btc` or `/signal gold` for multi-agent confluence\n"
-            "2️⃣ **Automate Trading:** Run `/autotrade on` (trades BTC & Gold automatically)\n"
-            "3️⃣ **Monitor PnL:** Check `/positions` for live profit and dynamic trailing stops\n"
-            "4️⃣ **Manage Risk:** Use `/risk` and `/settings` to configure lot sizing, leverage & stop buffers\n"
-            "5️⃣ **Connect Broker:** Use `/mt5` for MT5 Live or `/delta` for Delta India\n\n"
+            "2️⃣ **Combined Status:** Run `/combined` to inspect active FIT gates & multi-agent metrics\n"
+            "3️⃣ **Automate Trading:** Run `/autotrade on` (trades BTC & Gold automatically)\n"
+            "4️⃣ **Cooldown & Protection:** Configure with `/cooldown` or burst with `/spam on`\n"
+            "5️⃣ **Monitor PnL:** Check `/positions` for live profit and dynamic trailing stops\n"
+            "6️⃣ **Connect Broker:** Use `/mt5` for MT5 Live or `/delta` for Delta India\n\n"
             "💡 _Tap any button below to jump straight in:_"
         )
         return text, build_help_keyboard("quick")
@@ -647,6 +736,10 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
         text = (
             "📖 **TradingBot Command Center**\n"
             "_Institutional Multi-Agent Paper & MT5 Trading System_\n\n"
+            "🤖 **Combined Multi-Agent System (All Agents Working Together):**\n"
+            "• `/combined` — Unified CombinedBotAgent live status, FIT skills & metrics\n"
+            "• `/cooldown [sec|auto|on|off|reset]` — Entry, loss & anti-spam cooldowns (Auto & Manual)\n"
+            "• `/spam [on|off]` — Rapid-fire burst mode (max 6 trades, cooldowns bypassed)\n\n"
             "📊 **Market Data & Live Quotes:**\n"
             "• `/chart [btc|gold]` — MT5 Live Candlestick Chart with pivots & trend\n"
             "• `/price [SYM]` — Live mark price, 24h change & stats\n"
@@ -654,7 +747,7 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/news [SYM]` — Macro calendar & economic sentiment\n"
             "• `/ask [question]` or `/chat [question]` — AI institutional trading assistant (uses MT5 live chart)\n\n"
             "🎯 **Signals & Strategy Confluence:**\n"
-            "• `/signal [SYM]` — 9-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP, MTF-FVG, Asian)\n"
+            "• `/signal [SYM]` — 18-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP, MTF-FVG, Asian)\n"
             "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
             "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n"
             "• `/matrix [SYM]` or `/heatmap` — Multi-Timeframe Trend & Volatility Confluence Matrix\n\n"
@@ -717,7 +810,7 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
             "• `/train [heavy|quick]` — Deep multi-asset model & autonomous training\n"
             "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n\n"
-            "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`, `/commands ai`_"
+            "_Filter: `/commands combined`, `/commands risk`, `/commands cooldown`, `/commands signals`, `/commands execution`, `/commands mt5`, `/commands delta`, `/commands ai`, `/commands market`, `/commands backtest`_"
         )
         return text, build_help_keyboard("main")
 
@@ -736,7 +829,11 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     markup = InlineKeyboardMarkup([
         [
+            InlineKeyboardButton("🤖 Combined Agent", callback_data="cmd:cat:combined"),
             InlineKeyboardButton("⚡ Signal BTC", callback_data="cmd:run:signal_btc"),
+        ],
+        [
+            InlineKeyboardButton("⏱️ Cooldown Status", callback_data="cmd:run:cooldown"),
             InlineKeyboardButton("🟡 Signal Gold", callback_data="cmd:run:signal_gold"),
         ],
         [
@@ -1012,9 +1109,10 @@ async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
 
         report = limiter.get_status_report(engine=engine)
-        await update.message.reply_text(report, parse_mode="Markdown")
+        markup = build_cooldown_keyboard(limiter)
+        await safe_reply(update, report, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
-        await update.message.reply_text(f"Anti-spam command error: {e}")
+        await safe_reply(update, f"Anti-spam command error: {e}", parse_mode=None)
 
 
 async def spam_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1087,7 +1185,8 @@ async def combined_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "💡 _All systems combined and synchronized across every agent._"
             )
-        await safe_reply(update, msg, parse_mode="Markdown")
+        markup = build_combined_keyboard()
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
         await safe_reply(update, f"Combined agent error: {e}", parse_mode=None)
 
@@ -2387,6 +2486,26 @@ async def handle_command_menu_callback(data: Any, update: Optional[Update] = Non
         elif action == "cooldown":
             ctx.args = []
             await cooldown_command(update, ctx)
+        elif action == "combined":
+            ctx.args = []
+            await combined_command(update, ctx)
+        elif action == "spam":
+            ctx.args = []
+            await spam_command(update, ctx)
+        elif action == "ai":
+            ctx.args = []
+            try:
+                from telegram_ai import ai_command
+                await ai_command(update, ctx)
+            except Exception as e:
+                await query.message.reply_text(f"AI error: {e}")
+        elif action == "board":
+            ctx.args = []
+            try:
+                from telegram_feature_pack import board_command
+                await board_command(update, ctx)
+            except Exception as e:
+                await query.message.reply_text(f"Board error: {e}")
         elif action == "performance":
             ctx.args = []
             try:
@@ -2410,6 +2529,45 @@ async def autotrade_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_T
     except Exception:
         pass
     data = str(query.data or "")
+
+    if data.startswith("cd:"):
+        try:
+            from anti_spam import get_anti_spam_limiter
+            limiter = get_anti_spam_limiter()
+            subaction = data.split(":", 1)[1]
+            if subaction == "spam:on":
+                limiter.set_spam_mode(True, max_trades=6, engine=engine)
+                await query.message.reply_text("⚡ **Spam Trade Mode ACTIVATED** (Max 6, no cooldown)", parse_mode="Markdown")
+            elif subaction == "spam:off":
+                limiter.set_spam_mode(False, engine=engine)
+                await query.message.reply_text("🔒 **Spam Trade Mode DEACTIVATED** (Protected mode)", parse_mode="Markdown")
+            elif subaction == "mode:auto":
+                limiter.set_mode("auto")
+                await query.message.reply_text("🤖 **Anti-Spam Mode set to AUTO (Adaptive)**", parse_mode="Markdown")
+            elif subaction == "mode:on":
+                limiter.set_mode("on")
+                await query.message.reply_text("🛡️ **Anti-Spam Mode set to MANUAL ON**", parse_mode="Markdown")
+            elif subaction == "reset":
+                limiter.reset()
+                await query.message.reply_text("✅ Anti-spam cooldowns and loss streaks have been reset globally.", parse_mode="Markdown")
+
+            report = limiter.get_status_report(engine=engine)
+            markup = build_cooldown_keyboard(limiter)
+            try:
+                await query.edit_message_text(report, parse_mode="Markdown", reply_markup=markup)
+            except Exception:
+                pass
+            return
+        except Exception as _cd_err:
+            logger.warning("cooldown callback error: %s", _cd_err)
+
+    if data == "combined:metrics":
+        try:
+            ctx.args = ["metrics"]
+            await combined_command(update, ctx)
+            return
+        except Exception as _cba_err:
+            logger.warning("combined metrics callback error: %s", _cba_err)
 
     if data.startswith("cmd:") or data.startswith("settings:"):
         try:
@@ -4481,7 +4639,7 @@ def run_cli_interactive():
             break
         parts = cmd.split()
         name = parts[0].lower().lstrip("/")
-        if name in ("signal", "single"):
+        if name in ("signal", "signals"):
             sym = parts[1].upper() if len(parts) > 1 else config.DEFAULT_SYMBOL
             res = evaluate_symbol(symbol=sym, source=config.DEFAULT_DATA_SOURCE)
             print(res.get("status"), res.get("signal"))
@@ -5418,12 +5576,13 @@ def run_cli_interactive():
                 print(f"Settings error: {e}")
         elif name in ("help", "commands", "cmd", "menu", "list", "all"):
             print(
-                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, train [heavy|quick], relearn [SYM], ask [TEXT], settings, reset, exit\n\n"
+                "Commands: signal [SYM], price [SYM], chart [SYM], levels [SYM], news [SYM], quality [SYM], positions, slots [CMD], autotrade on|off, close [SYM], cancel [SYM], closed, delta [CMD], balance [AMOUNT], mt5 [CMD], bridge [CMD], broker [MODE], switch [MODE], live [CMD], status, health, risk, resetrisk, leverage [LEV], lot [CMD], kelly [SYM], regime [SYM], session, cooldown [CMD], spam [on|off], combined [metrics], vstops, slippage, kill [on|off], backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], board, journal, agents, tiers, digest, replay [ID], export, setups, abooks, heal, brain, train [heavy|quick], relearn [SYM], ask [TEXT], settings, reset, exit\n\n"
                 "Commands by category:\n"
+                "🤖 Combined: combined [metrics], cooldown [sec|auto|on|off|reset], spam [on|off]\n"
                 "📊 Market: price [SYM], chart [SYM], levels [SYM], news [SYM]\n"
-                "🎯 Signals: signal [SYM], asignal [SYM] [profile], single [SYM], quality [SYM]\n"
+                "🎯 Signals: signal [SYM], asignal [SYM] [profile], quality [SYM]\n"
                 "⚡ Execution: positions, slots [auto|manual <1-6>], autotrade on|off, close [SYM|all], cancel [SYM], closed, delta [CMD], balance [AMOUNT], broker [MODE], switch [MODE], live [CMD], mt5 [CMD], bridge [CMD], vstops, slippage\n"
-                "🛡️ Risk: status, health, risk, resetrisk, leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
+                "🛡️ Risk: status, health, risk, resetrisk, cooldown [sec|auto|on|off|reset], spam [on|off], leverage [LEV], lot [auto|manual|<size>], kelly [SYM], regime [SYM], session, kill [on|off]\n"
                 "📈 Research: backtest [BARS] [SYM], abacktest [MODE] [BARS] [SYM], performance, profile [NAME], replay [ID], export, setups, abooks, heal\n"
                 "🧠 Autonomous AI: board, journal, agents, tiers, digest, brain, train [heavy|quick], relearn [SYM|ALL]\n"
                 "⚙️ Settings: settings, config (view & configure active system settings)\n"
@@ -5835,8 +5994,11 @@ def main():
         try:
             from telegram import BotCommand
             bot_commands = [
-                # Navigation & Guide
+                # Combined Multi-Agent & Navigation
                 BotCommand("start", "Start bot & interactive overview"),
+                BotCommand("combined", "Combined Bot Agent & multi-agent metrics"),
+                BotCommand("cooldown", "Configure entry, loss & anti-spam cooldowns"),
+                BotCommand("spam", "Toggle spam trade burst mode (max 6 trades)"),
                 BotCommand("help", "Full command center & user guide"),
                 BotCommand("commands", "Interactive catalog of all bot commands"),
                 BotCommand("menu", "Interactive command hub & category navigator"),
@@ -5847,7 +6009,7 @@ def main():
                 BotCommand("levels", "Key levels (PDH/PDL, pivots, 2Y S/R)"),
                 BotCommand("news", "Macro calendar & economic news sentiment"),
                 # Signals & Strategy
-                BotCommand("signal", "9-Agent consensus & optimal entry zone"),
+                BotCommand("signal", "18-Agent consensus & optimal entry zone"),
                 BotCommand("asignal", "Advanced SMC + CVD orderflow setup"),
                 BotCommand("quality", "Signal quality score & breakdown"),
                 # Execution & Positions
@@ -5880,9 +6042,6 @@ def main():
                 BotCommand("kelly", "Fractional Kelly lot sizing & portfolio VaR"),
                 BotCommand("regime", "Market regime detector & auto-switcher"),
                 BotCommand("session", "Session summary & killzones report"),
-                BotCommand("cooldown", "Configure entry, loss & anti-spam cooldowns"),
-                BotCommand("spam", "Toggle spam trade burst mode (max 6 trades)"),
-                BotCommand("combined", "Combined Bot Agent & FIT skills diagnostic"),
                 BotCommand("kill", "Emergency execution circuit breaker switch"),
                 # Backtesting & Research
                 BotCommand("backtest", "Fast backtest engine on historical data"),
@@ -5942,7 +6101,7 @@ def main():
     app.add_handler(CommandHandler("news", news_command))
 
     # Signals & Confluence
-    app.add_handler(CommandHandler(["signal", "single", "signals"], signal_command))
+    app.add_handler(CommandHandler(["signal", "signals"], signal_command))
     try:
         from telegram_advanced import asignal_command
         app.add_handler(CommandHandler("asignal", asignal_command))
