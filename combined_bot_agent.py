@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Combined Bot Agent — FIT skills gate for Tradingbot autotrade."""
+from __future__ import annotations
+
+import csv
+from dataclasses import dataclass
+from datetime import datetime, time, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+
+class Bias(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    CHOP = "CHOP"
+
+
+@dataclass
+class AgentConfig:
+    symbol: str = "XAUUSD"
+    tp_usd: float = 3.0
+    sl_usd: float = 2.5
+    trail_activation_usd: float = 1.20
+    trail_distance_usd: float = 0.70
+    risk_pct: float = 0.0035
+    max_open: int = 2
+    max_per_symbol: int = 1
+    daily_loss_pct: float = 0.015
+    daily_loss_r: float = 2.0
+    max_consec_losses: int = 3
+    min_rr: float = 1.0
+    max_spread_frac_of_tp: float = 0.30
+    london: Tuple[time, time] = (time(7, 0), time(10, 0))
+    overlap: Tuple[time, time] = (time(12, 0), time(16, 0))
+    news_window_min: int = 30
+    require_m1_align: bool = True
+    allow_break_retest: bool = True
+    journal_path: str = "data/combined_agent_journal.csv"
+    min_trades_kill: int = 30
+    kill_avg_r: float = 0.0
+
+
+@dataclass
+class AgentState:
+    equity_day_start: float = 10_000.0
+    equity_now: float = 10_000.0
+    consec_losses: int = 0
+    day_pnl: float = 0.0
+    day_r: float = 0.0
+    halted: bool = False
+    halt_reason: str = ""
+    live_opt_in: bool = False
+
+    def refresh_halt(self, cfg: AgentConfig) -> None:
+        if self.consec_losses >= cfg.max_consec_losses:
+            self.halted, self.halt_reason = True, f"consec_losses={self.consec_losses}"
+            return
+        if self.equity_day_start > 0:
+            dd = (self.equity_day_start - self.equity_now) / self.equity_day_start
+            if dd >= cfg.daily_loss_pct:
+                self.halted, self.halt_reason = True, f"daily_dd={dd:.2%}"
+                return
+        if self.day_r <= -abs(cfg.daily_loss_r):
+            self.halted, self.halt_reason = True, f"daily_r={self.day_r:.2f}"
+
+
+def _utc(now: Optional[datetime] = None) -> datetime:
+    if now is None:
+        return datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=timezone.utc)
+    return now.astimezone(timezone.utc)
+
+
+def _session(now: Optional[datetime], cfg: AgentConfig) -> str:
+    t = _utc(now).time().replace(tzinfo=None)
+    a, b = cfg.london
+    if a <= t < b:
+        return "london"
+    a, b = cfg.overlap
+    if a <= t < b:
+        return "london_ny"
+    return "off"
+
+
+class CombinedBotAgent:
+    """FIT-skill combined gate for autotrade signal path."""
+
+    def __init__(self, cfg: Optional[AgentConfig] = None, state: Optional[AgentState] = None):
+        self.cfg = cfg or AgentConfig()
+        self.state = state or AgentState()
+
+    def set_live_opt_in(self, enabled: bool) -> None:
+        self.state.live_opt_in = bool(enabled)
+
+    def _session_ok(self, now: Optional[datetime]) -> Tuple[bool, str]:
+        s = _session(now, self.cfg)
+        if s == "off":
+            return False, "session_off"
+        return True, s
+
+    def _news_ok(self, now: Optional[datetime], events: Sequence[datetime]) -> Tuple[bool, str]:
+        if not events:
+            return True, "no_news_list"
+        now = _utc(now)
+        w = self.cfg.news_window_min * 60
+        for ev in events:
+            if abs((now - _utc(ev)).total_seconds()) <= w:
+                return False, "news_window"
+        return True, "news_clear"
+
+    def _spread_ok(self, spread: float) -> Tuple[bool, str]:
+        budget = abs(self.cfg.tp_usd) * self.cfg.max_spread_frac_of_tp
+        if spread is None or spread < 0:
+            return False, "spread_invalid"
+        if spread > budget:
+            return False, f"spread>{budget:.2f}"
+        return True, "spread_ok"
+
+    def _risk_ok(self, open_trades: int, open_symbol: int) -> Tuple[bool, str]:
+        self.state.refresh_halt(self.cfg)
+        if self.state.halted:
+            return False, f"halt:{self.state.halt_reason}"
+        if open_trades >= self.cfg.max_open:
+            return False, "max_open"
+        if open_symbol >= self.cfg.max_per_symbol:
+            return False, "max_symbol"
+        return True, "risk_ok"
+
+    def _structure_ok(
+        self,
+        direction: str,
+        *,
+        htf_bias: str = "",
+        m1_dir: str = "",
+        setup: str = "",
+        is_fomo_midrange: bool = False,
+    ) -> Tuple[bool, str]:
+        if is_fomo_midrange:
+            return False, "fomo_midrange"
+        d = (direction or "").upper()
+        bias = (htf_bias or d).upper()
+        if bias in ("CHOP", "NONE", "FLAT"):
+            return False, "htf_chop"
+        if self.cfg.require_m1_align:
+            m1 = (m1_dir or d).upper()
+            longish = ("LONG", "BUY", "UP")
+            shortish = ("SHORT", "SELL", "DOWN")
+            if d in longish and m1 not in longish:
+                return False, "m1_not_aligned"
+            if d in shortish and m1 not in shortish:
+                return False, "m1_not_aligned"
+        su = (setup or "pullback").lower()
+        allowed = {"pullback", "sweep_reclaim", "sweep", "liquidity", ""}
+        if self.cfg.allow_break_retest:
+            allowed |= {"break_retest", "breakout"}
+        if su and su not in allowed and "pullback" not in su and "sweep" not in su:
+            # allow long reason strings containing pullback/sweep
+            if not any(k in su for k in ("pull", "sweep", "liquid", "trend", "scalp")):
+                return False, f"setup_blocked:{su[:40]}"
+        return True, "structure_ok"
+
+    def _apply_levels(self, sig: dict, direction: str, entry: float) -> dict:
+        sig = dict(sig)
+        d = direction.upper()
+        if d in ("LONG", "BUY"):
+            sig["sl"] = entry - self.cfg.sl_usd
+            sig["tp"] = entry + self.cfg.tp_usd
+        else:
+            sig["sl"] = entry + self.cfg.sl_usd
+            sig["tp"] = entry - self.cfg.tp_usd
+        sig["stop_loss"] = sig["sl"]
+        sig["tp1"] = sig["tp"]
+        sig["trail_activation_usd"] = self.cfg.trail_activation_usd
+        sig["trail_distance_usd"] = self.cfg.trail_distance_usd
+        risk = abs(entry - float(sig["sl"]))
+        reward = abs(float(sig["tp"]) - entry)
+        sig["rr"] = (reward / risk) if risk > 0 else 0.0
+        return sig
+
+    def size_mult(self, conviction: float = 0.6) -> float:
+        c = max(0.3, min(1.0, float(conviction or 0.6)))
+        return round(0.7 + 0.3 * c, 3)
+
+    def evaluate(
+        self,
+        sig: Optional[dict],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, dict, List[str]]:
+        reasons: List[str] = []
+        sig = dict(sig or {})
+        ctx = context or {}
+
+        if ctx.get("is_live") and not self.state.live_opt_in:
+            # allow autotrade on demo; only hard-block when caller marks live + no opt-in
+            # If is_live True and not opt-in: block
+            return False, sig, ["live_blocked_no_opt_in"]
+
+        now = ctx.get("now")
+        ok, why = self._session_ok(now)
+        if not ok:
+            return False, sig, [why]
+        reasons.append(f"session:{why}")
+
+        ok, why = self._news_ok(now, ctx.get("news_events") or [])
+        if not ok:
+            return False, sig, [why]
+
+        spread = float(ctx.get("spread") or sig.get("spread") or 0.0)
+        # If spread unknown (0), do not block — only block when measured wide
+        if spread > 0:
+            ok, why = self._spread_ok(spread)
+            if not ok:
+                return False, sig, [why]
+            reasons.append(why)
+
+        ok, why = self._risk_ok(
+            int(ctx.get("open_trades") or 0),
+            int(ctx.get("open_for_symbol") or 0),
+        )
+        if not ok:
+            return False, sig, [why]
+        reasons.append(why)
+
+        d_raw = sig.get("direction")
+        if hasattr(d_raw, "name"):
+            direction = d_raw.name
+        else:
+            direction = str(d_raw or ctx.get("direction") or "").upper()
+        if direction == "BUY":
+            direction = "LONG"
+        if direction == "SELL":
+            direction = "SHORT"
+
+        ok, why = self._structure_ok(
+            direction,
+            htf_bias=str(ctx.get("htf_bias") or sig.get("regime") or direction),
+            m1_dir=str(ctx.get("m1_direction") or direction),
+            setup=str(ctx.get("setup") or sig.get("setup") or "pullback"),
+            is_fomo_midrange=bool(ctx.get("is_fomo_midrange")),
+        )
+        if not ok:
+            return False, sig, [why]
+        reasons.append(why)
+
+        entry = float(sig.get("entry") or sig.get("entry_level") or ctx.get("entry") or 0.0)
+        if entry > 0:
+            sig = self._apply_levels(sig, direction, entry)
+            if float(sig.get("rr") or 0) < self.cfg.min_rr:
+                return False, sig, [f"rr<{self.cfg.min_rr}"]
+
+        conv = sig.get("conviction")
+        if isinstance(conv, dict):
+            conv = conv.get("score", 0.6)
+        mult = self.size_mult(float(conv or 0.6))
+        sig["combined_agent_size_mult"] = mult
+        sig["combined_agent"] = True
+        sig["combined_reasons"] = list(reasons)
+        reasons.append(f"size_mult={mult}")
+        return True, sig, reasons
+
+    def on_close(
+        self,
+        *,
+        pnl: float,
+        r_multiple: float,
+        direction: str = "",
+        entry: float = 0.0,
+        notes: str = "",
+    ) -> None:
+        if pnl >= 0:
+            self.state.consec_losses = 0
+        else:
+            self.state.consec_losses += 1
+        self.state.day_pnl += pnl
+        self.state.day_r += r_multiple
+        self.state.equity_now += pnl
+        self.state.refresh_halt(self.cfg)
+
+        path = Path(self.cfg.journal_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new = not path.exists()
+        with path.open("a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(["ts", "direction", "entry", "pnl", "r", "won", "notes"])
+            w.writerow([
+                _utc().isoformat(), direction, entry,
+                round(pnl, 4), round(r_multiple, 4), int(pnl >= 0), notes,
+            ])
+
+    def metrics(self) -> Dict[str, Any]:
+        path = Path(self.cfg.journal_path)
+        if not path.exists():
+            return {"n": 0, "avg_r": 0.0, "win_rate": 0.0}
+        with path.open(newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        if not rows:
+            return {"n": 0, "avg_r": 0.0, "win_rate": 0.0}
+        rs = [float(r["r"]) for r in rows]
+        wins = sum(1 for r in rs if r > 0)
+        n = len(rs)
+        return {
+            "n": n,
+            "avg_r": round(sum(rs) / n, 4),
+            "win_rate": round(wins / n, 4),
+            "halted": self.state.halted,
+            "halt_reason": self.state.halt_reason,
+        }
