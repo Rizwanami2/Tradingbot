@@ -1061,6 +1061,23 @@ class ExecutionEngine:
         close = float(candle["close"])
         curr_price = close
 
+        # Synchronize price cache and broker mark price with incoming market tick
+        now = time.time()
+        if hasattr(self, "_price_cache"):
+            self._price_cache[sym] = (now, curr_price)
+            if sym.endswith("USDT"):
+                self._price_cache[sym[:-1]] = (now, curr_price)
+            elif sym.endswith("USD"):
+                self._price_cache[sym + "T"] = (now, curr_price)
+            if any(x in sym for x in ("XAU", "GOLD", "GC")):
+                for k in ("XAUUSD", "GOLD", "XAUUSD.m", "GOLD.m"):
+                    self._price_cache[k] = (now, curr_price)
+        if getattr(self, "broker", None) is not None and hasattr(self.broker, "mark_price"):
+            try:
+                self.broker.mark_price(sym, curr_price)
+            except Exception:
+                pass
+
         # ----------------------------------------------------
         matching_setups = list(self.pending_setups.get_all(sym)) if hasattr(self.pending_setups, "get_all") else [s for s in self.pending_setups.values() if getattr(s, "symbol", "").upper() == sym]
         for setup in matching_setups:
@@ -2211,13 +2228,7 @@ class ExecutionEngine:
         if not hasattr(self, "_price_cache"):
             self._price_cache: Dict[str, Tuple[float, float]] = {}
 
-        # 0. Check in-memory fast TTL cache (3.0s)
-        if sym in self._price_cache:
-            ts, val = self._price_cache[sym]
-            if now - ts < 3.0 and val > 0:
-                return val
-
-        # 1. Check broker live mark prices if available with all common aliases
+        # 0. Check broker live mark prices first (instantaneous in-memory lookup)
         if getattr(self, "broker", None) is not None:
             if hasattr(self.broker, "mark_prices") and isinstance(self.broker.mark_prices, dict):
                 norm_candidates = [sym, f"{sym}.m", f"{sym}m"]
@@ -2235,6 +2246,12 @@ class ExecutionEngine:
                         val = float(bp)
                         self._price_cache[sym] = (now, val)
                         return val
+
+        # 1. Check in-memory fast TTL cache (3.0s) for remote / network fetched prices
+        if sym in self._price_cache:
+            ts, val = self._price_cache[sym]
+            if now - ts < 3.0 and val > 0:
+                return val
 
         # 2. Check MT5 live quote
         try:

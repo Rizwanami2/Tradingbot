@@ -112,7 +112,14 @@ class TestEnhancedEntryPlanner(unittest.TestCase):
 
 class TestEnhancedBreakEvenAndTrailing(unittest.TestCase):
     def setUp(self):
-        self.rm = RiskManager(equity=10000.0, symbol="XAUUSD")
+        self.state_file = "test_enhanced_be_state.json"
+        if os.path.exists(self.state_file):
+            os.remove(self.state_file)
+        self.rm = RiskManager(equity=10000.0, symbol="XAUUSD", state_file=self.state_file)
+
+    def tearDown(self):
+        if os.path.exists(self.state_file):
+            os.remove(self.state_file)
 
     def test_progressive_three_stage_breakeven(self):
         # Entry: 2650, Initial Stop: 2640 (10 pts risk = 1.0R)
