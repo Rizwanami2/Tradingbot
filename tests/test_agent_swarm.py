@@ -1,12 +1,12 @@
 """
-Unit tests for the 100 Specialized Strategy Agents and 118-Agent Collective Consensus Swarm.
+Unit tests for the 150 Specialized Strategy Agents and 168-Agent Collective Consensus Swarm.
 
 Verifies:
-1. All 100 agents registered across 10 strategic clusters.
+1. All 150 agents registered across 15 strategic clusters.
 2. Every agent returns a valid Vote with direction, strength, reason, and key levels.
-3. MarketContext aggregates all 5 institutional pillars cleanly in memory.
-4. Fast execution (< 25ms) for all 100 agents.
-5. Integration into Arbiter yielding 118 total consensus votes.
+3. MarketContext aggregates all institutional pillars cleanly in memory.
+4. Fast execution (< 25ms) for all 150 agents.
+5. Integration into Arbiter yielding 168 total consensus votes.
 6. Collective level planning with entry, stop loss, and take profit confluence.
 7. Directional responsiveness in bullish vs bearish synthetic market regimes.
 8. Cluster integrity and agent count verification.
@@ -66,10 +66,10 @@ class TestAgentSwarm(unittest.TestCase):
         cls.swarm = get_agent_swarm()
 
     def test_total_swarm_agent_count_and_clusters(self):
-        """Verify exactly 100 specialized strategy agents across the 10 strategic clusters."""
+        """Verify exactly 150 specialized strategy agents across the 15 strategic clusters."""
         summary = self.swarm.get_summary()
-        self.assertEqual(summary["total_agents"], 100)
-        self.assertEqual(len(self.swarm.agents), 100)
+        self.assertEqual(summary["total_agents"], 150)
+        self.assertEqual(len(self.swarm.agents), 150)
 
         expected_clusters = {
             "ICT_SMC": 12,
@@ -82,6 +82,11 @@ class TestAgentSwarm(unittest.TestCase):
             "SESSION_MACRO": 10,
             "MEAN_REVERSION": 10,
             "AUTONOMOUS_BRAIN": 8,
+            "VOLUME_SPREAD_ANALYSIS": 10,
+            "MICROSTRUCTURE": 10,
+            "ELLIOTT_CYCLES": 10,
+            "MACRO_INTERMARKET": 10,
+            "QUANT_STAT_ARB": 10,
         }
         self.assertEqual(summary["clusters"], expected_clusters)
 
@@ -105,13 +110,13 @@ class TestAgentSwarm(unittest.TestCase):
         self.assertLess(ctx.rsi, 100.0)
 
     def test_swarm_sub_second_fast_execution(self):
-        """Verify all 100 agents evaluate within 20 milliseconds."""
+        """Verify all 150 agents evaluate within 25 milliseconds."""
         ctx = build_market_context("XAUUSD", self.df_bull)
         t0 = time.time()
         votes = self.swarm.evaluate(ctx)
         t_elapsed = (time.time() - t0) * 1000.0
 
-        self.assertEqual(len(votes), 100)
+        self.assertEqual(len(votes), 150)
         self.assertLess(t_elapsed, 25.0, f"Swarm evaluation too slow: {t_elapsed:.2f}ms")
 
     def test_every_agent_emits_valid_vote_and_levels(self):
@@ -146,14 +151,14 @@ class TestAgentSwarm(unittest.TestCase):
         self.assertGreater(bull_longs, bull_shorts)
         self.assertGreater(bear_shorts, bear_longs)
 
-    def test_arbiter_yields_118_collective_consensus_votes(self):
-        """Verify Arbiter integrates the 18 institutional agents + 100 swarm agents (118 total)."""
+    def test_arbiter_yields_168_collective_consensus_votes(self):
+        """Verify Arbiter integrates the 18 institutional agents + 150 swarm agents (168 total)."""
         arbiter = Arbiter()
         sig, msg, votes = arbiter.decide(
             self.df_bull, None, None, None, None, self.risk, symbol="XAUUSD", on_demand=True, include_swarm=True
         )
 
-        self.assertEqual(len(votes), 118)
+        self.assertEqual(len(votes), 168)
         agent_names = {v.agent for v in votes}
 
         # Check existing institutional agents
@@ -176,6 +181,12 @@ class TestAgentSwarm(unittest.TestCase):
         self.assertIn("SESSION-LONDON-OPEN", agent_names)
         self.assertIn("VWAP-STANDARD-DEV-2", agent_names)
         self.assertIn("BRAIN-REGIME-ADAPT", agent_names)
+        # 5 New Clusters
+        self.assertIn("VSA-STOPPING-VOLUME", agent_names)
+        self.assertIn("MICRO-BID-ASK-IMBALANCE", agent_names)
+        self.assertIn("ELLIOTT-WAVE-3-IMPULSE", agent_names)
+        self.assertIn("MACRO-DXY-INVERSE-BIAS", agent_names)
+        self.assertIn("QUANT-KALMAN-FILTER-TREND", agent_names)
 
     def test_collective_agent_level_planning_synthesis(self):
         """Verify collective agent levels from swarm agents populate perfect entry planning."""
@@ -199,20 +210,20 @@ class TestAgentSwarm(unittest.TestCase):
         df_empty = pd.DataFrame()
         ctx_empty = build_market_context("XAUUSD", df_empty)
         votes = self.swarm.evaluate(ctx_empty)
-        self.assertEqual(len(votes), 100)
+        self.assertEqual(len(votes), 150)
 
         df_short = pd.DataFrame({"close": [2000.0, 2001.0, 2002.0], "open": [1999.0, 2000.0, 2001.0], "high": [2002.0, 2003.0, 2004.0], "low": [1998.0, 1999.0, 2000.0]})
         ctx_short = build_market_context("XAUUSD", df_short)
         votes_short = self.swarm.evaluate(ctx_short)
-        self.assertEqual(len(votes_short), 100)
+        self.assertEqual(len(votes_short), 150)
 
-    def test_evaluate_symbol_returns_118_agent_votes(self):
-        """Verify evaluate_symbol provides 118 votes under demo data."""
+    def test_evaluate_symbol_returns_168_agent_votes(self):
+        """Verify evaluate_symbol provides 168 votes under demo data."""
         res = evaluate_symbol("XAUUSD", source="demo", on_demand=True, include_swarm=True)
         self.assertEqual(res["symbol"], "XAUUSD")
         self.assertGreater(res["price"], 0.0)
         self.assertIn("votes", res)
-        self.assertEqual(len(res["votes"]), 118)
+        self.assertEqual(len(res["votes"]), 168)
         self.assertIn("mt5_chart", res)
 
 
