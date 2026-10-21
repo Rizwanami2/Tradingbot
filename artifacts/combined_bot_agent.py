@@ -146,6 +146,18 @@ def run_diagnostic_check() -> Dict[str, Any]:
     except Exception as e:
         results["Autonomous Learner"] = (False, f"Brain load failed: {e}")
 
+    # 4.5 CombinedBotAgent (FIT Skills)
+    try:
+        from combined_bot_agent import CombinedBotAgent
+        cba = CombinedBotAgent()
+        m = cba.metrics()
+        results["CombinedBotAgent (FIT)"] = (
+            True,
+            f"TP=${cba.cfg.tp_usd:.2f}/SL=${cba.cfg.sl_usd:.2f}, Journal entries: {m['n']}"
+        )
+    except Exception as e:
+        results["CombinedBotAgent (FIT)"] = (False, f"CombinedBotAgent load failed: {e}")
+
     # 5. Risk Manager & Execution Engine
     try:
         rm = RiskManager(equity=float(config.INITIAL_EQUITY), symbol=config.DEFAULT_SYMBOL)
@@ -368,6 +380,35 @@ def run_single_cycle(
                     continue
                 if gate.size_mult < 1.0 and sig.get("lots"):
                     sig["lots"] = max(0.01, round(float(sig["lots"]) * gate.size_mult, 4))
+
+            # 7.5 CombinedBotAgent (FIT Skills) evaluation
+            try:
+                from combined_bot_agent import CombinedBotAgent
+                cba = CombinedBotAgent()
+                cba_ok, sig, cba_reasons = cba.evaluate(
+                    sig,
+                    {
+                        "spread": 0.0,
+                        "open_trades": len(engine.active_positions) + len(engine.pending_setups),
+                        "open_for_symbol": 1 if sym in engine.active_positions else 0,
+                        "htf_bias": str(sig.get("regime") or dname),
+                        "m1_direction": dname,
+                        "setup": str(sig.get("setup") or sig.get("reason") or "pullback"),
+                        "is_live": False,
+                        "entry": float(candle_dict.get("close") or 0.0),
+                    },
+                )
+                if not cba_ok:
+                    reasons_str = "; ".join(cba_reasons)
+                    print(f"[Combined-Cycle] {sym} {dname} vetoed by CombinedBotAgent (FIT): {reasons_str}")
+                    cycle_report["evaluations"][sym] = {"status": "COMBINED_AGENT_VETO", "reason": reasons_str}
+                    continue
+                if sig.get("combined_agent_size_mult"):
+                    mult = float(sig["combined_agent_size_mult"])
+                    if sig.get("lots"):
+                        sig["lots"] = max(0.01, round(float(sig["lots"]) * mult, 4))
+            except Exception as _cba_err:
+                logger.debug("CombinedBotAgent cycle note: %s", _cba_err)
 
             # 8. Register setup or simulate dry-run
             if dry_run:

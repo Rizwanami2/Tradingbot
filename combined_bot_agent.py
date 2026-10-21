@@ -308,3 +308,32 @@ class CombinedBotAgent:
             "halted": self.state.halted,
             "halt_reason": self.state.halt_reason,
         }
+
+
+def main():
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(description="Combined Bot Agent (FIT skills gate & runner)")
+    parser.add_argument("--metrics", action="store_true", help="Print journal metrics")
+    parser.add_argument("--check", action="store_true", help="Run diagnostic health check")
+    parser.add_argument("--once", action="store_true", help="Run a single consensus cycle")
+    parser.add_argument("--live", action="store_true", help="Run continuous combined trading engine")
+    args = parser.parse_args()
+
+    cba = CombinedBotAgent()
+    if args.metrics:
+        m = cba.metrics()
+        print(f"CombinedBotAgent Metrics: {m}")
+        return
+
+    # Forward to artifacts/combined_bot_agent.py runner
+    try:
+        from artifacts.combined_bot_agent import main_launcher
+        main_launcher()
+    except Exception as e:
+        print(f"Error launching combined runner: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
