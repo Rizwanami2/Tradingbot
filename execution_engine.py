@@ -1353,69 +1353,115 @@ class ExecutionEngine:
             )
 
             if scalp_on:
+                current_lots = float(getattr(pos, "remaining_lots", None) or getattr(pos, "lots", 0.0) or 0.0)
+                lot_scale = max(current_lots / 0.02, 1.0) if current_lots > 0 else 1.0
+
                 peak_pnl = max(pos.unrealized_pnl, (pos.highest_price - entry) * pos.remaining_size if is_long else (entry - pos.lowest_price) * pos.remaining_size)
                 pos.highest_profit_usd = max(float(getattr(pos, "highest_profit_usd", 0.0) or 0.0), peak_pnl)
                 pos_ticket = getattr(pos, "ticket", None) or pos.id
 
-                # (1) Scalp Progressive Break-Even Lock
-                be_act_usd = float(getattr(self, "scalp_be_lock_usd", 0.50))
-                be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
-                move_gain_pct = ((pos.highest_price - entry) / entry * 100.0) if is_long else ((entry - pos.lowest_price) / entry * 100.0)
-                if pos.be_stage < 1 and (pos.highest_profit_usd >= be_act_usd or move_gain_pct >= be_act_pct):
-                    pos.be_stage = 1
-                    be_level = round(entry * 1.0002, 4) if is_long else round(entry * 0.9998, 4)
-                    if (is_long and be_level > pos.stop_loss) or (not is_long and be_level < pos.stop_loss):
-                        old_sl = pos.stop_loss
-                        pos.stop_loss = be_level
-                        try:
-                            self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
-                        except Exception:
-                            pass
-                        be_msg = (
-                            f"🛡️ **SCALP BREAK-EVEN SECURED** ({pos.symbol} [#{pos.id}])\n"
-                            f"SL secured: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
-                            f"Profit protected: `+${pos.highest_profit_usd:,.2f}`"
-                        )
-                        events.append({"event": "SCALP_BE_LOCKED", "order": pos, "new_stop": pos.stop_loss, "message": be_msg})
-                        self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
-
-                # (2) Scalp Dynamic Trailing Stop
-                trail_on = bool(getattr(self, "scalp_trail_enabled", True))
-                trail_act_usd = float(getattr(self, "scalp_trail_activation_usd", 2.00))
-                trail_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
-                trail_dist_pct = float(getattr(self, "scalp_trail_distance_pct", 0.06))
-                trail_dist_usd = float(getattr(self, "scalp_trail_distance_usd", 2.00))
-                min_trail_profit = float(getattr(self, "scalp_min_trail_profit_usd", 1.50))
-                retention_pct = float(getattr(self, "scalp_profit_retention_pct", 0.50))
-                trail_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 1.50))
-                trail_buffer_pct = float(getattr(self, "scalp_trail_buffer_pct", 0.05))
-
-                trail_stop_before = pos.stop_loss
-
-                # Calculate minimum buffer distance between current price and stop loss
-                curr_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 1.50))
+                trail_dist_usd = float(getattr(self, "scalp_trail_distance_usd", 2.00)) * lot_scale
+                curr_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 1.50)) * lot_scale
                 # Protect against buffer exceeding trailing distance
                 curr_buffer_usd = min(curr_buffer_usd, trail_dist_usd * 0.8)
                 buffer_price = (curr_buffer_usd / pos.remaining_size) if pos.remaining_size > 0 else 0.0
+
+                # (1) Scalp Progressive Break-Even Lock
+                be_act_usd = float(getattr(self, "scalp_be_lock_usd", 0.50)) * lot_scale
+                be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
+                move_gain_pct = ((pos.highest_price - entry) / entry * 100.0) if is_long else ((entry - pos.lowest_price) / entry * 100.0)
+                if pos.be_stage < 1 and (pos.highest_profit_usd >= be_act_usd or move_gain_pct >= be_act_pct):
+                    be_safe_margin = max(buffer_price, 0.01)
+                    if is_long:
+                        target_be = round(entry * 1.0002, 4)
+                        safe_ceiling = round(curr_price - be_safe_margin, 4)
+                        if target_be <= safe_ceiling:
+                            candidate_be = target_be
+                        elif entry <= safe_ceiling:
+                            candidate_be = entry
+                        else:
+                            candidate_be = safe_ceiling
+
+                        if candidate_be > pos.stop_loss and candidate_be < curr_price:
+                            old_sl = pos.stop_loss
+                            pos.stop_loss = candidate_be
+                            pos.be_stage = 1
+                            try:
+                                self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                            except Exception:
+                                pass
+                            be_msg = (
+                                f"🛡️ **SCALP BREAK-EVEN SECURED** ({pos.symbol} [#{pos.id}])\n"
+                                f"SL secured: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                                f"Profit protected: `+${pos.highest_profit_usd:,.2f}`"
+                            )
+                            events.append({"event": "SCALP_BE_LOCKED", "order": pos, "new_stop": pos.stop_loss, "message": be_msg})
+                            self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
+                    else:
+                        target_be = round(entry * 0.9998, 4)
+                        safe_floor = round(curr_price + be_safe_margin, 4)
+                        if target_be >= safe_floor:
+                            candidate_be = target_be
+                        elif entry >= safe_floor:
+                            candidate_be = entry
+                        else:
+                            candidate_be = safe_floor
+
+                        if candidate_be < pos.stop_loss and candidate_be > curr_price:
+                            old_sl = pos.stop_loss
+                            pos.stop_loss = candidate_be
+                            pos.be_stage = 1
+                            try:
+                                self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                            except Exception:
+                                pass
+                            be_msg = (
+                                f"🛡️ **SCALP BREAK-EVEN SECURED** ({pos.symbol} [#{pos.id}])\n"
+                                f"SL secured: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                                f"Profit protected: `+${pos.highest_profit_usd:,.2f}`"
+                            )
+                            events.append({"event": "SCALP_BE_LOCKED", "order": pos, "new_stop": pos.stop_loss, "message": be_msg})
+                            self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
+
+                # (2) Scalp Dynamic Trailing Stop
+                trail_on = bool(getattr(self, "scalp_trail_enabled", True))
+                trail_act_usd = float(getattr(self, "scalp_trail_activation_usd", 2.00)) * lot_scale
+                trail_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
+                trail_dist_pct = float(getattr(self, "scalp_trail_distance_pct", 0.06))
+                min_trail_profit = float(getattr(self, "scalp_min_trail_profit_usd", 1.50)) * lot_scale
+                retention_pct = float(getattr(self, "scalp_profit_retention_pct", 0.50))
+                trail_buffer_usd = float(getattr(self, "scalp_trail_buffer_usd", 1.50)) * lot_scale
+                trail_buffer_pct = float(getattr(self, "scalp_trail_buffer_pct", 0.05))
+
+                trail_stop_before = pos.stop_loss
 
                 if trail_on and (pos.highest_profit_usd >= trail_act_usd or move_gain_pct >= trail_act_pct):
                     pos.trailing_sl_active = True
                     peak_usd = pos.highest_profit_usd
                     # Guaranteed tiered profit retention floor:
-                    if peak_usd >= 10.0:
+                    tier_10 = 10.0 * lot_scale
+                    tier_5 = 5.0 * lot_scale
+                    tier_2_5 = 2.50 * lot_scale
+                    if peak_usd >= tier_10:
                         locked_profit_usd = peak_usd * 0.70
-                    elif peak_usd >= 5.0:
+                    elif peak_usd >= tier_5:
                         locked_profit_usd = peak_usd * 0.60
-                    elif peak_usd >= 2.50:
+                    elif peak_usd >= tier_2_5:
                         locked_profit_usd = max(peak_usd * retention_pct, min_trail_profit)
                     elif peak_usd >= trail_act_usd:
                         locked_profit_usd = min(peak_usd * 0.45, min_trail_profit)
                     else:
                         locked_profit_usd = 0.0
 
+                    sym = str(pos.symbol).upper()
+                    min_safe_dist = 0.30 if ("XAU" in sym or "GOLD" in sym) else (5.0 if "BTC" in sym else entry * 0.0003)
+                    dist_usd = (trail_dist_usd / pos.remaining_size) if pos.remaining_size > 0 else 0.0
+                    if dist_usd > 0 and pos.remaining_size > 5.0:
+                        dist_usd = max(dist_usd, min_safe_dist)
+
                     if is_long:
                         pct_trail = pos.highest_price * (1.0 - trail_dist_pct / 100.0)
-                        usd_trail = (pos.highest_price - (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
+                        usd_trail = (pos.highest_price - dist_usd) if dist_usd > 0 else pct_trail
                         base_sl = round(max(pct_trail, usd_trail), 4)
                         profit_floor_sl = round(entry + (locked_profit_usd / pos.remaining_size), 4) if pos.remaining_size > 0 else base_sl
                         candidate_sl = max(base_sl, profit_floor_sl, round(entry * 1.0002, 4))
@@ -1442,7 +1488,7 @@ class ExecutionEngine:
                             self._dispatch_event("SCALP_TRAIL_UPDATED", pos, tr_msg)
                     else:
                         pct_trail = pos.lowest_price * (1.0 + trail_dist_pct / 100.0)
-                        usd_trail = (pos.lowest_price + (trail_dist_usd / pos.remaining_size)) if pos.remaining_size > 0 else pct_trail
+                        usd_trail = (pos.lowest_price + dist_usd) if dist_usd > 0 else pct_trail
                         base_sl = round(min(pct_trail, usd_trail), 4)
                         profit_floor_sl = round(entry - (locked_profit_usd / pos.remaining_size), 4) if pos.remaining_size > 0 else base_sl
                         candidate_sl = min(base_sl, profit_floor_sl, round(entry * 0.9998, 4))
@@ -1480,7 +1526,11 @@ class ExecutionEngine:
                         pos.partials_done = 1
                         partial_pnl = self.calc_position_pnl(pos, pos.tp1, closed_lots=round(pos.lots * close_fraction, 4))
                         pos.realized_pnl += partial_pnl
-                        pos.stop_loss = round(entry * 1.0005, 4) if is_long else round(entry * 0.9995, 4)
+                        target_be = round(entry * 1.0005, 4) if is_long else round(entry * 0.9995, 4)
+                        if is_long:
+                            pos.stop_loss = max(pos.stop_loss, min(target_be, round(curr_price - buffer_price, 4)) if curr_price > entry else target_be)
+                        else:
+                            pos.stop_loss = min(pos.stop_loss, max(target_be, round(curr_price + buffer_price, 4)) if curr_price < entry else target_be)
                         pos.be_stage = 2
                         try:
                             self._broker_close(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp1, ticket=pos_ticket)
@@ -1564,11 +1614,12 @@ class ExecutionEngine:
 
                 # (3) Micro Scalp Hard Take Profit (Safety Ceiling) / Run-to-TP Evaluation
                 if pos.unrealized_pnl > 0:
+                    scaled_scalp_usd = scalp_usd * lot_scale
                     hit_pct = False
                     if scalp_pct > 0 and entry > 0:
                         move_pct = abs(curr_price - entry) / entry * 100.0
                         hit_pct = move_pct >= scalp_pct
-                    hit_usd = scalp_usd > 0 and pos.unrealized_pnl >= scalp_usd
+                    hit_usd = scaled_scalp_usd > 0 and pos.unrealized_pnl >= scaled_scalp_usd
                     if hit_usd or hit_pct:
                         # Check if profit momentum is actively expanding ("wait for tp some time and not close positions if profit coming more")
                         let_run = bool(getattr(self, "scalp_let_profit_run", True))
@@ -1587,7 +1638,7 @@ class ExecutionEngine:
                             if expanding_bar or near_peak:
                                 pos.running_to_tp = True
                                 # Profit is still expanding! Ratchet stop loss to lock in at least 85% of scalp target and let run towards higher TP
-                                locked_run_profit = scalp_usd * 0.85
+                                locked_run_profit = scaled_scalp_usd * 0.85
                                 if pos.remaining_size > 0:
                                     if is_long:
                                         run_sl = round(entry + (locked_run_profit / pos.remaining_size), 4)
@@ -1705,11 +1756,12 @@ class ExecutionEngine:
 
                 # (5) Micro Scalp Stop Loss (Fast Loss Cut to Preserve Capital)
                 if not pos.trailing_sl_active and pos.unrealized_pnl < 0:
+                    scaled_scalp_sl_usd = scalp_sl_usd * lot_scale
                     hit_sl_pct = False
                     if scalp_sl_pct > 0 and entry > 0:
                         move_pct = abs(curr_price - entry) / entry * 100.0
                         hit_sl_pct = move_pct >= scalp_sl_pct
-                    hit_sl_usd = scalp_sl_usd > 0 and pos.unrealized_pnl <= -scalp_sl_usd
+                    hit_sl_usd = scaled_scalp_sl_usd > 0 and pos.unrealized_pnl <= -scaled_scalp_sl_usd
                     if hit_sl_usd or hit_sl_pct:
                         broker_ok = True
                         try:

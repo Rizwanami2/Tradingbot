@@ -308,8 +308,8 @@ def apply_profile(
         risk_mgr.config.base_risk_pct = p.base_risk_pct
         risk_mgr.config.min_rr = p.min_rr
         if getattr(p, "is_scalp", False):
-            risk_mgr.config.tp1_r = 1.0
-            risk_mgr.config.tp2_r = 1.5
+            risk_mgr.config.tp1_r = max(1.0, float(getattr(p, "min_rr", 1.0) or 1.0))
+            risk_mgr.config.tp2_r = max(1.5, float(getattr(p, "min_rr", 1.0) or 1.0) * 1.5)
             risk_mgr.set_leverage(min(getattr(p, "max_leverage", 20.0), getattr(risk_mgr.config, "max_leverage", 200.0)))
         else:
             risk_mgr.config.tp1_r = 1.5

@@ -1455,5 +1455,148 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertIn("cannot hold BUY and SELL at the same time", str(ctx2.exception))
 
 
+class TestScalpReworkRiskManagement(unittest.TestCase):
+    def setUp(self):
+        self.risk_mgr = RiskManager(equity=10000.0, symbol="XAUUSD", state_file="test_scalp_rework_rm.json")
+        self.risk_mgr.reset_daily_risk()
+        self.engine = ExecutionEngine(risk_manager=self.risk_mgr)
+        self.engine.scalp_mode = True
+
+    def tearDown(self):
+        import os
+        if os.path.exists("test_scalp_rework_rm.json"):
+            try:
+                os.remove("test_scalp_rework_rm.json")
+            except OSError:
+                pass
+
+    def test_scalp_lot_scaled_dollar_thresholds_large_lots(self):
+        """Large lot scalp trades must not be choked by normal spread noise due to unscaled USD thresholds."""
+        self.engine.scalp_tp_usd = 2.50
+        self.engine.scalp_sl_usd = 3.00
+
+        # 1.0 lot on Gold = 100 units
+        order = TradeOrder(
+            id="order-scalp-1lot",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2640.0,
+            tp1=2660.0,
+            tp2=2670.0,
+            tp3=None,
+            lots=1.0,
+            size=100.0,
+            leverage=20.0,
+            margin_required=1325.0,
+            liquidation_price=2600.0,
+            risk_amount=1000.0,
+            rr_ratio=1.0,
+            setup_reason="Scalp LONG 1.0 Lot",
+            status=OrderStatus.OPEN,
+            executed_price=2650.0,
+            remaining_size=100.0,
+            is_scalp=True,
+        )
+        self.engine.active_positions[order.id] = order
+
+        # Candle 1: Slight spread jitter (-$0.05). Unscaled loss = -$5.00.
+        # Scaled SL threshold for 1.0 lot is 3.00 * (1.0 / 0.02) = $150.00 (-$1.50 move).
+        # Trade MUST stay OPEN!
+        c1 = {"open": 2650.0, "high": 2650.05, "low": 2649.95, "close": 2649.95}
+        evs1 = self.engine.update_market_candle("XAUUSD", c1)
+        self.assertNotIn("SCALP_SL", [e["event"] for e in evs1])
+        self.assertEqual(order.status, OrderStatus.OPEN)
+
+        # Candle 2: Genuine stop loss move of -$1.55 (unrealized PnL = -$155.00 <= -$150.00)
+        c2 = {"open": 2649.95, "high": 2649.95, "low": 2648.45, "close": 2648.45}
+        evs2 = self.engine.update_market_candle("XAUUSD", c2)
+        self.assertTrue(any(e["event"] == "SCALP_SL" for e in evs2))
+        self.assertEqual(order.status, OrderStatus.CLOSED)
+        self.assertAlmostEqual(order.realized_pnl, -155.0, delta=1.0)
+
+    def test_suicide_breakeven_prevented_when_price_near_entry(self):
+        """Verify break-even stop is NEVER placed above current price for long or below for short."""
+        self.engine.scalp_be_lock_usd = 0.50
+        self.engine.scalp_trail_buffer_usd = 0.40
+
+        order = TradeOrder(
+            id="order-safe-be",
+            symbol="XAUUSD",
+            direction="LONG",
+            entry_level=2650.0,
+            stop_loss=2645.0,
+            tp1=2660.0,
+            tp2=2670.0,
+            tp3=None,
+            lots=0.02,
+            size=2.0,
+            leverage=20.0,
+            margin_required=26.5,
+            liquidation_price=2600.0,
+            risk_amount=10.0,
+            rr_ratio=1.0,
+            setup_reason="Scalp BE Safety",
+            status=OrderStatus.OPEN,
+            executed_price=2650.0,
+            remaining_size=2.0,
+            is_scalp=True,
+        )
+        self.engine.active_positions[order.id] = order
+
+        # Price touched 2650.30 (peak profit = 2.0 * 0.30 = $0.60 >= $0.50), but pulled back to 2650.15.
+        # target_be = 2650.0 * 1.0002 = 2650.53, which is GREATER than close (2650.15).
+        # Stop loss MUST NOT be placed above 2650.15!
+        c1 = {"open": 2650.0, "high": 2650.30, "low": 2650.0, "close": 2650.15}
+        evs = self.engine.update_market_candle("XAUUSD", c1)
+
+        # Stop loss must be strictly below current price 2650.15
+        self.assertLess(order.stop_loss, 2650.15)
+        # Position must not have been suicided by SCALP_TRAIL_HIT
+        self.assertNotIn("SCALP_TRAIL_HIT", [e["event"] for e in evs])
+        self.assertEqual(order.status, OrderStatus.OPEN)
+
+    def test_xau_scalp_profile_rr_target_and_arbiter_alignment(self):
+        """Verify xau_scalp profile enforces minimum 1.20R on TP1 and 1.80R on TP2."""
+        arbiter = Arbiter(allow_asian=False)
+        apply_profile("xau_scalp", arbiter=arbiter, risk_mgr=self.risk_mgr, engine=self.engine)
+
+        dates = pd.date_range("2026-10-14 00:00", periods=50, freq="1min")
+        df1 = pd.DataFrame({
+            "open": [2650.0 + i * 0.1 for i in range(50)],
+            "high": [2650.5 + i * 0.1 for i in range(50)],
+            "low": [2649.8 + i * 0.1 for i in range(50)],
+            "close": [2650.2 + i * 0.1 for i in range(50)],
+            "volume": [100.0 for _ in range(50)],
+        }, index=dates)
+
+        with patch.object(arbiter.trend, "vote") as mock_trend, \
+             patch.object(arbiter.ind, "vote") as mock_ind, \
+             patch.object(arbiter.liq, "vote") as mock_liq:
+            from multi_agent_trading_bot import Vote
+            mock_trend.return_value = Vote("TREND", Dir.LONG, 1.0, "Uptrend")
+            mock_ind.return_value = Vote("INDICATORS", Dir.LONG, 1.0, "Bullish EMA")
+            mock_liq.return_value = Vote("LIQUIDITY", Dir.LONG, 1.0, "Support held")
+            if hasattr(arbiter, "mr") and arbiter.mr:
+                arbiter.mr.vote = MagicMock(return_value=Vote("MEAN-REVERSION", Dir.FLAT, 0.0, "Neutral"))
+
+            sig, reason, votes = arbiter.decide(
+                df1, None, None, None, None, self.risk_mgr, symbol="XAUUSD", on_demand=True
+            )
+            self.assertIsNotNone(sig)
+            stop_dist = abs(sig["entry"] - sig["stop"])
+            tp1_dist = abs(sig["tp1"] - sig["entry"])
+            tp2_dist = abs(sig["tp2"] - sig["entry"])
+
+            # TP1 must achieve >= 1.2R
+            self.assertAlmostEqual(tp1_dist / stop_dist, 1.20, delta=0.05)
+            # TP2 must achieve >= 1.8R
+            self.assertAlmostEqual(tp2_dist / stop_dist, 1.80, delta=0.05)
+            # Risk manager min_rr must be 1.20
+            self.assertAlmostEqual(self.risk_mgr.config.min_rr, 1.20)
+            self.assertAlmostEqual(self.risk_mgr.config.tp1_r, 1.20)
+
+
+
 if __name__ == "__main__":
     unittest.main()

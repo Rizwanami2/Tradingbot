@@ -981,14 +981,16 @@ class Arbiter:
             sl_pct = float(getattr(self, "scalp_sl_pct", 0.12)) / 100.0
             atr_val = atr(df1) or (entry * 0.001)
             stop_dist = min(max(atr_val * 0.5, entry * (sl_pct * 0.6)), entry * (sl_pct * 1.5))
+            tp_mult = float(getattr(self, "min_rr", 1.0) or 1.0)
+            tp2_mult = max(tp_mult * 1.5, 1.5)
             if direction == Dir.LONG:
                 stop = entry - stop_dist
-                tp1 = entry + stop_dist * 1.0
-                tp2 = entry + stop_dist * 1.5
+                tp1 = entry + stop_dist * tp_mult
+                tp2 = entry + stop_dist * tp2_mult
             else:
                 stop = entry + stop_dist
-                tp1 = entry - stop_dist * 1.0
-                tp2 = entry - stop_dist * 1.5
+                tp1 = entry - stop_dist * tp_mult
+                tp2 = entry - stop_dist * tp2_mult
         else:
             atr_val = atr(df1) or entry * 0.002
             min_stop_dist = entry * 0.003
@@ -1006,9 +1008,15 @@ class Arbiter:
                 sp = float(v.stop_price)
                 if direction == Dir.LONG and sp < entry and (entry - sp) <= stop_dist * 2.2 and (entry - sp) >= stop_dist * 0.4:
                     stop = sp
+                    if getattr(self, "is_scalp", False):
+                        tp1 = entry + (entry - sp) * tp_mult
+                        tp2 = entry + (entry - sp) * tp2_mult
                     break
                 elif direction == Dir.SHORT and sp > entry and (sp - entry) <= stop_dist * 2.2 and (sp - entry) >= stop_dist * 0.4:
                     stop = sp
+                    if getattr(self, "is_scalp", False):
+                        tp1 = entry - (sp - entry) * tp_mult
+                        tp2 = entry - (sp - entry) * tp2_mult
                     break
 
         plan = risk_mgr.position_size(entry=entry, stop=stop, symbol=symbol)
