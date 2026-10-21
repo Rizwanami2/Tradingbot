@@ -3802,7 +3802,7 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         data = await _to_thread(feed.multi_tf, limit_1m=100)
         df1 = data.get("1m") if data else None
         if df1 is None or df1.empty:
-            await update.message.reply_text("⚠️ Could not fetch market data to evaluate regime.")
+            await safe_reply(update, "⚠️ Could not fetch market data to evaluate regime.", parse_mode=None)
             return
         switcher = getattr(arbiter, "_regime_switcher", None) or RegimeAutoSwitcher()
         res = switcher.evaluate_and_switch(df1, symbol="XAUUSD", arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
@@ -3815,9 +3815,9 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"• **ATR Volatility:** `{res.metrics.get('atr_pct', 0.0):.3f}%`",
             f"• **BB Band Width:** `{res.metrics.get('bb_width', 0.0):.4f}`",
             f"• **Action:** {sw_text}",
-            f"• **Rationale:** _{res.reason}_",
+            f"• **Rationale:** {res.reason.replace('_', ' ')}",
         ]
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
         return
 
     if sub in ("calibrate", "weights", "sharpe"):
@@ -3829,17 +3829,17 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for agent, w in new_weights.items():
             lines.append(f"• `{agent:<15}` : **{w:.2f}x**")
         lines.append("\nWeights applied to active multi-agent Arbiter.")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
         return
 
     if sub in ("switch", "set") and len(args) > 1:
         target = args[1].lower()
         if target in DEFAULT_PROFILES:
             apply_profile(target, arbiter=arbiter, risk_mgr=risk_mgr, engine=engine, config=config)
-            await update.message.reply_text(f"✅ Active strategy profile switched to `{target}`.")
+            await safe_reply(update, f"✅ Active strategy profile switched to `{target}`.", parse_mode="Markdown")
         else:
-            valid = ", ".join(DEFAULT_PROFILES.keys())
-            await update.message.reply_text(f"❌ Unknown profile `{target}`. Valid: `{valid}`")
+            valid = ", ".join(f"`{k}`" for k in DEFAULT_PROFILES.keys())
+            await safe_reply(update, f"❌ Unknown profile `{target}`. Valid: {valid}", parse_mode="Markdown")
         return
 
     now_r = time.time()
@@ -3868,9 +3868,9 @@ async def regime_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"**Controls:**",
         f"• `/regime auto` — Evaluate regime and auto-switch profile",
         f"• `/regime calibrate` — Recalibrate weights by Rolling Sharpe",
-        f"• `/regime switch <profile>` — Switch profile (scalp/swing/gold_only/crypto/balanced)",
+        f"• `/regime switch <profile>` — Switch profile (`scalp` / `swing` / `gold_only` / `crypto` / `balanced`)",
     ]
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
 
 
 async def session_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3898,7 +3898,7 @@ async def session_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         open_positions=positions,
     )
     msg = format_session_telegram_message(summary)
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await safe_reply(update, msg, parse_mode="Markdown")
 
 
 async def slippage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3918,9 +3918,9 @@ async def slippage_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Adverse Fills:** `{report.adverse_fills_pct:.1f}%` | **Favorable:** `{report.favorable_fills_pct:.1f}%`",
         f"",
         f"📌 **Audit Verdict:**",
-        f"_{report.recommendation}_",
+        f"{report.recommendation.replace('_', ' ')}",
     ]
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
 
 
 analytics_command = slippage_command
@@ -3957,7 +3957,7 @@ async def kelly_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Historical Simulation VaR:** `${var_res.historical_var_usd:,.2f}` (`{var_res.historical_var_pct:.2f}%`)",
         f"• **Expected Shortfall (CVaR):** `${var_res.expected_shortfall_cvar_usd:,.2f}`",
     ]
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
 
 
 async def vstops_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3971,7 +3971,7 @@ async def vstops_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         cleared = len(v_mgr.records)
         v_mgr.records.clear()
         v_mgr._save()
-        await update.message.reply_text(f"🧹 Cleared `{cleared}` virtual stops records.")
+        await safe_reply(update, f"🧹 Cleared `{cleared}` virtual stops records.", parse_mode="Markdown")
         return
 
     active = v_mgr.active_stops()
@@ -3985,7 +3985,7 @@ async def vstops_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for r in active:
             tp_str = f" | TP1: ${r.virtual_tp1:,.2f}" if r.virtual_tp1 else ""
             lines.append(
-                f"• `{r.symbol}` **{r.direction}** [#{r.ticket}]\n"
+                f"• `{r.symbol}` **{r.direction}** (#{r.ticket})\n"
                 f"  Entry: `${r.entry_price:,.2f}` | **Virtual SL:** `${r.virtual_stop:,.2f}`{tp_str}"
             )
     else:
@@ -3995,7 +3995,7 @@ async def vstops_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"",
         f"Usage: `/vstops` (view active) | `/vstops clear` (clear state)",
     ])
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
 
 
 async def switch_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -6410,11 +6410,6 @@ def main():
             logger.warning("Telegram network glitch (non-fatal): %s", err)
         elif "Can't parse entities" in err_str or "can't find end of" in err_str or "entity" in err_str.lower():
             logger.warning("Telegram markdown entity parse error caught: %s", err)
-            if update and isinstance(update, Update):
-                try:
-                    await safe_reply(update, "⚠️ Message formatting error from Telegram parser. Raw response delivered.", parse_mode=None)
-                except Exception:
-                    pass
         else:
             logger.error("Telegram error caught: %s", err)
 
