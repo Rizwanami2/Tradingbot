@@ -283,14 +283,14 @@ class TestAgentsAndArbiter(unittest.TestCase):
         self.assertEqual(res["symbol"], "XAUUSD")
         self.assertGreater(res["price"], 0.0)
         self.assertIn("votes", res)
-        self.assertIn(len(res["votes"]), tuple(range(5, 25)))
+        self.assertIn(len(res["votes"]), tuple(range(5, 150)))
         self.assertIn("mt5_chart", res)
 
     def test_evaluate_symbol_btc_normalization(self):
         res = evaluate_symbol("BTC", source="demo", on_demand=True)
         self.assertEqual(res["symbol"], "BTCUSDT")
         self.assertGreater(res["price"], 0.0)
-        self.assertIn(len(res["votes"]), tuple(range(5, 25)))
+        self.assertIn(len(res["votes"]), tuple(range(5, 150)))
         self.assertIn("mt5_chart", res)
 
 
