@@ -934,12 +934,26 @@ async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     )
                     return
 
+            if sub.isdigit() or (sub in ("set", "sec", "seconds") and len(args) > 1 and args[1].isdigit()):
+                sec = int(sub) if sub.isdigit() else int(args[1])
+                limiter.set_entry_cooldown(sec)
+                await update.message.reply_text(
+                    f"⏱️ **Cooldown Updated**: Entry cooldown set to `{sec}s`.\n"
+                    f"• **Scope:** Enforced on BOTH Auto & Manual trading.\n"
+                    f"• **Single-Direction:** Simultaneous BUY and SELL strictly blocked.\n"
+                    f"• **Mode:** Active (`{limiter.mode}`)",
+                    parse_mode="Markdown",
+                )
+                return
+
             if sub in ("auto", "adaptive", "dynamic"):
                 limiter.set_mode("auto")
                 await update.message.reply_text(
                     "🤖 **Anti-Spam Mode set to AUTO (Adaptive)**\n"
+                    "• Enforced on BOTH Auto & Manual trading.\n"
+                    "• Single-Direction: Never hold BUY and SELL at the same time.\n"
                     "• Automatically adapts cooldowns to active profile (Scalp concession vs Swing tight).\n"
-                    "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 4 total positions.",
+                    "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 6 total positions.",
                     parse_mode="Markdown",
                 )
                 return
@@ -947,8 +961,10 @@ async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 limiter.set_mode("on")
                 await update.message.reply_text(
                     "🛡️ **Anti-Spam Mode set to MANUAL ON (Cooldown ACTIVATED)**\n"
+                    "• Enforced on BOTH Auto & Manual trading.\n"
+                    "• Single-Direction: Never hold BUY and SELL at the same time.\n"
                     "• Strict configured cooldowns and price distance enforced.\n"
-                    "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 4 total positions.",
+                    "• Enforces max 2 trades per currency (2 Gold, 2 BTC), max 6 total positions.",
                     parse_mode="Markdown",
                 )
                 return
@@ -957,7 +973,7 @@ async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     "⚠️ **Anti-Spam Mode set to OFF (Cooldown DEACTIVATED)**\n"
                     "• Cooldowns and price distance checks disabled.\n"
-                    "• Safety limits still active: max 2 trades per currency, max 4 total positions.\n"
+                    "• Single-Direction & capacity safety limits REMAIN ACTIVE: never BUY and SELL at the same time.\n"
                     "• Tip: Run `/spam on` to also expand capacity to 6 trades.",
                     parse_mode="Markdown",
                 )
@@ -5634,15 +5650,19 @@ def run_cli_interactive():
                             limiter.set_spam_mode(new_v, max_trades=6, engine=engine)
                             st = "ACTIVATED (Max 6, No Cooldown)" if new_v else "DEACTIVATED (Protected)"
                             print(f"Spam Trade Mode: {st}")
+                    elif sub.isdigit() or (sub in ("set", "sec", "seconds") and len(parts) > 2 and parts[2].isdigit()):
+                        sec = int(sub) if sub.isdigit() else int(parts[2])
+                        limiter.set_entry_cooldown(sec)
+                        print(f"Cooldown updated: Entry cooldown set to {sec}s (enforced on Auto & Manual).")
                     elif sub in ("auto", "adaptive", "dynamic"):
                         limiter.set_mode("auto")
-                        print("Anti-Spam Mode set to AUTO (Adaptive: profile-aware cooldowns, max 2 trades per currency, max 4 total).")
+                        print("Anti-Spam Mode set to AUTO (Adaptive: profile-aware cooldowns on Auto & Manual, Single-Direction, max 2 trades per currency, max 6 total).")
                     elif sub in ("on", "enable", "manual", "1", "true", "active", "activate", "activated"):
                         limiter.set_mode("on")
-                        print("Anti-Spam Mode set to MANUAL ON (Cooldown ACTIVATED: strict cooldowns enforced: max 2 trades per currency, max 4 total).")
+                        print("Anti-Spam Mode set to MANUAL ON (Cooldown ACTIVATED on Auto & Manual, Single-Direction, max 2 trades per currency, max 6 total).")
                     elif sub in ("off", "disable", "bypass", "0", "false", "deactivate", "deactivated", "inactive"):
                         limiter.set_mode("off")
-                        print("Anti-Spam Mode set to OFF (Cooldown DEACTIVATED: cooldowns bypassed. Safety limits retained: max 2 per currency, max 4 total).")
+                        print("Anti-Spam Mode set to OFF (Cooldown DEACTIVATED. Single-Direction and safety limits retained: never BUY and SELL same currency, max 2 per currency, max 6 total).")
                     elif sub in ("reset", "clear"):
                         sym = parts[2].upper() if len(parts) > 2 else None
                         limiter.reset(sym)

@@ -438,6 +438,32 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
                 "Reconcile broker positions, then resume with `/autotrade on` or `/risk restart`. "
                 "Verify live MT5 connection with `/mt5 status`."
             )
+    px = float(candle_price if candle_price is not None else sig.get("entry", 0.0))
+    dname = sig.get("direction")
+    if hasattr(dname, "name"):
+        dname = dname.name
+    else:
+        dname = str(dname).upper()
+    order_sym = sig.get("symbol", "")
+    max_open = int(getattr(engine, "max_open_trades", 6) or 6)
+
+    # Cooldown & Anti-Spam protection: applies to both auto and manual trades
+    try:
+        from anti_spam import get_anti_spam_limiter
+        limiter = get_anti_spam_limiter()
+        can_enter, reason = limiter.check_can_enter(
+            symbol=order_sym,
+            current_price=px,
+            engine=engine,
+            max_open=max_open,
+            direction=dname,
+            bypass_cooldowns=False,
+        )
+        if not can_enter:
+            return False, f"⏳ Trade blocked by Cooldown & Anti-Spam: {reason}\n_Applies to both auto and manual trades._"
+    except Exception as _lim_err:
+        pass
+
     try:
         order = engine.register_setup(sig, reason=sig.get("reason", "Multi-Agent Consensus"))
     except Exception as e:
@@ -455,6 +481,14 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
     if failed_evs:
         last_fail = failed_evs[-1].get("message") or "Broker execution failed"
         return False, last_fail
+
+    try:
+        from anti_spam import get_anti_spam_limiter
+        limiter = get_anti_spam_limiter()
+        limiter.record_entry(order.symbol, px)
+    except Exception:
+        pass
+
     if order.symbol in getattr(engine, "active_positions", {}):
         return True, msgs[-1] if msgs else f"Trade filled: {order.symbol} {order.direction}"
     if order.id in getattr(engine, "pending_setups", {}):

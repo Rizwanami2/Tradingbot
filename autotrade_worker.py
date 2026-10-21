@@ -328,8 +328,8 @@ async def live_monitoring_worker(
                         can_open = False
                         monitoring_health[f"{symbol}_eval"] = "Signal-only mode (/signal executes)"
                     elif is_scalping:
-                        # Deterministic scalp slot management: total capacity & per-currency limits (cooldowns bypassed)
-                        can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open, bypass_cooldowns=True)
+                        # Deterministic scalp slot management: capacity & per-currency limits with cooldown protection (auto & manual)
+                        can_open, limit_reason = limiter.check_can_enter(symbol=symbol, current_price=candle_dict["close"], engine=engine, max_open=max_open, bypass_cooldowns=False)
                         if not can_open:
                             monitoring_health[f"{symbol}_eval"] = f"Slot limit: {limit_reason}"
                     else:
@@ -394,13 +394,13 @@ async def live_monitoring_worker(
                             # Ensure fast market execution for autotrade consensus setups
                             sig["fast_market_fill"] = True
 
-                            # 1. Strict Single-Direction Rule: Do not buy and sell positions at the same time
+                            # 1. Strict Single-Direction Rule & Cooldown: Do not buy and sell positions at the same time
                             can_enter_dir, dir_reason = limiter.check_can_enter(
                                 symbol=symbol,
                                 current_price=candle_dict["close"],
                                 engine=engine,
                                 max_open=max_open,
-                                bypass_cooldowns=True,
+                                bypass_cooldowns=False,
                                 direction=dname,
                             )
                             if not can_enter_dir:

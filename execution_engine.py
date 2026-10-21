@@ -585,6 +585,22 @@ class ExecutionEngine:
                 adopted.append(order)
                 logger.info("[ExecutionEngine] Adopted broker position #%s: %s %s @ %s", order.ticket, order.direction, order.symbol, entry_px)
 
+        # Audit and alert if broker contains opposing / hedged positions
+        by_curr = {}
+        for p in self.active_positions.values():
+            try:
+                from anti_spam import canonical_currency
+                c = canonical_currency(getattr(p, "symbol", ""))
+                side = str(getattr(p, "direction", "")).upper()
+                by_curr.setdefault(c, set()).add("BUY" if side in ("LONG", "BUY") else "SELL")
+            except Exception:
+                pass
+        for c, sides in by_curr.items():
+            if len(sides) > 1:
+                logger.warning(
+                    "[ExecutionEngine] ⚠️ OPPOSING HEDGED POSITIONS DETECTED ON %s! Both BUY and SELL active on broker.", c
+                )
+
         if adopted:
             self.save_state()
         return adopted
@@ -772,6 +788,17 @@ class ExecutionEngine:
         except Exception:
             pass
 
+        # 5. Update Anti-Spam Rate Limiter (loss/win tracking for cooldowns on auto & manual)
+        try:
+            from anti_spam import get_anti_spam_limiter
+            limiter = get_anti_spam_limiter()
+            if float(pos.realized_pnl) < 0:
+                limiter.record_loss(pos.symbol, abs(float(pos.realized_pnl)))
+            else:
+                limiter.record_win(pos.symbol)
+        except Exception:
+            pass
+
     _notify_brain_close = _notify_trade_closed
 
 
@@ -950,10 +977,20 @@ class ExecutionEngine:
             is_incoming_buy = direction in ("LONG", "BUY")
             is_incoming_sell = direction in ("SHORT", "SELL")
 
-            # Check open active positions on this currency
+            # Check open active positions on this currency (local and broker)
             active_curr = [p for p in self.active_positions.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
+            if getattr(self, "broker", None) is not None and hasattr(self.broker, "get_positions"):
+                try:
+                    for bp in self.broker.get_positions():
+                        if canonical_currency(getattr(bp, "symbol", "")) == curr:
+                            bp_tkt = str(getattr(bp, "ticket", "") or getattr(bp, "id", "")).strip()
+                            if not any(str(getattr(lp, "ticket", "") or getattr(lp, "id", "")).strip() == bp_tkt for lp in active_curr):
+                                active_curr.append(bp)
+                except Exception:
+                    pass
+
             for p in active_curr:
-                p_dir = str(getattr(p, "direction", "")).upper()
+                p_dir = str(getattr(p, "direction", getattr(p, "side", ""))).upper()
                 is_p_buy = p_dir in ("LONG", "BUY")
                 is_p_sell = p_dir in ("SHORT", "SELL")
                 if is_incoming_buy and is_p_sell:
@@ -965,21 +1002,20 @@ class ExecutionEngine:
                         f"Opposing active BUY position exists on {curr}; cannot hold BUY and SELL at the same time."
                     )
 
-            # In scalp mode or multi-position mode, pending setups also cannot oppose existing pending setups
-            if is_scalp_req:
-                pending_curr = [p for p in self.pending_setups.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
-                for p in pending_curr:
-                    p_dir = str(getattr(p, "direction", "")).upper()
-                    is_p_buy = p_dir in ("LONG", "BUY")
-                    is_p_sell = p_dir in ("SHORT", "SELL")
-                    if is_incoming_buy and is_p_sell:
-                        raise RuntimeError(
-                            f"Opposing pending SELL setup exists on {curr}; cannot hold BUY and SELL at the same time."
-                        )
-                    if is_incoming_sell and is_p_buy:
-                        raise RuntimeError(
-                            f"Opposing pending BUY setup exists on {curr}; cannot hold BUY and SELL at the same time."
-                        )
+            # Pending setups also cannot oppose existing pending setups on this currency
+            pending_curr = [p for p in self.pending_setups.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
+            for p in pending_curr:
+                p_dir = str(getattr(p, "direction", getattr(p, "side", ""))).upper()
+                is_p_buy = p_dir in ("LONG", "BUY")
+                is_p_sell = p_dir in ("SHORT", "SELL")
+                if is_incoming_buy and is_p_sell:
+                    raise RuntimeError(
+                        f"Opposing pending SELL setup exists on {curr}; cannot hold BUY and SELL at the same time."
+                    )
+                if is_incoming_sell and is_p_buy:
+                    raise RuntimeError(
+                        f"Opposing pending BUY setup exists on {curr}; cannot hold BUY and SELL at the same time."
+                    )
         except ImportError:
             pass
         if lots <= 0 or size <= 0 or leverage < self.risk_manager.config.min_leverage:
@@ -1193,6 +1229,13 @@ class ExecutionEngine:
                     }
                     events.append(ev)
                     self._dispatch_event(ev["event"], setup, ev["message"])
+
+                    try:
+                        from anti_spam import get_anti_spam_limiter
+                        limiter = get_anti_spam_limiter()
+                        limiter.record_entry(setup.symbol, exec_price)
+                    except Exception:
+                        pass
                 else:
                     setup.status = OrderStatus.OPEN
                     setup.executed_at = datetime.now(timezone.utc).isoformat()
@@ -1302,6 +1345,13 @@ class ExecutionEngine:
                     }
                     events.append(ev)
                     self._dispatch_event(ev["event"], setup, ev["message"])
+
+                    try:
+                        from anti_spam import get_anti_spam_limiter
+                        limiter = get_anti_spam_limiter()
+                        limiter.record_entry(setup.symbol, exec_price)
+                    except Exception:
+                        pass
 
         # ----------------------------------------------------
         matching_positions = list(self.active_positions.get_all(sym)) if hasattr(self.active_positions, "get_all") else [p for p in self.active_positions.values() if getattr(p, "symbol", "").upper() == sym]

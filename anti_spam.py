@@ -98,6 +98,13 @@ class AntiSpamRateLimiter:
         logger.info("AntiSpam mode switched to: %s", self.mode)
         return self.mode
 
+    def set_entry_cooldown(self, seconds: int) -> int:
+        """Set explicit entry cooldown in seconds (enforced for both auto and manual)."""
+        self.entry_cooldown_sec = max(5, int(seconds))
+        self._custom_entry_cd = True
+        logger.info("AntiSpam entry cooldown set to %ss (enforced for auto & manual)", self.entry_cooldown_sec)
+        return self.entry_cooldown_sec
+
     def get_mode(self) -> str:
         return self.mode
 
@@ -156,11 +163,15 @@ class AntiSpamRateLimiter:
         """Count active positions and pending setups matching a canonical currency."""
         curr = canonical_currency(currency)
         matching_active = []
+        seen_tickets = set()
         if hasattr(engine, "active_positions") and engine.active_positions:
             for p in engine.active_positions.values():
                 sym = getattr(p, "symbol", "")
                 if canonical_currency(sym) == curr:
                     matching_active.append(p)
+                    tkt = str(getattr(p, "ticket", "") or getattr(p, "id", "") or "").strip()
+                    if tkt:
+                        seen_tickets.add(tkt)
 
         matching_pending = []
         if hasattr(engine, "pending_setups") and engine.pending_setups:
@@ -168,6 +179,19 @@ class AntiSpamRateLimiter:
                 sym = getattr(p, "symbol", "")
                 if canonical_currency(sym) == curr:
                     matching_pending.append(p)
+
+        # Include broker positions if broker is present
+        if getattr(engine, "broker", None) is not None and hasattr(engine.broker, "get_positions"):
+            try:
+                for bp in engine.broker.get_positions():
+                    if canonical_currency(getattr(bp, "symbol", "")) == curr:
+                        bp_tkt = str(getattr(bp, "ticket", "") or getattr(bp, "id", "") or "").strip()
+                        if not bp_tkt or bp_tkt not in seen_tickets:
+                            matching_active.append(bp)
+                            if bp_tkt:
+                                seen_tickets.add(bp_tkt)
+            except Exception:
+                pass
 
         total = len(matching_active) + len(matching_pending)
         return total, matching_active
@@ -240,10 +264,10 @@ class AntiSpamRateLimiter:
         """
         Evaluate if a new trade can be opened for symbol.
         Enforces:
+        - Strict Single-Direction Rule: NEVER hold BUY and SELL positions on the same currency simultaneously (Auto & Manual)
         - Total max concurrent positions (default 6)
         - Max 2 trades per currency (2 Gold, 2 BTC)
-        - Single direction isolation: never BUY and SELL same currency at the same time
-        - Global, entry, and loss cooldowns (adapted in AUTO mode, bypassed in OFF mode or when bypass_cooldowns=True)
+        - Global, entry, and loss cooldowns (enforced on both Auto & Manual unless bypassed)
         - Price proximity distance protection
         Returns (can_enter: bool, reason: str).
         """
@@ -252,25 +276,9 @@ class AntiSpamRateLimiter:
         curr = canonical_currency(sym)
         st = self._get_state(sym)
 
-        # Check spam trade mode (max 6 without cooldown)
-        if self.spam_trade_enabled:
-            eff_max_open = max(max_open, self.spam_trade_max_trades)
-            open_n = len(engine.active_positions) + len(engine.pending_setups)
-            if open_n >= eff_max_open:
-                return False, f"Spam trade capacity reached ({open_n}/{eff_max_open})"
-            return True, f"OK (Spam trade mode active: {open_n + 1}/{eff_max_open} without cooldown)"
-
-        # 1. Total capacity check across all symbols (default max 4)
-        open_n = len(engine.active_positions) + len(engine.pending_setups)
-        if open_n >= max_open:
-            return False, f"Total open slots full ({open_n}/{max_open})"
-
-        # 2. Per-currency concurrency check (max 2 trades same currency, e.g. 2 Gold, 2 BTC)
+        # 1. Strict Single-Direction Rule: NEVER hold BUY and SELL positions on the same currency at the same time.
+        # This rule is absolute and applies across ALL modes (Auto, Manual, Spam, Scalp, Swing).
         curr_count, matching_active = self.count_currency_positions(engine, curr)
-        if curr_count >= self.max_positions_per_symbol:
-            return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
-
-        # 3. Strict Single-Direction Rule: Never hold BUY and SELL positions on the same currency at the same time
         if direction:
             dir_norm = str(direction).upper()
             is_incoming_buy = dir_norm in ("LONG", "BUY")
@@ -282,7 +290,7 @@ class AntiSpamRateLimiter:
                         if canonical_currency(getattr(p, "symbol", "")) == curr:
                             all_matching.append(p)
                 for pos in all_matching:
-                    pos_dir = str(getattr(pos, "direction", "")).upper()
+                    pos_dir = str(getattr(pos, "direction", getattr(pos, "side", ""))).upper()
                     is_pos_buy = pos_dir in ("LONG", "BUY")
                     is_pos_sell = pos_dir in ("SHORT", "SELL")
                     if is_incoming_buy and is_pos_sell:
@@ -290,14 +298,30 @@ class AntiSpamRateLimiter:
                     if is_incoming_sell and is_pos_buy:
                         return False, f"Opposing direction: active BUY position exists on {curr}; cannot BUY and SELL at the same time"
 
-        # 3. Minimum price distance from existing active positions on this currency
-        # When bypass_cooldowns=True (e.g. scalping mode), time cooldowns are skipped,
+        # Check spam trade mode (max 6 without cooldown)
+        if self.spam_trade_enabled:
+            eff_max_open = max(max_open, self.spam_trade_max_trades)
+            open_n = len(engine.active_positions) + len(engine.pending_setups)
+            if open_n >= eff_max_open:
+                return False, f"Spam trade capacity reached ({open_n}/{eff_max_open})"
+            return True, f"OK (Spam trade mode active: {open_n + 1}/{eff_max_open} without cooldown)"
+
+        # 2. Total capacity check across all symbols (default max 6)
+        open_n = len(engine.active_positions) + len(engine.pending_setups)
+        if open_n >= max_open:
+            return False, f"Total open slots full ({open_n}/{max_open})"
+
+        # 3. Per-currency concurrency check (max 2 trades same currency, e.g. 2 Gold, 2 BTC)
+        if curr_count >= self.max_positions_per_symbol:
+            return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
+
+        # 4. Minimum price distance from existing active positions on this currency
+        # When bypass_cooldowns=True, time cooldowns are skipped,
         # but micro price spacing is maintained so orders do not stack at the exact same price.
-        # Tight micro-gap (e.g. 0.03% = ~$0.80 on Gold) keeps positions near the chart move without excessive gap.
         eff_min_dist = min(self.min_price_distance_pct, 0.03) if bypass_cooldowns else self.min_price_distance_pct
         if eff_min_dist > 0 and matching_active and current_price > 0:
             for pos in matching_active:
-                pos_entry = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or 0.0)
+                pos_entry = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", getattr(pos, "entry_price", 0.0)) or 0.0)
                 if pos_entry > 0:
                     dist_pct = abs(current_price - pos_entry) / pos_entry * 100.0
                     if dist_pct < eff_min_dist:
@@ -308,6 +332,8 @@ class AntiSpamRateLimiter:
         # When bypass_cooldowns or mode is OFF: time cooldowns are bypassed
         if bypass_cooldowns:
             return True, "OK (cooldowns bypassed)"
+        if self.mode == "off":
+            return True, "OK (anti-spam manual OFF)"
         if self.mode == "off":
             return True, "OK (anti-spam manual OFF)"
 
@@ -344,6 +370,8 @@ class AntiSpamRateLimiter:
         max_total = self.spam_trade_max_trades if self.spam_trade_enabled else (int(getattr(engine, "max_open_trades", 6)) if engine is not None else 6)
         lines = [
             "🛡️ **Anti-Spam & Cooldown Telemetry**",
+            f"• **Scope:** `Enforced on BOTH Auto & Manual trading`",
+            f"• **Direction Rule:** `Strict Single-Direction (Opposing BUY/SELL blocked)`",
             f"• **Operating Mode:** `{mode_icon}`",
             f"• **Spam Trade Mode:** `{spam_tag}`",
             f"• **Concurrency Limits:** Max `{max_total}` Total | Max `{'6' if self.spam_trade_enabled else '2'}` per Currency (2 Gold, 2 BTC)",
@@ -386,7 +414,7 @@ class AntiSpamRateLimiter:
                 )
 
         lines.append(
-            "\n💡 _Commands: /cooldown active | /cooldown deactivate | /spam on | /spam off | /spamtrade [on|off] | /antispam reset_"
+            "\n💡 _Commands: /cooldown [auto|on|off|<seconds>|reset] | /spam on | /spam off_"
         )
         return "\n".join(lines)
 

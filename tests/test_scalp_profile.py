@@ -11,6 +11,8 @@ from strategy_profiles import load_profiles, apply_profile
 
 class TestScalpProfileAndSpamTrading(unittest.TestCase):
     def setUp(self):
+        from anti_spam import get_anti_spam_limiter
+        get_anti_spam_limiter().reset()
         self.risk_mgr = RiskManager(equity=10000.0, symbol="BTCUSDT", state_file="test_scalp_risk_mgr.json")
         self.risk_mgr.reset_daily_risk()
         self.arbiter = Arbiter(allow_asian=True)
@@ -18,6 +20,8 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
 
     def tearDown(self):
         import os
+        from anti_spam import get_anti_spam_limiter
+        get_anti_spam_limiter().reset()
         if os.path.exists("test_scalp_risk_mgr.json"):
             try:
                 os.remove("test_scalp_risk_mgr.json")
