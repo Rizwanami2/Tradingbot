@@ -363,15 +363,7 @@ def attach_plan_to_signal(sig: Dict[str, Any], plan: EntryPlan) -> Dict[str, Any
         best = float(plan.best_entry)
         
         # Determine if signal is scalp vs balanced / structural consensus
-        if "is_scalp" in sig:
-            is_scalp = bool(sig["is_scalp"])
-        else:
-            try:
-                from strategy_profiles import get_current_profile
-                cur_prof = get_current_profile()
-                is_scalp = bool(getattr(cur_prof, "is_scalp", False))
-            except Exception:
-                is_scalp = bool(sig.get("fast_market_fill", False))
+        is_scalp = bool(sig.get("is_scalp", False))
 
         if is_scalp:
             # Scalp profile: execute at current market positions

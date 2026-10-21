@@ -26,17 +26,17 @@ class TestTelegramAI(unittest.IsolatedAsyncioTestCase):
         self.ctx = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
         self.ctx.args = []
 
-    async def test_ai_command_confirms_removal(self):
+    async def test_ai_command_shows_dashboard(self):
         await ai_command(self.update, self.ctx)
         self.message.reply_text.assert_called_once()
         msg = self.message.reply_text.call_args[0][0]
-        self.assertIn("AI Suite & Veto Removed", msg)
-        self.assertIn("Pure Multi-Agent Consensus", msg)
+        self.assertIn("AI Advanced Suite", msg)
 
-    def test_register_ai_commands_is_noop(self):
+    def test_register_ai_commands_registers_handler(self):
         app_mock = MagicMock()
+        app_mock.handlers = {0: []}
         register_ai_commands(app_mock)
-        app_mock.add_handler.assert_not_called()
+        app_mock.add_handler.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -116,8 +116,10 @@ class AIAdvancedSuite:
         }
         if self.state_path.exists():
             try:
-                raw = json.loads(self.state_path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict): default.update(raw)
+                content = self.state_path.read_text(encoding="utf-8").strip()
+                if content:
+                    raw = json.loads(content)
+                    if isinstance(raw, dict): default.update(raw)
             except Exception as e:
                 logger.warning("AI state load: %s", e)
         return default

@@ -138,19 +138,28 @@ def fetch_mt5_live_quote(symbol: str, broker: Optional[Any] = None, max_age_seco
         except Exception:
             pass
 
+    # Check broker mark prices first if provided
+    if broker is not None and hasattr(broker, "mark_prices") and isinstance(broker.mark_prices, dict):
+        for candidate in (norm_sym, symbol, f"{norm_sym}T", norm_sym.replace("USD", "USDT")):
+            if candidate in broker.mark_prices and float(broker.mark_prices[candidate]) > 0:
+                mark_price = float(broker.mark_prices[candidate])
+                source = "MT5 Broker Mark"
+                break
+
     # Realtime prices spot quote
     rt_data: Dict[str, Any] = {}
-    try:
-        from realtime_prices import fetch_spot_price
-        query_sym = "BTCUSDT" if norm_sym == "BTCUSD" else "XAUUSD"
-        rt_data = fetch_spot_price(query_sym)
-        if rt_data.get("ok"):
-            rt_mark = float(rt_data.get("mark") or rt_data.get("close") or 0.0)
-            if mark_price <= 0 and rt_mark > 0:
-                mark_price = rt_mark
-                source = rt_data.get("source", "Realtime Feed")
-    except Exception as e:
-        logger.debug("realtime_prices lookup error: %s", e)
+    if mark_price <= 0:
+        try:
+            from realtime_prices import fetch_spot_price
+            query_sym = "BTCUSDT" if norm_sym == "BTCUSD" else "XAUUSD"
+            rt_data = fetch_spot_price(query_sym)
+            if rt_data.get("ok"):
+                rt_mark = float(rt_data.get("mark") or rt_data.get("close") or 0.0)
+                if mark_price <= 0 and rt_mark > 0:
+                    mark_price = rt_mark
+                    source = rt_data.get("source", "Realtime Feed")
+        except Exception as e:
+            logger.debug("realtime_prices lookup error: %s", e)
 
     # Fallback to MarketDataFeed quote
     if mark_price <= 0:
@@ -569,10 +578,11 @@ def get_mt5_live_chart(symbol: str, timeframe: str = "1m", broker: Optional[Any]
     """Compile comprehensive MT5 live chart data bundle for a symbol."""
     norm_sym, name, icon = get_display_names(symbol)
     tf_norm = timeframe.strip().upper()
-    cache_key = (norm_sym, tf_norm)
+    login_id = getattr(broker, "login", "default") if broker is not None else "default"
+    cache_key = (norm_sym, tf_norm, login_id)
     now = time.time()
     with _CHART_LOCK:
-        if cache_key in _CHART_CACHE:
+        if cache_key in _CHART_CACHE and broker is None:
             ts, cached_bundle = _CHART_CACHE[cache_key]
             if (now - ts) < 4.0:
                 res = dict(cached_bundle)

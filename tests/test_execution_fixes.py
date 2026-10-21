@@ -23,6 +23,24 @@ from execution import (
 
 
 class TestExecutionFixes(unittest.TestCase):
+    def setUp(self):
+        import os
+        import config
+        self._orig_backend = getattr(config, "MT5_BACKEND", "auto")
+        self._orig_env_backend = os.environ.get("MT5_BACKEND")
+        config.MT5_BACKEND = "auto"
+        if "MT5_BACKEND" in os.environ:
+            del os.environ["MT5_BACKEND"]
+
+    def tearDown(self):
+        import os
+        import config
+        config.MT5_BACKEND = self._orig_backend
+        if self._orig_env_backend is not None:
+            os.environ["MT5_BACKEND"] = self._orig_env_backend
+        elif "MT5_BACKEND" in os.environ:
+            del os.environ["MT5_BACKEND"]
+
     def test_create_broker_fail_closed(self):
         # 1. Paper mode raises BrokerConfigurationError (paper trading removed)
         with self.assertRaises(BrokerConfigurationError):

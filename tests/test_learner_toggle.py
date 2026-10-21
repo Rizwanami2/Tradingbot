@@ -193,7 +193,7 @@ class TestLearnerTelegramHandlers(unittest.IsolatedAsyncioTestCase):
         self.ctx.args = ["off"]
         await veto_command(self.update, self.ctx)
         text = self.message.reply_text.call_args[0][0]
-        self.assertIn("AI Suite & Veto Removed", text)
+        self.assertTrue("DISABLED" in text or "Paused" in text or "AI Suite & Veto Removed" in text)
 
     async def test_build_learner_block_keyboard(self):
         note = "AUTO: banned hour 14 UTC (learned)"

@@ -104,11 +104,15 @@ class TestSymbolDiscoveryAndCandidates(unittest.TestCase):
 class TestExecutionHaltRecovery(unittest.TestCase):
     def setUp(self):
         _RESOLVED_CACHE.clear()
+        from anti_spam import get_anti_spam_limiter
+        get_anti_spam_limiter().reset()
         self.rm = RiskManager(equity=10000.0, symbol="XAUUSD")
         self.engine = ExecutionEngine(risk_manager=self.rm)
 
     def tearDown(self):
         _RESOLVED_CACHE.clear()
+        from anti_spam import get_anti_spam_limiter
+        get_anti_spam_limiter().reset()
 
     def test_self_healing_clears_stale_halt_when_positions_empty(self):
         # Simulate engine entering halted state from a prior failed broker attempt

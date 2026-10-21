@@ -1438,18 +1438,16 @@ class ExecutionEngine:
                 be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
                 move_gain_pct = ((pos.highest_price - entry) / entry * 100.0) if is_long else ((entry - pos.lowest_price) / entry * 100.0)
                 if pos.be_stage < 1 and (pos.highest_profit_usd >= be_act_usd or move_gain_pct >= be_act_pct):
-                    be_safe_margin = max(buffer_price, 0.01)
                     if is_long:
                         target_be = round(entry * 1.0002, 4)
-                        safe_ceiling = round(curr_price - be_safe_margin, 4)
-                        if target_be <= safe_ceiling:
+                        if target_be < curr_price:
                             candidate_be = target_be
-                        elif entry <= safe_ceiling:
+                        elif entry < curr_price:
                             candidate_be = entry
                         else:
-                            candidate_be = safe_ceiling
+                            candidate_be = None
 
-                        if candidate_be > pos.stop_loss and candidate_be < curr_price:
+                        if candidate_be is not None and candidate_be > pos.stop_loss:
                             old_sl = pos.stop_loss
                             pos.stop_loss = candidate_be
                             pos.be_stage = 1
@@ -1466,15 +1464,14 @@ class ExecutionEngine:
                             self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
                     else:
                         target_be = round(entry * 0.9998, 4)
-                        safe_floor = round(curr_price + be_safe_margin, 4)
-                        if target_be >= safe_floor:
+                        if target_be > curr_price:
                             candidate_be = target_be
-                        elif entry >= safe_floor:
+                        elif entry > curr_price:
                             candidate_be = entry
                         else:
-                            candidate_be = safe_floor
+                            candidate_be = None
 
-                        if candidate_be < pos.stop_loss and candidate_be > curr_price:
+                        if candidate_be is not None and candidate_be < pos.stop_loss:
                             old_sl = pos.stop_loss
                             pos.stop_loss = candidate_be
                             pos.be_stage = 1
