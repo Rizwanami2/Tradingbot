@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 import time
 from typing import Any, Callable, Dict, List, Tuple
@@ -30,12 +31,40 @@ async def send_telegram_alert(app: Any, config: Any, text: str) -> bool:
 _last_ai_veto: Dict[str, Tuple[str, float]] = {}
 
 
+def _should_notify_veto(symbol: str, reason_key: str, cooldown_sec: float = 120.0) -> bool:
+    now = time.time()
+    prev = _last_ai_veto.get(symbol)
+    if prev and prev[0] == reason_key and (now - prev[1]) < cooldown_sec:
+        return False
+    _last_ai_veto[symbol] = (reason_key, now)
+    return True
+
+
 def _ai_gate_signal(sig: dict, symbol: str, profile: str, dname: str = "", agree: int = 0, conv_val: float = 0.6):
-    """
-    Pure Multi-Agent & Brain mode:
-    Secondary AI gating and vetoing are disabled; consensus signals flow cleanly.
-    """
-    return True, sig
+    """AI Advanced Suite hard gates. Returns (allowed, sig, reasons)."""
+    try:
+        from ai_advanced_suite import evaluate_signal_dict, get_ai_suite
+        suite = get_ai_suite()
+        if not getattr(suite, "enabled", True):
+            return True, sig, []
+        gate = evaluate_signal_dict(sig, profile=str(profile or "scalp"))
+        reasons = list(getattr(gate, "reasons", None) or [])
+        if not getattr(gate, "allowed", True):
+            return False, sig, reasons
+        try:
+            sm = float(getattr(gate, "size_mult", 1.0) or 1.0)
+            if sm > 0 and sm != 1.0:
+                sig = dict(sig)
+                sig["ai_size_mult"] = sm
+        except Exception:
+            pass
+        if hasattr(gate, "scorecard"):
+            sig = dict(sig)
+            sig["ai_scorecard"] = getattr(gate, "scorecard", None)
+        return True, sig, reasons
+    except Exception as e:
+        logger.debug("AI suite gate error (fail-open): %s", e)
+        return True, sig, []
 
 
 def _ai_on_open(symbol: str, direction: str, meta=None):
@@ -46,47 +75,68 @@ def _ai_on_open(symbol: str, direction: str, meta=None):
         pass
 
 
-def _ai_on_close(symbol: str, fpnl: float, ev: dict = None):
+def _ai_on_close(symbol: str, fpnl: float, ev: dict = None) -> str:
+    """Auto-learn on every close + live analysis text."""
     ev = ev or {}
     r_mult = float(ev.get("r_multiple", ev.get("r", 0.0)) or 0.0)
     if r_mult == 0.0 and fpnl != 0.0:
         r_mult = 1.0 if fpnl > 0 else -1.0
+    won = fpnl >= 0
+    pos = ev.get("order") if ev else None
+    agents = list(getattr(pos, "agents", []) or []) if pos else []
+    regime = str(getattr(pos, "regime", "") or "") if pos else ""
+    session = str(getattr(pos, "session", "") or "") if pos else ""
+    direction = str(getattr(pos, "direction", "") or "") if pos else ""
+    setup = f"{direction.lower()}|{symbol.lower()}" if direction else f"live|{symbol.lower()}"
+    conf = float(getattr(pos, "conviction", 0.6) or 0.6) if pos else 0.6
     try:
         from ai_advanced_suite import get_ai_suite
-        get_ai_suite().on_trade_closed(symbol=symbol, won=fpnl >= 0, r_multiple=r_mult)
-    except Exception:
-        pass
+        get_ai_suite().on_trade_closed(symbol=symbol, won=won, r_multiple=r_mult)
+    except Exception as e:
+        logger.debug("suite close: %s", e)
+    live_n = 0
+    banned = ""
     try:
         from autonomous_learner import get_brain
         brain = get_brain(auto_bootstrap=False)
-        pos = ev.get("order") if ev else None
-        agents = getattr(pos, "agents", []) if pos else []
-        regime = getattr(pos, "regime", "") if pos else ""
-        session = getattr(pos, "session", "") if pos else ""
-        setup = f"{getattr(pos, 'direction', '').lower()}|{symbol.lower()}" if pos else f"live|{symbol.lower()}"
         brain.on_trade_closed(
-            r_multiple=r_mult,
-            won=fpnl >= 0,
-            setup=setup,
-            regime=regime,
-            session=session,
-            agents=agents,
-            conf=getattr(pos, "conviction", 0.6) if pos else 0.6,
+            r_multiple=r_mult, won=won, setup=setup, regime=regime,
+            session=session, agents=agents, conf=conf,
         )
-    except Exception:
-        pass
-
+        live_n = int(getattr(getattr(brain, "knowledge", None), "total_live_trades", 0) or 0)
+        if setup in getattr(brain.knowledge, "banned_setups", {}):
+            banned = str(brain.knowledge.banned_setups.get(setup, ""))
+    except Exception as e:
+        logger.debug("brain close: %s", e)
     try:
-        from combined_bot_agent import CombinedBotAgent
-        CombinedBotAgent().on_close(
-            pnl=float(fpnl),
-            r_multiple=float(r_mult),
-            direction=str(getattr(pos, "direction", "") if pos else ""),
-            entry=float(getattr(pos, "entry_level", 0) or 0) if pos else 0.0,
-            notes="autotrade_close",
-        )
-    except Exception:
-        pass
+        import csv
+        from pathlib import Path as _P
+        from datetime import datetime, timezone
+        jpath = _P("data") / "live_trade_journal.csv"
+        jpath.parent.mkdir(parents=True, exist_ok=True)
+        nf = not jpath.exists()
+        with jpath.open("a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if nf:
+                w.writerow(["ts", "symbol", "direction", "pnl", "r", "won", "setup", "regime", "session", "agents"])
+            w.writerow([
+                datetime.now(timezone.utc).isoformat(), symbol, direction,
+                round(fpnl, 4), round(r_mult, 4), int(won), setup, regime, session,
+                "|".join(str(a) for a in agents),
+            ])
+    except Exception as e:
+        logger.debug("journal: %s", e)
+    reg_disp = regime or "-"
+    lines = [
+        f"{emoji} Learn+Close {symbol} {direction}",
+        f"PnL: {fpnl:+.2f} | R: {r_mult:+.2f} | Live: {live_n}",
+        f"Setup: {setup} | Regime: {reg_disp}",
+    ]
+    if banned:
+        lines.append(f"Banned: {banned}")
+    lines.append("Learned from this close")
+    return chr(10).join(lines)
+
 
 
 async def live_monitoring_worker(
@@ -321,7 +371,9 @@ async def live_monitoring_worker(
                                 limiter.record_loss(symbol, abs(fpnl))
                             else:
                                 limiter.record_win(symbol)
-                            _ai_on_close(symbol, fpnl, ev)
+                            _analysis = _ai_on_close(symbol, fpnl, ev)
+                            if _analysis:
+                                await _send_alert(_analysis)
                         elif etype == "TRADE_EXECUTED":
                             pos = ev.get("order")
                             eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])
@@ -379,7 +431,7 @@ async def live_monitoring_worker(
                                         conv_val = 0.6
                                 is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
                                 # Brain (Autonomous Learner): optimize regime lot sizing without vetoing consensus signals
-                                _, _, size_mult = brain.advise_signal(
+                                _ok_brain, _brain_why, size_mult = brain.advise_signal(
                                     direction=dname,
                                     score=float(sig.get("score") or 0.0),
                                     rr=float(sig.get("rr") or 0.0),
@@ -390,6 +442,14 @@ async def live_monitoring_worker(
                                     is_scalp=is_scalp_sig,
                                     profile=current_profile_name,
                                 )
+                                _live_veto = str(os.getenv("BOT_LEARN_LIVE_VETO", "true")).lower() in ("true", "1", "yes", "on")
+                                if not _ok_brain and _live_veto:
+                                    logger.info("Autotrade %s: LEARN VETO — %s", symbol, _brain_why)
+                                    monitoring_health[f"{symbol}_eval"] = f"Learn veto: {_brain_why}"
+                                    if _should_notify_veto(symbol, f"learn:{str(_brain_why)[:80]}"):
+                                        await _send_alert(f"Learn veto {symbol}: {_brain_why}")
+                                    continue
+
                                 # Pure Multi-Agent mode: apply Brain regime sizing multiplier without dropping trades
                                 if size_mult > 0.0 and size_mult != 1.0 and sig.get("lot_mode", "auto") != "manual":
                                     if sig.get("lots"):
@@ -454,6 +514,31 @@ async def live_monitoring_worker(
                                 logger.debug("CombinedBotAgent note: %s", _cba_err)
 
                             # 1. Strict Single-Direction Rule & Cooldown: Do not buy and sell positions at the same time
+
+                            try:
+                                if getattr(config, "SAFETY_REQUIRE_RISK_CAN_TRADE", True):
+                                    _rok, _rwhy = risk_mgr.can_trade()
+                                    if not _rok:
+                                        logger.info("Autotrade %s: RISK VETO — %s", symbol, _rwhy)
+                                        monitoring_health[f"{symbol}_eval"] = f"Risk veto: {_rwhy}"
+                                        if _should_notify_veto(symbol, f"risk:{_rwhy}"):
+                                            await _send_alert(f"Risk veto {symbol}: {_rwhy}")
+                                        continue
+                            except Exception as _re:
+                                logger.debug("risk note: %s", _re)
+                            try:
+                                _prof = str(getattr(config, "CURRENT_PROFILE", "scalp") or "scalp")
+                                _ok_ai, sig, _ai_reasons = _ai_gate_signal(sig, symbol, _prof, dname, agree, conv_val)
+                                if not _ok_ai:
+                                    _why = ", ".join(_ai_reasons) if _ai_reasons else "AI veto"
+                                    logger.info("Autotrade %s: AI VETO — %s", symbol, _why)
+                                    monitoring_health[f"{symbol}_eval"] = f"AI veto: {_why}"
+                                    if _should_notify_veto(symbol, f"ai:{_why[:80]}"):
+                                        await _send_alert(f"AI veto {symbol}: {_why}")
+                                    continue
+                            except Exception as _ae:
+                                logger.debug("ai gate note: %s", _ae)
+
                             can_enter_dir, dir_reason = limiter.check_can_enter(
                                 symbol=symbol,
                                 current_price=candle_dict["close"],
@@ -553,7 +638,9 @@ async def live_monitoring_worker(
                                         limiter.record_loss(symbol, abs(fpnl))
                                     else:
                                         limiter.record_win(symbol)
-                                    _ai_on_close(symbol, fpnl, ev)
+                                    _analysis = _ai_on_close(symbol, fpnl, ev)
+                                    if _analysis:
+                                        await _send_alert(_analysis)
                                 elif etype == "TRADE_EXECUTED":
                                     pos = ev.get("order")
                                     eprice = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", 0.0) or candle_dict["close"])

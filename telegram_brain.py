@@ -508,16 +508,17 @@ async def learner_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def veto_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Inform user that secondary AI Suite & Veto filtering have been permanently removed."""
-    msg = (
-        "ℹ️ **AI Suite & Veto Removed**\n\n"
-        "• **Execution Engine:** Pure Multi-Agent Consensus (`multi_agent_trading_bot.py`)\n"
-        "  _Consensus signals flow directly to execution without secondary AI or veto blocks._\n\n"
-        "• **Learning Engine:** Autonomous Brain (`autonomous_learner.py`)\n"
-        "  _Background win-rate logging and regime sizing remain active without blocking trades._\n\n"
-        "• Use `/brain`, `/agents`, `/signal`, or `/autotrade` for active controls."
-    )
-    await safe_reply(update, msg, parse_mode="Markdown")
+    """Unified /veto command — opens combined AI & Veto hub or delegates to learner actions."""
+    args = list(getattr(ctx, "args", []) or [])
+    if not args or (args and args[0].lower() in ("status", "dash", "dashboard", "hub")):
+        try:
+            from telegram_ai import build_ai_dashboard
+            text, markup = build_ai_dashboard()
+            await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
+            return
+        except Exception as e:
+            logger.debug("veto dashboard fallback: %s", e)
+    await learner_command(update, ctx)
 
 
 async def brain_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -779,8 +780,10 @@ def register_brain(application) -> None:
         ("train", train_command),
         ("learner", learner_command),
         ("autonomous", learner_command),
+        ("veto", veto_command),
+        ("learnerveto", veto_command),
     ]:
         if cmd not in existing_cmds:
             application.add_handler(CommandHandler(cmd, handler))
             existing_cmds.add(cmd)
-    logger.info("Registered /brain /relearn /train /learner")
+    logger.info("Registered /brain /relearn /train /learner /veto")

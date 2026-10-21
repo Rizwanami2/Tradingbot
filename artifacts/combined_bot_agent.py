@@ -360,12 +360,17 @@ def run_single_cycle(
                 conf = float(sig.get("conviction") or 0.6)
             except Exception:
                 conf = 0.6
+            agree = int(sig.get("agreement") or 2)
             _, _, size_mult = brain.advise_signal(
-                setup=f"{dname.lower()}|{sym.lower()}",
+                direction=dname,
+                score=float(sig.get("score") or 0.0),
+                rr=float(sig.get("rr") or 0.0),
+                agreement=agree,
+                conviction=conf,
                 regime=str(sig.get("regime", "")),
-                session=str(sig.get("session", "")),
-                conf=conf,
-                agents=[str(v.name if hasattr(v, "name") else getattr(v, "agent_name", str(v))) for v in (votes or [])],
+                setup=f"{dname.lower()}|{sym.lower()}",
+                is_scalp=(str(getattr(config, "CURRENT_PROFILE", "scalp")).lower() == "scalp"),
+                profile=getattr(config, "CURRENT_PROFILE", "scalp"),
             )
             if size_mult < 1.0 and sig.get("lots"):
                 sig["lots"] = max(0.01, round(float(sig["lots"]) * size_mult, 4))

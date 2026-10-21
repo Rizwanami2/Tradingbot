@@ -164,11 +164,11 @@ def fix_autotrade() -> None:
             "            ])\n"
             "    except Exception as e:\n"
             '        logger.debug("journal: %s", e)\n'
-            '    emoji = "WIN" if won else "LOSS"\n'
-            "    lines = [\n"
+            '    reg_disp = regime or "-"\n'
+            '    lines = [\n'
             '        f"{emoji} Learn+Close {symbol} {direction}",\n'
             '        f"PnL: {fpnl:+.2f} | R: {r_mult:+.2f} | Live: {live_n}",\n'
-            '        f"Setup: {setup} | Regime: {regime or \"-\"}",\n'
+            '        f"Setup: {setup} | Regime: {reg_disp}",\n'
             "    ]\n"
             "    if banned:\n"
             '        lines.append(f"Banned: {banned}")\n'
@@ -256,37 +256,7 @@ def fix_autotrade() -> None:
 def fix_antispam() -> None:
     p = Path("anti_spam.py")
     a = p.read_text(encoding="utf-8")
-    a = a.replace(
-        "from typing import Any, Dict, Optional, Tuple",
-        "from typing import Any, Dict, List, Optional, Tuple",
-    )
-    for name in (
-        "get_entry_cooldown_duration",
-        "get_loss_cooldown_duration",
-        "get_global_cooldown_duration",
-    ):
-        a = re.sub(
-            rf"    def {name}\([^)]*\).*?\n(?=    def )",
-            f"    def {name}(self, *args, **kwargs):\n        return 0  # cooldowns removed\n\n",
-            a,
-            count=1,
-            flags=re.S,
-        )
-    if "cooldowns disabled" not in a:
-        for start_s in (
-            "        # When bypass_cooldowns or mode is OFF",
-            "        # When mode is OFF: cooldowns",
-            "        if bypass_cooldowns:",
-        ):
-            s = a.find(start_s)
-            if s >= 0:
-                e = a.find('        return True, "OK"\n', s)
-                if e > 0:
-                    e += len('        return True, "OK"\n')
-                    a = a[:s] + '        return True, "OK (cooldowns disabled)"\n\n' + a[e:]
-                    break
     ast.parse(a)
-    p.write_text(a, encoding="utf-8")
     print("anti_spam OK")
 
 

@@ -36,8 +36,14 @@ from main import (
     settings_command,
     handle_command_menu_callback,
     build_settings_dashboard,
+    cooldown_command,
+    spam_command,
+    combined_command,
 )
 from execution_engine import TradeOrder, OrderStatus
+from telegram_feature_pack import board_command, journal_command, agents_command, tiers_command
+from telegram_ai import ai_command
+from telegram_brain import veto_command
 
 
 class TestCommandsList(unittest.IsolatedAsyncioTestCase):
@@ -62,6 +68,10 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self._orig_mt5_backend = getattr(config, "MT5_BACKEND", "auto")
         self._orig_broker_backend = getattr(engine.broker, "backend", "auto")
         self._orig_broker_eff = getattr(engine.broker, "effective_backend", "simulated")
+        self._worker_patcher = patch("main.ensure_background_worker_running")
+        self._worker_patcher.start()
+        self._cli_worker_patcher = patch("main.start_background_autotrade_worker")
+        self._cli_worker_patcher.start()
 
     def setUp(self):
         self._orig_optin = config.AUTOTRADE_LIVE_OPT_IN
@@ -71,10 +81,22 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self._orig_mt5_backend = getattr(config, "MT5_BACKEND", "auto")
         self._orig_broker_backend = getattr(engine.broker, "backend", "auto")
         self._orig_broker_eff = getattr(engine.broker, "effective_backend", "simulated")
+        self._worker_patcher = patch("main.ensure_background_worker_running")
+        self._worker_patcher.start()
+        self._cli_worker_patcher = patch("main.start_background_autotrade_worker")
+        self._cli_worker_patcher.start()
 
     def tearDown(self):
+        try:
+            self._cli_worker_patcher.stop()
+            self._worker_patcher.stop()
+        except Exception:
+            pass
         import main
         main.stop_background_autotrade_worker()
+        if main.background_task and not main.background_task.done():
+            main.background_task.cancel()
+            main.background_task = None
         config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
         engine.broker = self._orig_broker
         engine.active_positions = self._orig_positions
@@ -86,8 +108,16 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
             engine.broker.effective_backend = self._orig_broker_eff
 
     async def asyncTearDown(self):
+        try:
+            self._cli_worker_patcher.stop()
+            self._worker_patcher.stop()
+        except Exception:
+            pass
         import main
         main.stop_background_autotrade_worker()
+        if main.background_task and not main.background_task.done():
+            main.background_task.cancel()
+            main.background_task = None
         config.AUTOTRADE_LIVE_OPT_IN = self._orig_optin
         engine.broker = self._orig_broker
         engine.active_positions = self._orig_positions
@@ -131,6 +161,12 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/train", text)
         self.assertIn("/reset", text)
         self.assertIn("/ask", text)
+        self.assertIn("/cooldown", text)
+        self.assertIn("/spam", text)
+        self.assertIn("/combined", text)
+        self.assertIn("/ai", text)
+        self.assertIn("/board", text)
+        self.assertIn("/journal", text)
 
     async def test_help_command_categories(self):
         # Market category
@@ -247,7 +283,7 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/commands", text)
 
     async def test_unknown_command_removed_features(self):
-        for cmd in ["/ai", "/veto", "/featured", "/feature"]:
+        for cmd in ["/featured", "/feature"]:
             self.message.text = cmd
             self.message.reply_text.reset_mock()
             await unknown_command(self.update, self.ctx)
@@ -436,16 +472,16 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.ctx.args = []
         await digest_command(self.update, self.ctx)
         self.message.reply_text.assert_called()
-        self.assertIn("removed", self.message.reply_text.call_args[0][0])
+        self.assertIn("Daily Digest", self.message.reply_text.call_args[0][0])
 
         await export_command(self.update, self.ctx)
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
         await setups_command(self.update, self.ctx)
-        self.assertIn("removed", self.message.reply_text.call_args[0][0])
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
         await abooks_command(self.update, self.ctx)
-        self.assertIn("removed", self.message.reply_text.call_args[0][0])
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
         await heal_command(self.update, self.ctx)
         self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
@@ -681,6 +717,60 @@ class TestCommandsList(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Did you mean", msg)
         self.assertIn("/signal", msg)
         self.assertIsNotNone(markup)
+
+    async def test_cooldown_and_spam_commands(self):
+        self.ctx.args = []
+        await cooldown_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        self.assertIn("Anti-Spam & Cooldown Telemetry", self.message.reply_text.call_args[0][0])
+
+        self.ctx.args = ["30"]
+        await cooldown_command(self.update, self.ctx)
+        self.assertIn("30s", self.message.reply_text.call_args[0][0])
+
+        self.ctx.args = ["on"]
+        await spam_command(self.update, self.ctx)
+        self.assertIn("Spam Trade Mode ACTIVATED", self.message.reply_text.call_args[0][0])
+
+        self.ctx.args = ["off"]
+        await spam_command(self.update, self.ctx)
+        self.assertIn("Spam Trade Mode DEACTIVATED", self.message.reply_text.call_args[0][0])
+
+    async def test_combined_command(self):
+        self.ctx.args = []
+        await combined_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        self.assertIn("Combined Bot Agent", self.message.reply_text.call_args[0][0])
+
+        self.ctx.args = ["metrics"]
+        await combined_command(self.update, self.ctx)
+        self.assertIn("Metrics", self.message.reply_text.call_args[0][0])
+
+    async def test_feature_pack_v3_commands(self):
+        self.ctx.args = []
+        await board_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
+
+        await journal_command(self.update, self.ctx)
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
+
+        await agents_command(self.update, self.ctx)
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
+
+        await tiers_command(self.update, self.ctx)
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
+
+    async def test_ai_and_veto_commands(self):
+        self.ctx.args = []
+        await ai_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        self.assertIn("AI Advanced Suite", self.message.reply_text.call_args[0][0])
+
+        self.ctx.args = ["status"]
+        await veto_command(self.update, self.ctx)
+        self.message.reply_text.assert_called()
+        self.assertTrue(len(self.message.reply_text.call_args[0][0]) > 0)
 
 
 if __name__ == "__main__":

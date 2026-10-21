@@ -586,6 +586,9 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+            "• `/cooldown [sec|auto|on|off|reset]` — Configure entry, loss & anti-spam cooldowns\n"
+            "• `/spam [on|off]` — Rapid-fire burst mode (max 6 trades, cooldowns bypassed)\n"
+            "• `/combined` — CombinedBotAgent FIT skills & metrics\n"
             "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
             "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
             "• `/leverage [1-200|auto]` — Set manual leverage or dynamic auto-leverage (up to 200x)\n"
@@ -610,8 +613,16 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
     elif cat in ("ai", "brain", "learner", "agent", "agents"):
         text = (
             "🧠 **Autonomous Brain & Multi-Agent Learning:**\n"
+            "• `/ai [status|mode|manual|auto|override|reset|help]` — AI Advanced Suite & manual controls\n"
+            "• `/board` — Strategy board & agent standings\n"
+            "• `/journal` — Trade journal analytics & history\n"
+            "• `/agents` — Agent performance rankings & stats\n"
+            "• `/tiers` — Risk tier allocations\n"
+            "• `/digest` — Daily market performance digest\n"
             "• `/brain` — Strategy brain knowledge, learned rules & win rates\n"
             "• `/learner [rules|clearhours]` — View strategy rules & hour statistics\n"
+            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
+            "• `/combined` — CombinedBotAgent FIT skills & metrics\n"
             "• `/train [heavy|quick]` — Multi-asset model & backtest training\n"
             "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n"
             "• `/reset` — Clear conversation context\n"
@@ -657,7 +668,12 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/slippage` — Broker execution latency & realized slippage tracker\n"
             "• `/close [SYM|all]` — Instantly close position(s)\n"
             "• `/cancel [SYM]` — Cancel pending order setup\n"
-            "• `/closed` — Recently closed trades history & realized PnL\n\n"
+            "• `/closed` — Recently closed trades history & realized PnL\n"
+            "• `/replay [TRADE_ID]` — Replay closed trade setup\n"
+            "• `/export` — Export trade journal to CSV\n"
+            "• `/setups` — Setup expectancy & bans report\n"
+            "• `/abooks` — A/B paper books comparison\n"
+            "• `/heal [reset|status]` — System health & self-healing\n\n"
             "🏦 **Brokers & Execution (MT5 & Delta India):**\n"
             "• `/bridge [ping|test|deploy|on|off|dir]` — EA Bridge diagnostics & auto-deploy\n"
             "• `/switch [delta|live|<login>]` — Fast switcher between brokers & MT5 accounts\n"
@@ -672,6 +688,9 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
             "• `/health` — Real-time telemetry & background worker heartbeat\n"
             "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
+            "• `/cooldown [sec|auto|on|off|reset]` — Entry, loss & anti-spam cooldowns\n"
+            "• `/spam [on|off]` — Rapid-fire burst mode (max 6 trades, cooldowns bypassed)\n"
+            "• `/combined` — CombinedBotAgent FIT skills & metrics\n"
             "• `/kelly [SYM]` — Fractional Kelly lot sizing & portfolio VaR 99%\n"
             "• `/session` — End-of-session performance report & killzones\n"
             "• `/regime` — Market regime detector, auto-switcher & Sharpe calibrator\n"
@@ -687,8 +706,15 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
             "• `/reset` — Clear conversation context\n\n"
             "🧠 **Autonomous Brain & Multi-Agent Learning:**\n"
+            "• `/ai [status|mode|manual|auto|override|reset]` — AI Advanced Suite & manual controls\n"
+            "• `/board` — Strategy board & agent standings\n"
+            "• `/journal` — Trade journal analytics & history\n"
+            "• `/agents` — Agent performance rankings & stats\n"
+            "• `/tiers` — Risk tier allocations\n"
+            "• `/digest` — Daily market performance digest\n"
             "• `/brain` — Autonomous learner knowledge, learned rules & win rates\n"
             "• `/learner [rules|clearhours]` — View strategy rules & hour statistics\n"
+            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
             "• `/train [heavy|quick]` — Deep multi-asset model & autonomous training\n"
             "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n\n"
             "_Filter: `/commands market`, `/commands signals`, `/commands execution`, `/commands risk`, `/commands mt5`, `/commands delta`, `/commands backtest`, `/commands ai`_"
@@ -1027,6 +1053,43 @@ async def spam_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Usage: `/spam on` (enable max 6) or `/spam off` (disable)",
             parse_mode="Markdown",
         )
+
+
+async def combined_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Combined Bot Agent & FIT skills diagnostic & metrics."""
+    try:
+        from combined_bot_agent import CombinedBotAgent
+        cba = CombinedBotAgent()
+        m = cba.metrics()
+        args = ctx.args or []
+        sub = args[0].lower() if args else "status"
+        if sub in ("metric", "metrics", "stats", "performance"):
+            msg = (
+                "🤖 **CombinedBotAgent Metrics & Performance**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"• **Trades Closed:** `{m.get('n', 0)}`\n"
+                f"• **Win Rate:** `{m.get('win_rate', 0.0) * 100:.1f}%`\n"
+                f"• **Average R:** `{m.get('avg_r', 0.0):+.2f}R`\n"
+                f"• **Halt State:** `{'HALTED (' + str(m.get('halt_reason')) + ')' if m.get('halted') else 'ACTIVE 🟢'}`\n"
+                "• **FIT Skills Gate:** Session, Spread, Risk, Structure, Dynamic Trail"
+            )
+        else:
+            msg = (
+                "🤖 **Combined Bot Agent & Multi-Agent Consensus System**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "• **Multi-Agent Consensus:** 18 institutional strategy agents\n"
+                "• **FIT Skills Gate:** Session (London/NY overlap), Spread budget, Risk ceiling, Structure\n"
+                "• **AI Advanced Suite:** Scorecard gating & safety circuit breakers\n"
+                "• **Autonomous Learner Brain:** Win-rate learning, setup calibration & regime sizing\n"
+                "• **Execution Engine:** MetaTrader 5 Live & Delta Exchange India\n"
+                "• **Anti-Spam Limiter:** Single-direction safety & adaptive cooldowns\n"
+                f"• **Journal Closes:** `{m.get('n', 0)}` trades | Win rate: `{m.get('win_rate', 0.0) * 100:.1f}%`\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "💡 _All systems combined and synchronized across every agent._"
+            )
+        await safe_reply(update, msg, parse_mode="Markdown")
+    except Exception as e:
+        await safe_reply(update, f"Combined agent error: {e}", parse_mode=None)
 
 
 def reset_risk_limits(scope: str = "all", restart_autotrade: bool = False, new_equity: Optional[float] = None) -> str:
@@ -1718,7 +1781,6 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     removed_feature_cmds = {
         "feature", "features", "featured",
-        "ai", "aisuite", "veto", "learnerveto", "vedo",
     }
     if cmd_clean in removed_feature_cmds:
         await safe_reply(
@@ -5730,8 +5792,17 @@ def run_cli_interactive():
                     print(f"Unknown ai option: {sub}. Try 'ai help' or 'ai status'")
             except Exception as e:
                 print(f"AI command error: {e}")
+        elif name in ("combined", "cba"):
+            try:
+                from combined_bot_agent import CombinedBotAgent
+                cba = CombinedBotAgent()
+                m = cba.metrics()
+                print(f"Combined Bot Agent: Closed Trades: {m.get('n', 0)} | Win Rate: {m.get('win_rate', 0.0)*100:.1f}% | Avg R: {m.get('avg_r', 0.0):+.2f}R | Halted: {m.get('halted')}")
+                print("FIT Skills Gate: Session (London/NY overlap), Spread budget, Risk ceiling, Structure, Dynamic Trail")
+            except Exception as e:
+                print(f"Combined error: {e}")
         else:
-            print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, train, relearn, ask, reset, exit")
+            print("Commands: signal, price, levels, chart, news, quality, positions, slots, matrix, heatmap, dashboard, autotrade, close, cancel, closed, mt5, bridge, broker, switch, live, balance, delta, status, health, risk, resetrisk, leverage, lot, kelly, regime, session, vstops, slippage, kill, backtest, abacktest, performance, profile, cooldown, spam, combined, board, journal, agents, tiers, digest, replay, export, setups, abooks, heal, brain, train, relearn, ai, ask, reset, exit")
     stop_background_autotrade_worker()
 
 
@@ -5809,6 +5880,9 @@ def main():
                 BotCommand("kelly", "Fractional Kelly lot sizing & portfolio VaR"),
                 BotCommand("regime", "Market regime detector & auto-switcher"),
                 BotCommand("session", "Session summary & killzones report"),
+                BotCommand("cooldown", "Configure entry, loss & anti-spam cooldowns"),
+                BotCommand("spam", "Toggle spam trade burst mode (max 6 trades)"),
+                BotCommand("combined", "Combined Bot Agent & FIT skills diagnostic"),
                 BotCommand("kill", "Emergency execution circuit breaker switch"),
                 # Backtesting & Research
                 BotCommand("backtest", "Fast backtest engine on historical data"),
@@ -5916,6 +5990,9 @@ def main():
     app.add_handler(CommandHandler(["kelly", "var"], kelly_command))
     app.add_handler(CommandHandler(["regime", "switchregime"], regime_command))
     app.add_handler(CommandHandler(["session", "sessions"], session_command))
+    app.add_handler(CommandHandler(["cooldown", "cooldowns", "antispam"], cooldown_command))
+    app.add_handler(CommandHandler(["spam", "spamtrade"], spam_command))
+    app.add_handler(CommandHandler(["combined", "cba"], combined_command))
     try:
         from telegram_advanced import kill_command
         app.add_handler(CommandHandler("kill", kill_command))
@@ -5938,12 +6015,32 @@ def main():
     except Exception as e:
         logger.exception("Failed to register abacktest/profile/scalp handlers: %s", e)
 
-    # Autonomous Brain & AI Suite
+    # Autonomous Brain & Multi-Agent Intelligence
     try:
         from telegram_brain import register_brain
         register_brain(app)
     except Exception as _b_err:
         logger.warning("Failed to register brain commands: %s", _b_err)
+
+    # Feature Packs (v3 & v4)
+    try:
+        from telegram_feature_pack import register_feature_pack
+        register_feature_pack(app)
+    except Exception as _fp_err:
+        logger.warning("Failed to register feature pack v3 commands: %s", _fp_err)
+
+    try:
+        from telegram_feature_pack_v4 import register_feature_pack_v4
+        register_feature_pack_v4(app)
+    except Exception as _fp4_err:
+        logger.warning("Failed to register feature pack v4 commands: %s", _fp4_err)
+
+    # AI Advanced Suite
+    try:
+        from telegram_ai import register_ai_commands
+        register_ai_commands(app)
+    except Exception as _ai_err:
+        logger.warning("Failed to register AI suite commands: %s", _ai_err)
 
     # Conversational Assistant & Controls
     app.add_handler(CommandHandler(["ask", "chat"], ask_command))

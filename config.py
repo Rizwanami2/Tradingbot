@@ -489,3 +489,6 @@ SCALP_GLOBAL_COOLDOWN_SEC = _safe_float(os.getenv("BOT_SCALP_GLOBAL_COOLDOWN_SEC
 SCALP_MAX_POSITIONS_PER_SYMBOL = _safe_int(os.getenv("BOT_SCALP_MAX_POSITIONS_PER_SYMBOL"), 2)
 SCALP_MIN_PRICE_DISTANCE_PCT = _safe_float(os.getenv("BOT_SCALP_MIN_PRICE_DISTANCE_PCT"), 0.08)
 
+
+SAFETY_REQUIRE_RISK_CAN_TRADE = os.getenv("BOT_SAFETY_REQUIRE_RISK", "true").lower() in ("true", "1", "yes", "on")
+LEARN_LIVE_VETO = os.getenv("BOT_LEARN_LIVE_VETO", "true").lower() in ("true", "1", "yes", "on")

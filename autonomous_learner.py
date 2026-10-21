@@ -625,11 +625,16 @@ class AutonomousLearner:
         weekday: Optional[int] = None,
         is_scalp: bool = False,
         profile: Optional[str] = None,
+        **kwargs: Any,
     ) -> Tuple[bool, str, float]:
         """
         Returns (allow, reason, size_multiplier).
         Evaluates candidate signal against self-learned filters, flaw patterns, and regimes.
         """
+        if not conviction and "conf" in kwargs:
+            conviction = float(kwargs["conf"] or 0.0)
+        if not direction and "dir" in kwargs:
+            direction = str(kwargs["dir"])
         k = self.knowledge
         if not getattr(k, "enabled", True):
             return True, "AUTO: brain filtering is disabled", 1.0

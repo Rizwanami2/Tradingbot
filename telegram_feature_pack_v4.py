@@ -39,34 +39,53 @@ def _get():
 from telegram_brain import safe_reply
 
 
-async def _feature_removed_reply(update: Update, cmd: str):
-    await safe_reply(
-        update,
-        f"ℹ️ Command `/{cmd}` has been completely removed.\n"
-        "• All strategy signals execute directly without feature or veto gates.\n"
-        "• Use `/commands` to view active trading commands.",
-        parse_mode="Markdown",
-    )
-
-
 async def digest_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _feature_removed_reply(update, "digest")
+    try:
+        await safe_reply(update, _get().digest(), parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /digest command: %s", e)
+        await safe_reply(update, f"Digest error: {e}", parse_mode=None)
 
 
 async def replay_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _feature_removed_reply(update, "replay")
+    if not ctx.args:
+        await safe_reply(update, "Usage: `/replay TRADE_ID`", parse_mode="Markdown")
+        return
+    try:
+        text = _get().replay(ctx.args[0])
+        await safe_reply(update, text, parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /replay command: %s", e)
+        await safe_reply(update, f"Replay error: {e}", parse_mode=None)
 
 
 async def export_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _feature_removed_reply(update, "export")
+    try:
+        csv_text = _get().export_csv()
+        if len(csv_text) > 3500:
+            csv_text = csv_text[:3400] + "\n…(truncated)"
+        await safe_reply(update, f"```\n{csv_text}\n```", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /export command: %s", e)
+        await safe_reply(update, f"Export error: {e}", parse_mode=None)
 
 
 async def setups_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _feature_removed_reply(update, "setups")
+    try:
+        pack = _get()
+        text = pack.edge.setup_report() + "\n\n" + pack.edge.calibration_report()
+        await safe_reply(update, text, parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /setups command: %s", e)
+        await safe_reply(update, f"Setups error: {e}", parse_mode=None)
 
 
 async def abooks_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _feature_removed_reply(update, "abooks")
+    try:
+        await safe_reply(update, _get().ab.report(), parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error in /abooks command: %s", e)
+        await safe_reply(update, f"A/B error: {e}", parse_mode=None)
 
 
 async def quality_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -93,7 +112,16 @@ async def quality_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def heal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _feature_removed_reply(update, "heal")
+    try:
+        h = _get().health
+        if ctx.args and ctx.args[0].lower() in ("reset", "ok", "clear"):
+            h.record_ok()
+            await safe_reply(update, "🟢 Health counter reset.", parse_mode=None)
+        else:
+            await safe_reply(update, h.status(), parse_mode=None)
+    except Exception as e:
+        logger.exception("Error in /heal command: %s", e)
+        await safe_reply(update, f"Heal error: {e}", parse_mode=None)
 
 
 def register_feature_pack_v4(application) -> None:
@@ -102,7 +130,16 @@ def register_feature_pack_v4(application) -> None:
         if hasattr(h, "commands") and isinstance(h.commands, (set, frozenset, list, tuple)):
             existing_cmds.update(h.commands)
 
-    if "quality" not in existing_cmds:
-        application.add_handler(CommandHandler("quality", quality_command))
-        existing_cmds.add("quality")
-    logger.info("FP4 feature commands removed; /quality registered")
+    for cmd, handler in [
+        ("digest", digest_command),
+        ("replay", replay_command),
+        ("export", export_command),
+        ("setups", setups_command),
+        ("abooks", abooks_command),
+        ("quality", quality_command),
+        ("heal", heal_command),
+    ]:
+        if cmd not in existing_cmds:
+            application.add_handler(CommandHandler(cmd, handler))
+            existing_cmds.add(cmd)
+    logger.info("Registered FP4: /digest /replay /export /setups /abooks /quality /heal")
