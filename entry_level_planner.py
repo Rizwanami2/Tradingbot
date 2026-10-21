@@ -11,6 +11,7 @@ Uses all available market data to propose an entry *range* (not only mark price)
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -360,14 +361,39 @@ def attach_plan_to_signal(sig: Dict[str, Any], plan: EntryPlan) -> Dict[str, Any
     try:
         mark = float(plan.mark)
         best = float(plan.best_entry)
-        is_scalp = bool(sig.get("is_scalp") or sig.get("fast_market_fill"))
+        
+        # Determine if signal is scalp vs balanced / structural consensus
+        if "is_scalp" in sig:
+            is_scalp = bool(sig["is_scalp"])
+        else:
+            try:
+                from strategy_profiles import get_current_profile
+                cur_prof = get_current_profile()
+                is_scalp = bool(getattr(cur_prof, "is_scalp", False))
+            except Exception:
+                is_scalp = bool(sig.get("fast_market_fill", False))
 
         if is_scalp:
+            # Scalp profile: execute at current market positions
             out["entry"] = mark or float(out.get("entry") or best)
-        elif abs(best - mark) / max(mark, 1e-9) < 0.02:
-            out["entry"] = best
+            out["market_price"] = mark
+            out["is_scalp"] = True
+            out["fast_market_fill"] = True
+            out["is_perfect_entry"] = False
+            out["entry_type"] = "MARKET"
+            out["order_type"] = "MARKET"
         else:
-            out["entry"] = float(out.get("entry") or mark)
+            # Balanced profile / Multi-Agent Consensus: provide perfect entry level signal,
+            # never current market position. Must register as pending limit setup.
+            valid_best = best > 0 and math.isfinite(best)
+            out["entry"] = best if valid_best else float(out.get("entry") or mark)
+            out["best_entry"] = best
+            out["market_price"] = mark
+            out["is_scalp"] = False
+            out["fast_market_fill"] = False
+            out["is_perfect_entry"] = True
+            out["entry_type"] = "LIMIT_PERFECT_LEVEL"
+            out["order_type"] = "LIMIT"
 
         out["entry_low"] = plan.entry_low
         out["entry_high"] = plan.entry_high
@@ -378,8 +404,8 @@ def attach_plan_to_signal(sig: Dict[str, Any], plan: EntryPlan) -> Dict[str, Any
 
         # In standard consensus setups, adopt the refined structural TP/SL and RR
         if not is_scalp:
-            old_entry = float(out.get("entry") or best)
-            old_stop = float(out.get("stop") or plan.stop)
+            old_entry = float(sig.get("entry") or best)
+            old_stop = float(sig.get("stop") or plan.stop)
             old_risk = abs(old_entry - old_stop) or 1.0
 
             out["stop"] = plan.stop

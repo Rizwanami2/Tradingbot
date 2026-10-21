@@ -29,6 +29,11 @@ class TestSignalAutotradeExecution(unittest.IsolatedAsyncioTestCase):
         self.engine.pending_setups.clear()
         if hasattr(self.engine, "reset_halt"):
             self.engine.reset_halt()
+        try:
+            from anti_spam import get_anti_spam_limiter
+            get_anti_spam_limiter().reset()
+        except Exception:
+            pass
         if hasattr(self.engine, "broker") and self.engine.broker is not None:
             if hasattr(self.engine.broker, "backend"):
                 self.engine.broker.backend = "auto"
@@ -49,6 +54,11 @@ class TestSignalAutotradeExecution(unittest.IsolatedAsyncioTestCase):
         self.engine.pending_setups.clear()
         if hasattr(self.engine, "reset_halt"):
             self.engine.reset_halt()
+        try:
+            from anti_spam import get_anti_spam_limiter
+            get_anti_spam_limiter().reset()
+        except Exception:
+            pass
         if hasattr(self.engine, "broker") and self.engine.broker is not None:
             if hasattr(self.engine.broker, "_sim_positions") and isinstance(self.engine.broker._sim_positions, dict):
                 self.engine.broker._sim_positions.clear()

@@ -1061,6 +1061,18 @@ class Arbiter:
             "agents": [v.agent for v in votes if getattr(v.direction, "name", str(v.direction)).upper() == direction.name],
             "mt5_chart": None,
         }
+
+        # For balanced / non-scalp mode: Multi-Agent consensus must give a perfect entry level signal
+        # (calculated structural key level, pullback zone, order block, or OTE level), NOT current market position.
+        if not getattr(self, "is_scalp", False):
+            try:
+                from entry_level_planner import plan_best_entry, attach_plan_to_signal
+                dname = direction.name if hasattr(direction, "name") else str(direction)
+                entry_plan = plan_best_entry(symbol, df1, direction=dname, mark=entry, stop_hint=stop)
+                sig = attach_plan_to_signal(sig, entry_plan)
+            except Exception as _plan_err:
+                logger.debug("Entry level planning note in arbiter: %s", _plan_err)
+
         try:
             from mt5_chart import get_mt5_live_chart
             ch_data = get_mt5_live_chart(symbol=symbol, timeframe="1m")
@@ -1072,7 +1084,7 @@ class Arbiter:
         status_msg = (
             f"⚡ SCALP {direction.name} score={score:.2f} (micro SL/TP)"
             if getattr(self, "is_scalp", False)
-            else f"SETUP {direction.name} score={score:.2f}"
+            else f"🎯 BALANCED {direction.name} @ {sig['entry']:,.2f} score={score:.2f} (Perfect Entry)"
         )
         if session_warn:
             status_msg += f" ({session_warn})"

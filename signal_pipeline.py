@@ -71,8 +71,9 @@ def run_signal(
         try:
             from strategy_profiles import get_current_profile
             cur_prof = get_current_profile()
-            if getattr(cur_prof, "is_scalp", False):
-                sig["is_scalp"] = True
+            is_scalp_prof = bool(getattr(cur_prof, "is_scalp", False))
+            sig["is_scalp"] = is_scalp_prof
+            sig["fast_market_fill"] = is_scalp_prof
         except Exception:
             pass
         try:
@@ -294,16 +295,32 @@ def format_signal_message(res: Dict[str, Any]) -> str:
             clean_vr = str(sig.get("veto_reason", "Brain Veto")).replace("`", "'")
             veto_banner = f"⚠️ *VETOED BY AUTONOMOUS LEARNER:* `{clean_vr}`\n"
 
-        sig_box = (
-            f"\n{veto_banner}"
-            f"🎯 **TRADE SETUP ({dir_icon}):**\n"
-            f"• **Entry:** `${entry:,.2f}`\n"
-            f"• **Stop Loss:** `${stop:,.2f}`\n"
-            f"• **Target 1:** `${tp1:,.2f}` | **Target 2:** `${tp2:,.2f}`\n"
-            f"• **Lots:** `{lots}` | **Lev:** `{slev:.0f}x`\n"
-            f"• **Margin:** `${margin:,.2f}` | **R:R:** `1:{rr:.1f}`\n"
-            f"• **Equity:** `${float(res.get('equity') or 0):,.2f}` (paper)\n"
-        )
+        is_scalp_msg = bool(sig.get("is_scalp"))
+        if is_scalp_msg:
+            sig_box = (
+                f"\n{veto_banner}"
+                f"⚡ **TRADE SETUP (SCALP — CURRENT MARKET | {dir_icon}):**\n"
+                f"• **Entry:** `${entry:,.2f}` (Market Order)\n"
+                f"• **Stop Loss:** `${stop:,.2f}`\n"
+                f"• **Target 1:** `${tp1:,.2f}` | **Target 2:** `${tp2:,.2f}`\n"
+                f"• **Lots:** `{lots}` | **Lev:** `{slev:.0f}x`\n"
+                f"• **Margin:** `${margin:,.2f}` | **R:R:** `1:{rr:.1f}`\n"
+                f"• **Equity:** `${float(res.get('equity') or 0):,.2f}` (paper)\n"
+            )
+        else:
+            dist_pct = ((entry - price_val) / price_val * 100.0) if price_val > 0 else 0.0
+            dist_str = f" (Pullback Distance: `{dist_pct:+.2f}%`)" if abs(dist_pct) > 0.01 else ""
+            sig_box = (
+                f"\n{veto_banner}"
+                f"🎯 **TRADE SETUP (BALANCED — PERFECT ENTRY LEVEL | {dir_icon}):**\n"
+                f"• **Perfect Entry:** `${entry:,.2f}` (Pending Limit Setup)\n"
+                f"• **Current Market:** `${price_val:,.2f}`{dist_str}\n"
+                f"• **Stop Loss:** `${stop:,.2f}`\n"
+                f"• **Target 1:** `${tp1:,.2f}` | **Target 2:** `${tp2:,.2f}`\n"
+                f"• **Lots:** `{lots}` | **Lev:** `{slev:.0f}x`\n"
+                f"• **Margin:** `${margin:,.2f}` | **R:R:** `1:{rr:.1f}`\n"
+                f"• **Equity:** `${float(res.get('equity') or 0):,.2f}` (paper)\n"
+            )
 
     else:
         sig_box = "\n🛡️ **Stay Flat.** Waiting for confluence.\n"
@@ -468,7 +485,7 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
         order = engine.register_setup(sig, reason=sig.get("reason", "Multi-Agent Consensus"))
     except Exception as e:
         return False, f"Register failed: {e}"
-    px = float(candle_price if candle_price is not None else sig["entry"])
+    px = float(candle_price if candle_price is not None else sig.get("market_price", sig["entry"]))
     try:
         events = engine.update_market_candle(
             order.symbol,
@@ -492,5 +509,5 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
     if order.symbol in getattr(engine, "active_positions", {}):
         return True, msgs[-1] if msgs else f"Trade filled: {order.symbol} {order.direction}"
     if order.id in getattr(engine, "pending_setups", {}):
-        return True, msgs[-1] if msgs else f"Setup pending: {order.symbol} @ {order.entry_level}"
+        return True, msgs[-1] if msgs else f"Setup pending: {order.symbol} @ {order.entry_level:,.2f} (waiting for perfect entry pullback)"
     return False, msgs[-1] if msgs else f"Setup not executed: {order.symbol}"

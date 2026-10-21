@@ -463,8 +463,19 @@ async def live_monitoring_worker(
                             d = sig.get("direction")
                             dname = d.name if hasattr(d, "name") else str(d)
                             is_scalp_sig = bool(sig.get("is_scalp", False)) or getattr(engine, "scalp_mode", False) or getattr(arbiter, "is_scalp", False)
-                            # Ensure fast market execution for autotrade consensus setups
-                            sig["fast_market_fill"] = True
+                            # Scalp setups execute at current market positions; Balanced setups wait for perfect entry level
+                            sig["is_scalp"] = bool(is_scalp_sig)
+                            sig["fast_market_fill"] = bool(is_scalp_sig)
+
+                            if not is_scalp_sig and not sig.get("is_perfect_entry"):
+                                try:
+                                    from entry_level_planner import plan_best_entry, attach_plan_to_signal
+                                    mark_px = float(candle_dict.get("close") or sig.get("entry") or 0.0)
+                                    stop_h = float(sig["stop"]) if sig.get("stop") else None
+                                    eplan = plan_best_entry(symbol, df1, direction=dname, mark=mark_px, stop_hint=stop_h)
+                                    sig = attach_plan_to_signal(sig, eplan)
+                                except Exception as _ep_err:
+                                    logger.debug("Autotrade entry plan attachment note: %s", _ep_err)
 
                             try:
                                 size_mult
@@ -652,16 +663,19 @@ async def live_monitoring_worker(
                             sc = sig.get("ai_scorecard")
                             sc_tag = f" | AI {sc:.0f}" if sc is not None else ""
                             disp_entry = float(getattr(order, "executed_price", 0.0) or getattr(order, "entry_level", 0.0))
+                            cur_close = float(candle_dict.get("close") or 0.0)
                             alert = (
-                                f"NEW SCALP SETUP ({open_n + 1}/{max_open})\n"
-                                f"{symbol} {order.direction} @ {disp_entry:,.2f}\n"
+                                f"⚡ NEW SCALP SETUP ({open_n + 1}/{max_open})\n"
+                                f"{symbol} {order.direction} @ {disp_entry:,.2f} (Market Fill)\n"
                                 f"SL {order.stop_loss:,.2f} | TP {order.tp1:,.2f}\n"
                                 f"Lots {order.lots}{lot_tag} | Lev {order.leverage:.0f}x{sc_tag}\n"
                                 f"{order.setup_reason}"
                             ) if is_scalp_order else (
-                                f"NEW MULTI-AGENT SETUP ({open_n + 1}/{max_open})\n"
+                                f"🎯 NEW BALANCED SETUP ({open_n + 1}/{max_open})\n"
                                 f"{symbol} {order.direction}\n"
-                                f"Entry {disp_entry:,.2f} | SL {order.stop_loss:,.2f}\n"
+                                f"• Perfect Entry: ${disp_entry:,.2f} (Pending Limit)\n"
+                                f"• Market: ${cur_close:,.2f}\n"
+                                f"• SL ${order.stop_loss:,.2f} | TP1 ${order.tp1:,.2f} | TP2 ${order.tp2:,.2f}\n"
                                 f"Lots {order.lots}{lot_tag} | Lev {order.leverage:.0f}x{sc_tag}\n"
                                 f"{order.setup_reason}"
                             )
