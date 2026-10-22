@@ -372,6 +372,8 @@ def apply_profile(
             config.SCALP_GLOBAL_COOLDOWN_SEC = getattr(p, "scalp_global_cooldown_sec", 10.0)
             config.SCALP_MAX_POSITIONS_PER_SYMBOL = getattr(p, "scalp_max_positions_per_symbol", 3)
             config.SCALP_MIN_PRICE_DISTANCE_PCT = getattr(p, "scalp_min_price_distance_pct", 0.03)
+        else:
+            config.SCALP_ENABLED = False
 
     try:
         from anti_spam import get_anti_spam_limiter

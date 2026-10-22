@@ -779,6 +779,7 @@ class Arbiter:
         engine: Optional[Any] = None,
         include_swarm: bool = True,
     ):
+        import config
         votes = [
             self.trend.vote(df1, df5=df5, df15=df15, df1h=df1h),
             self.liq.vote(df1, daily if daily is not None else pd.DataFrame()),

@@ -124,14 +124,22 @@ class CombinedBotAgent:
             return False, f"spread>{budget:.2f}"
         return True, "spread_ok"
 
-    def _risk_ok(self, open_trades: int, open_symbol: int) -> Tuple[bool, str]:
+    def _risk_ok(
+        self,
+        open_trades: int,
+        open_symbol: int,
+        max_open: Optional[int] = None,
+        max_per_symbol: Optional[int] = None,
+    ) -> Tuple[bool, str]:
         self.state.refresh_halt(self.cfg)
         if self.state.halted:
             return False, f"halt:{self.state.halt_reason}"
-        if open_trades >= self.cfg.max_open:
-            return False, "max_open"
-        if open_symbol >= self.cfg.max_per_symbol:
-            return False, "max_symbol"
+        limit_total = max_open if max_open is not None else self.cfg.max_open
+        limit_sym = max_per_symbol if max_per_symbol is not None else self.cfg.max_per_symbol
+        if open_trades >= limit_total:
+            return False, f"max_open ({open_trades}/{limit_total})"
+        if open_symbol >= limit_sym:
+            return False, f"max_symbol ({open_symbol}/{limit_sym})"
         return True, "risk_ok"
 
     def _structure_ok(
@@ -158,17 +166,31 @@ class CombinedBotAgent:
             if d in shortish and m1 not in shortish:
                 return False, "m1_not_aligned"
         su = (setup or "pullback").lower()
-        allowed = {"pullback", "sweep_reclaim", "sweep", "liquidity", ""}
+        allowed = {"pullback", "sweep_reclaim", "sweep", "liquidity", "consensus", "balanced", ""}
         if self.cfg.allow_break_retest:
             allowed |= {"break_retest", "breakout"}
         if su and su not in allowed and "pullback" not in su and "sweep" not in su:
-            # allow long reason strings containing pullback/sweep
-            if not any(k in su for k in ("pull", "sweep", "liquid", "trend", "scalp")):
+            # allow long reason strings containing pullback/sweep/consensus/balanced
+            if not any(k in su for k in ("pull", "sweep", "liquid", "trend", "scalp", "consensus", "balanced", "perfect", "entry")):
                 return False, f"setup_blocked:{su[:40]}"
         return True, "structure_ok"
 
     def _apply_levels(self, sig: dict, direction: str, entry: float) -> dict:
         sig = dict(sig)
+        # Preserve existing risk-managed structural SL/TP (e.g. from Balanced profile or RiskManager)
+        # to ensure trades maintain their designed R:R without reckless micro-stop risk.
+        existing_sl = float(sig.get("stop") or sig.get("stop_loss") or 0.0)
+        existing_tp = float(sig.get("tp1") or sig.get("tp") or 0.0)
+        if existing_sl > 0 and existing_tp > 0:
+            sig["sl"] = existing_sl
+            sig["stop_loss"] = existing_sl
+            sig["tp"] = existing_tp
+            sig["tp1"] = existing_tp
+            risk = abs(entry - existing_sl)
+            reward = abs(existing_tp - entry)
+            sig["rr"] = round(reward / risk, 2) if risk > 0 else float(sig.get("rr", 0.0) or 0.0)
+            return sig
+
         d = direction.upper()
         if d in ("LONG", "BUY"):
             sig["sl"] = entry - self.cfg.sl_usd
@@ -227,6 +249,8 @@ class CombinedBotAgent:
         ok, why = self._risk_ok(
             int(ctx.get("open_trades") or 0),
             int(ctx.get("open_for_symbol") or 0),
+            max_open=int(ctx["max_open"]) if "max_open" in ctx else None,
+            max_per_symbol=int(ctx["max_per_symbol"]) if "max_per_symbol" in ctx else None,
         )
         if not ok:
             return False, sig, [why]

@@ -639,7 +639,9 @@ async def live_monitoring_worker(
                                     {
                                         "spread": _spread,
                                         "open_trades": open_n,
-                                        "open_for_symbol": 1 if symbol in getattr(engine, "active_positions", {}) else 0,
+                                        "open_for_symbol": engine.count_symbol_positions(symbol) if hasattr(engine, "count_symbol_positions") else (1 if symbol in getattr(engine, "active_positions", {}) else 0),
+                                        "max_open": max_open,
+                                        "max_per_symbol": getattr(engine, "max_positions_per_symbol", 3),
                                         "htf_bias": str(sig.get("regime") or dname),
                                         "m1_direction": dname,
                                         "setup": str(sig.get("setup") or sig.get("reason") or "pullback"),

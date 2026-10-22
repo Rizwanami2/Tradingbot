@@ -24,6 +24,8 @@ from risk_manager import RiskManager
 
 class TestCombinedBotAgent(unittest.TestCase):
     def setUp(self):
+        self.orig_hedge = getattr(config, "is_hedging_allowed", lambda: False)()
+        config.set_hedging_mode(False, persist=False)
         self.state_file = "test_combined_bot_agent_state.json"
         if os.path.exists(self.state_file):
             try:
@@ -39,6 +41,7 @@ class TestCombinedBotAgent(unittest.TestCase):
         self.limiter.set_entry_cooldown(45)
 
     def tearDown(self):
+        config.set_hedging_mode(self.orig_hedge, persist=False)
         self.limiter.reset()
         self.limiter.set_mode("auto")
         if os.path.exists(self.state_file):

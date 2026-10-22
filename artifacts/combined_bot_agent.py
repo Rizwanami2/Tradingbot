@@ -190,7 +190,9 @@ def run_diagnostic_check() -> Dict[str, Any]:
         can_sell, sell_reason = limiter.check_can_enter(
             symbol="XAUUSD", current_price=2651.0, engine=test_engine, direction="SHORT"
         )
-        if not can_sell and "cannot BUY and SELL at the same time" in sell_reason:
+        if getattr(config, "is_hedging_allowed", lambda: False)():
+            results["Single-Direction Protection"] = (True, "Bi-Directional Hedging active (concurrent BUY & SELL permitted)")
+        elif not can_sell and "cannot BUY and SELL at the same time" in sell_reason:
             results["Single-Direction Protection"] = (True, "Strict opposing position blocking verified")
         else:
             results["Single-Direction Protection"] = (False, f"Unexpected check response: {can_sell}, {sell_reason}")
