@@ -1137,7 +1137,9 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Broker:** `{bname}` (Mode: `{bmode}`){b_extra}\n"
     )
     slots_avail = engine.slots_available() if hasattr(engine, "slots_available") else (max_trades - summary.get("active_positions_count", 0))
+    hedge_st = "🟢 ON (Hedged)" if getattr(config, "is_hedging_allowed", lambda: False)() else "⚪ OFF (Single-Dir)"
     msg += f"• **Slots:** `{summary['active_positions_count']}/{max_trades}` active (`{slots_avail}` free) | Max/Asset `{getattr(engine, 'max_positions_per_symbol', 3)}` (/slots)\n"
+    msg += f"• **Hedging:** `{hedge_st}` (/hedge [on|off])\n"
     await safe_reply(update, msg, parse_mode="Markdown")
 
 
@@ -1363,6 +1365,53 @@ async def spam_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Usage: `/spam on` (enable max 6) or `/spam off` (disable)",
             parse_mode="Markdown",
         )
+
+
+async def hedge_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View or configure hedging mode (allow simultaneous BUY and SELL on the same asset): /hedge [on|off|status]"""
+    try:
+        import config
+        args = ctx.args or []
+        if args:
+            action = args[0].lower().strip()
+            if action in ("on", "enable", "1", "true", "yes", "activate"):
+                config.set_hedging_mode(True, persist=True)
+                await safe_reply(
+                    update,
+                    "⚖️ **Bi-Directional Hedging Mode: ACTIVATED 🟢**\n"
+                    "• **Simultaneous BUY & SELL:** `ENABLED` on Gold and Bitcoin\n"
+                    "• Autotrade can execute and hold both long and short positions at the same time.\n"
+                    "• Single-direction opposing blocks are bypassed.\n"
+                    "• Revert back anytime using `/hedge off`.",
+                    parse_mode="Markdown",
+                )
+                return
+            elif action in ("off", "disable", "0", "false", "no", "deactivate"):
+                config.set_hedging_mode(False, persist=True)
+                await safe_reply(
+                    update,
+                    "🛡️ **Bi-Directional Hedging Mode: DEACTIVATED ⚪**\n"
+                    "• **Direction Protection:** `Strict Single-Direction` restored\n"
+                    "• Opposing BUY/SELL on the same asset is blocked.\n"
+                    "• Re-enable anytime using `/hedge on`.",
+                    parse_mode="Markdown",
+                )
+                return
+
+        is_h = getattr(config, "is_hedging_allowed", lambda: False)()
+        st_icon = "🟢 ACTIVE (Simultaneous BUY/SELL Allowed)" if is_h else "⚪ OFF (Strict Single-Direction Enforced)"
+        await safe_reply(
+            update,
+            f"⚖️ **Hedging Mode Status:** `{st_icon}`\n\n"
+            f"• **Current Policy:** {'Autotrade can execute BOTH BUY and SELL at the same time on Gold and BTC.' if is_h else 'Autotrade only holds ONE direction at a time per currency (BUY or SELL).'}\n"
+            f"• **Commands:**\n"
+            f"  - `/hedge on` — Allow simultaneous BUY and SELL on same asset\n"
+            f"  - `/hedge off` — Enforce strict single-direction protection",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.exception("hedge_command failed")
+        await safe_reply(update, f"Hedging error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
 
 
 async def combined_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -5273,6 +5322,17 @@ def run_cli_interactive():
                     st = "ACTIVE" if s in active else "STANDBY"
                     print(f"• {s}: ${float(p.get('mark') or p.get('close') or 0):,.2f} ({p.get('change_pct', 0.0):+.2f}%) [{st}]")
                 print(f"Active Selection: {', '.join(active)} | Autotrade: {'ON' if autotrade_active else 'OFF'}")
+        elif name in ("hedge", "hedging"):
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg in ("on", "enable", "1", "true", "yes"):
+                config.set_hedging_mode(True, persist=True)
+                print("Bi-Directional Hedging Mode: ACTIVATED (simultaneous BUY & SELL enabled on Gold and BTC).")
+            elif arg in ("off", "disable", "0", "false", "no"):
+                config.set_hedging_mode(False, persist=True)
+                print("Bi-Directional Hedging Mode: DEACTIVATED (strict single-direction restored).")
+            else:
+                is_h = config.is_hedging_allowed()
+                print(f"Hedging Mode: {'ON (Simultaneous BUY/SELL allowed)' if is_h else 'OFF (Strict single-direction)'}")
         elif name == "autotrade":
             args = [p.lower() for p in parts[1:]]
             arg = args[0] if args else ""
@@ -6552,6 +6612,7 @@ def main():
     app.add_handler(CommandHandler(["session", "sessions"], session_command))
     app.add_handler(CommandHandler(["cooldown", "cooldowns", "antispam"], cooldown_command))
     app.add_handler(CommandHandler(["spam", "spamtrade"], spam_command))
+    app.add_handler(CommandHandler(["hedge", "hedging"], hedge_command))
     app.add_handler(CommandHandler(["combined", "cba"], combined_command))
     try:
         from telegram_advanced import kill_command

@@ -1408,64 +1408,70 @@ class TestMultiPositionTrailingAndAntiSpam(unittest.TestCase):
         self.assertIn("Opposing 1m Auto-Trend", why_sell)
 
     def test_no_simultaneous_buy_and_sell_positions(self):
-        """Verify that holding BUY and SELL positions at the same time on the same currency is strictly blocked."""
-        from anti_spam import AntiSpamRateLimiter
-        limiter = AntiSpamRateLimiter(max_positions_per_symbol=2)
+        """Verify that holding BUY and SELL positions at the same time on the same currency is strictly blocked when hedging is disabled."""
+        import config
+        orig_hedge = config.is_hedging_allowed()
+        config.set_hedging_mode(False, persist=False)
+        try:
+            from anti_spam import AntiSpamRateLimiter
+            limiter = AntiSpamRateLimiter(max_positions_per_symbol=2)
 
-        # 1. Place active BUY position on Gold
-        p_buy = TradeOrder(
-            id="buy_xau_1", symbol="XAUUSD", direction="LONG", entry_level=2650.0,
-            stop_loss=2645.0, tp1=2655.0, tp2=2660.0, tp3=None, lots=0.02, size=2.0,
-            leverage=20.0, margin_required=50.0, liquidation_price=2600.0, risk_amount=10.0,
-            rr_ratio=1.0, setup_reason="Active long", status=OrderStatus.OPEN, executed_price=2650.0,
-            remaining_size=2.0, is_scalp=True,
-        )
-        self.engine.active_positions[p_buy.id] = p_buy
+            # 1. Place active BUY position on Gold
+            p_buy = TradeOrder(
+                id="buy_xau_1", symbol="XAUUSD", direction="LONG", entry_level=2650.0,
+                stop_loss=2645.0, tp1=2655.0, tp2=2660.0, tp3=None, lots=0.02, size=2.0,
+                leverage=20.0, margin_required=50.0, liquidation_price=2600.0, risk_amount=10.0,
+                rr_ratio=1.0, setup_reason="Active long", status=OrderStatus.OPEN, executed_price=2650.0,
+                remaining_size=2.0, is_scalp=True,
+            )
+            self.engine.active_positions[p_buy.id] = p_buy
 
-        # Attempt to enter SHORT on Gold in anti_spam -> must be blocked
-        ok_short, reason_short = limiter.check_can_enter("XAUUSD", 2655.0, self.engine, max_open=4, direction="SHORT")
-        self.assertFalse(ok_short)
-        self.assertIn("cannot BUY and SELL at the same time", reason_short)
+            # Attempt to enter SHORT on Gold in anti_spam -> must be blocked
+            ok_short, reason_short = limiter.check_can_enter("XAUUSD", 2655.0, self.engine, max_open=4, direction="SHORT")
+            self.assertFalse(ok_short)
+            self.assertIn("cannot BUY and SELL at the same time", reason_short)
 
-        # Attempt to enter another LONG on Gold in anti_spam -> allowed
-        ok_long, reason_long = limiter.check_can_enter("XAUUSD", 2655.0, self.engine, max_open=4, direction="LONG")
-        self.assertTrue(ok_long, reason_long)
+            # Attempt to enter another LONG on Gold in anti_spam -> allowed
+            ok_long, reason_long = limiter.check_can_enter("XAUUSD", 2655.0, self.engine, max_open=4, direction="LONG")
+            self.assertTrue(ok_long, reason_long)
 
-        # In ExecutionEngine.register_setup, registering SHORT on Gold must raise RuntimeError
-        short_sig = {
-            "symbol": "XAUUSD", "direction": "SHORT", "entry": 2655.0, "stop": 2660.0,
-            "tp1": 2650.0, "tp2": 2645.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
-            "margin_required": 50.0, "risk_amount": 10.0, "rr": 1.0, "is_scalp": True,
-        }
-        with self.assertRaises(RuntimeError) as ctx:
-            self.engine.register_setup(short_sig)
-        self.assertIn("cannot hold BUY and SELL at the same time", str(ctx.exception))
+            # In ExecutionEngine.register_setup, registering SHORT on Gold must raise RuntimeError
+            short_sig = {
+                "symbol": "XAUUSD", "direction": "SHORT", "entry": 2655.0, "stop": 2660.0,
+                "tp1": 2650.0, "tp2": 2645.0, "lots": 0.02, "size": 2.0, "leverage": 20.0,
+                "margin_required": 50.0, "risk_amount": 10.0, "rr": 1.0, "is_scalp": True,
+            }
+            with self.assertRaises(RuntimeError) as ctx:
+                self.engine.register_setup(short_sig)
+            self.assertIn("cannot hold BUY and SELL at the same time", str(ctx.exception))
 
-        # Clear and test the reverse: active SHORT on BTC blocks LONG on BTC
-        self.engine.active_positions.clear()
-        p_sell = TradeOrder(
-            id="sell_btc_1", symbol="BTCUSDT", direction="SHORT", entry_level=65000.0,
-            stop_loss=65200.0, tp1=64800.0, tp2=64600.0, tp3=None, lots=0.01, size=0.01,
-            leverage=20.0, margin_required=32.5, liquidation_price=66000.0, risk_amount=5.0,
-            rr_ratio=1.0, setup_reason="Active short", status=OrderStatus.OPEN, executed_price=65000.0,
-            remaining_size=0.01, is_scalp=True,
-        )
-        self.engine.active_positions[p_sell.id] = p_sell
+            # Clear and test the reverse: active SHORT on BTC blocks LONG on BTC
+            self.engine.active_positions.clear()
+            p_sell = TradeOrder(
+                id="sell_btc_1", symbol="BTCUSDT", direction="SHORT", entry_level=65000.0,
+                stop_loss=65200.0, tp1=64800.0, tp2=64600.0, tp3=None, lots=0.01, size=0.01,
+                leverage=20.0, margin_required=32.5, liquidation_price=66000.0, risk_amount=5.0,
+                rr_ratio=1.0, setup_reason="Active short", status=OrderStatus.OPEN, executed_price=65000.0,
+                remaining_size=0.01, is_scalp=True,
+            )
+            self.engine.active_positions[p_sell.id] = p_sell
 
-        # Attempt to enter LONG on BTC in anti_spam -> must be blocked
-        ok_btc_long, reason_btc_long = limiter.check_can_enter("BTCUSDT", 64900.0, self.engine, max_open=4, direction="LONG")
-        self.assertFalse(ok_btc_long)
-        self.assertIn("cannot BUY and SELL at the same time", reason_btc_long)
+            # Attempt to enter LONG on BTC in anti_spam -> must be blocked
+            ok_btc_long, reason_btc_long = limiter.check_can_enter("BTCUSDT", 64900.0, self.engine, max_open=4, direction="LONG")
+            self.assertFalse(ok_btc_long)
+            self.assertIn("cannot BUY and SELL at the same time", reason_btc_long)
 
-        # In ExecutionEngine.register_setup, registering LONG on BTC must raise RuntimeError
-        long_btc_sig = {
-            "symbol": "BTCUSDT", "direction": "LONG", "entry": 64900.0, "stop": 64700.0,
-            "tp1": 65100.0, "tp2": 65300.0, "lots": 0.01, "size": 0.01, "leverage": 20.0,
-            "margin_required": 32.5, "risk_amount": 5.0, "rr": 1.0, "is_scalp": True,
-        }
-        with self.assertRaises(RuntimeError) as ctx2:
-            self.engine.register_setup(long_btc_sig)
-        self.assertIn("cannot hold BUY and SELL at the same time", str(ctx2.exception))
+            # In ExecutionEngine.register_setup, registering LONG on BTC must raise RuntimeError
+            long_btc_sig = {
+                "symbol": "BTCUSDT", "direction": "LONG", "entry": 64900.0, "stop": 64700.0,
+                "tp1": 65100.0, "tp2": 65300.0, "lots": 0.01, "size": 0.01, "leverage": 20.0,
+                "margin_required": 32.5, "risk_amount": 5.0, "rr": 1.0, "is_scalp": True,
+            }
+            with self.assertRaises(RuntimeError) as ctx2:
+                self.engine.register_setup(long_btc_sig)
+            self.assertIn("cannot hold BUY and SELL at the same time", str(ctx2.exception))
+        finally:
+            config.set_hedging_mode(orig_hedge, persist=False)
 
 
 class TestScalpReworkRiskManagement(unittest.TestCase):

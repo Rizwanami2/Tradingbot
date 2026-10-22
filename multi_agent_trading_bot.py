@@ -1088,23 +1088,26 @@ class Arbiter:
             except Exception:
                 pass
 
-        # Strict Single-Direction Rule: Do not BUY and SELL positions at the same time on the same currency
+        # Strict Single-Direction Rule: Do not BUY and SELL positions at the same time on the same currency unless hedging is enabled
         if direction != Dir.FLAT and engine is not None:
             try:
-                from anti_spam import canonical_currency
-                curr = canonical_currency(symbol)
-                is_buy = direction == Dir.LONG
-                is_sell = direction == Dir.SHORT
-                active_curr = [p for p in getattr(engine, "active_positions", {}).values()
-                               if canonical_currency(getattr(p, "symbol", "")) == curr]
-                pending_curr = [p for p in getattr(engine, "pending_setups", {}).values()
-                                if canonical_currency(getattr(p, "symbol", "")) == curr]
-                for p in active_curr + pending_curr:
-                    p_dir = str(getattr(p, "direction", "")).upper()
-                    if is_buy and p_dir in ("SHORT", "SELL"):
-                        return None, f"Opposing direction: active SELL position exists on {curr} (cannot BUY and SELL same time)", votes
-                    if is_sell and p_dir in ("LONG", "BUY"):
-                        return None, f"Opposing direction: active BUY position exists on {curr} (cannot BUY and SELL same time)", votes
+                import config
+                allow_hedge = getattr(config, "is_hedging_allowed", lambda: False)() or getattr(self, "allow_hedging", False) or getattr(engine, "allow_hedging", False)
+                if not allow_hedge:
+                    from anti_spam import canonical_currency
+                    curr = canonical_currency(symbol)
+                    is_buy = direction == Dir.LONG
+                    is_sell = direction == Dir.SHORT
+                    active_curr = [p for p in getattr(engine, "active_positions", {}).values()
+                                   if canonical_currency(getattr(p, "symbol", "")) == curr]
+                    pending_curr = [p for p in getattr(engine, "pending_setups", {}).values()
+                                    if canonical_currency(getattr(p, "symbol", "")) == curr]
+                    for p in active_curr + pending_curr:
+                        p_dir = str(getattr(p, "direction", "")).upper()
+                        if is_buy and p_dir in ("SHORT", "SELL"):
+                            return None, f"Opposing direction: active SELL position exists on {curr} (cannot BUY and SELL same time)", votes
+                        if is_sell and p_dir in ("LONG", "BUY"):
+                            return None, f"Opposing direction: active BUY position exists on {curr} (cannot BUY and SELL same time)", votes
             except Exception:
                 pass
 

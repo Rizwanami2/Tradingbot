@@ -15,6 +15,9 @@ from signal_pipeline import try_paper_execute
 
 class TestCooldownAndSingleDirection(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        import config
+        self.orig_hedge = config.is_hedging_allowed()
+        config.set_hedging_mode(False, persist=False)
         self.state_file = "test_cooldown_single_dir_state.json"
         if os.path.exists(self.state_file):
             os.remove(self.state_file)
@@ -27,6 +30,8 @@ class TestCooldownAndSingleDirection(unittest.IsolatedAsyncioTestCase):
         self.limiter.set_entry_cooldown(45)
 
     def tearDown(self):
+        import config
+        config.set_hedging_mode(self.orig_hedge, persist=False)
         self.limiter.reset()
         self.limiter.set_mode("auto")
         if os.path.exists(self.state_file):

@@ -1009,52 +1009,55 @@ class ExecutionEngine:
         if direction not in ("LONG", "SHORT"):
             raise ValueError(f"Unsupported trade direction: {direction!r}")
 
-        # Strict Single-Direction Rule: Never hold BUY and SELL positions on the same currency at the same time
+        # Strict Single-Direction Rule: Never hold BUY and SELL positions on the same currency unless hedging is enabled
         try:
-            from anti_spam import canonical_currency
-            curr = canonical_currency(symbol)
-            is_incoming_buy = direction in ("LONG", "BUY")
-            is_incoming_sell = direction in ("SHORT", "SELL")
+            import config
+            allow_hedge = getattr(config, "is_hedging_allowed", lambda: False)() or getattr(self, "allow_hedging", False)
+            if not allow_hedge:
+                from anti_spam import canonical_currency
+                curr = canonical_currency(symbol)
+                is_incoming_buy = direction in ("LONG", "BUY")
+                is_incoming_sell = direction in ("SHORT", "SELL")
 
-            # Check open active positions on this currency (local and broker)
-            active_curr = [p for p in self.active_positions.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
-            if getattr(self, "broker", None) is not None and hasattr(self.broker, "get_positions"):
-                try:
-                    for bp in self.broker.get_positions():
-                        if canonical_currency(getattr(bp, "symbol", "")) == curr:
-                            bp_tkt = str(getattr(bp, "ticket", "") or getattr(bp, "id", "")).strip()
-                            if not any(str(getattr(lp, "ticket", "") or getattr(lp, "id", "")).strip() == bp_tkt for lp in active_curr):
-                                active_curr.append(bp)
-                except Exception:
-                    pass
+                # Check open active positions on this currency (local and broker)
+                active_curr = [p for p in self.active_positions.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
+                if getattr(self, "broker", None) is not None and hasattr(self.broker, "get_positions"):
+                    try:
+                        for bp in self.broker.get_positions():
+                            if canonical_currency(getattr(bp, "symbol", "")) == curr:
+                                bp_tkt = str(getattr(bp, "ticket", "") or getattr(bp, "id", "")).strip()
+                                if not any(str(getattr(lp, "ticket", "") or getattr(lp, "id", "")).strip() == bp_tkt for lp in active_curr):
+                                    active_curr.append(bp)
+                    except Exception:
+                        pass
 
-            for p in active_curr:
-                p_dir = str(getattr(p, "direction", getattr(p, "side", ""))).upper()
-                is_p_buy = p_dir in ("LONG", "BUY")
-                is_p_sell = p_dir in ("SHORT", "SELL")
-                if is_incoming_buy and is_p_sell:
-                    raise RuntimeError(
-                        f"Opposing active SELL position exists on {curr}; cannot hold BUY and SELL at the same time."
-                    )
-                if is_incoming_sell and is_p_buy:
-                    raise RuntimeError(
-                        f"Opposing active BUY position exists on {curr}; cannot hold BUY and SELL at the same time."
-                    )
+                for p in active_curr:
+                    p_dir = str(getattr(p, "direction", getattr(p, "side", ""))).upper()
+                    is_p_buy = p_dir in ("LONG", "BUY")
+                    is_p_sell = p_dir in ("SHORT", "SELL")
+                    if is_incoming_buy and is_p_sell:
+                        raise RuntimeError(
+                            f"Opposing active SELL position exists on {curr}; cannot hold BUY and SELL at the same time."
+                        )
+                    if is_incoming_sell and is_p_buy:
+                        raise RuntimeError(
+                            f"Opposing active BUY position exists on {curr}; cannot hold BUY and SELL at the same time."
+                        )
 
-            # Pending setups also cannot oppose existing pending setups on this currency
-            pending_curr = [p for p in self.pending_setups.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
-            for p in pending_curr:
-                p_dir = str(getattr(p, "direction", getattr(p, "side", ""))).upper()
-                is_p_buy = p_dir in ("LONG", "BUY")
-                is_p_sell = p_dir in ("SHORT", "SELL")
-                if is_incoming_buy and is_p_sell:
-                    raise RuntimeError(
-                        f"Opposing pending SELL setup exists on {curr}; cannot hold BUY and SELL at the same time."
-                    )
-                if is_incoming_sell and is_p_buy:
-                    raise RuntimeError(
-                        f"Opposing pending BUY setup exists on {curr}; cannot hold BUY and SELL at the same time."
-                    )
+                # Pending setups also cannot oppose existing pending setups on this currency
+                pending_curr = [p for p in self.pending_setups.values() if canonical_currency(getattr(p, "symbol", "")) == curr]
+                for p in pending_curr:
+                    p_dir = str(getattr(p, "direction", getattr(p, "side", ""))).upper()
+                    is_p_buy = p_dir in ("LONG", "BUY")
+                    is_p_sell = p_dir in ("SHORT", "SELL")
+                    if is_incoming_buy and is_p_sell:
+                        raise RuntimeError(
+                            f"Opposing pending SELL setup exists on {curr}; cannot hold BUY and SELL at the same time."
+                        )
+                    if is_incoming_sell and is_p_buy:
+                        raise RuntimeError(
+                            f"Opposing pending BUY setup exists on {curr}; cannot hold BUY and SELL at the same time."
+                        )
         except ImportError:
             pass
         if lots <= 0 or size <= 0 or leverage < self.risk_manager.config.min_leverage:

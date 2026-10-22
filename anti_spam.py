@@ -286,10 +286,12 @@ class AntiSpamRateLimiter:
         curr = canonical_currency(sym)
         st = self._get_state(sym)
 
-        # 1. Strict Single-Direction Rule: NEVER hold BUY and SELL positions on the same currency at the same time.
-        # This rule is absolute and applies across ALL modes (Auto, Manual, Spam, Scalp, Swing).
+        # 1. Strict Single-Direction Rule: NEVER hold BUY and SELL positions on the same currency unless Hedging Mode is enabled.
+        # This rule applies across ALL modes unless Bi-Directional Hedging is enabled.
         curr_count, matching_active = self.count_currency_positions(engine, curr)
-        if direction:
+        import config
+        allow_hedge = getattr(config, "is_hedging_allowed", lambda: False)() or getattr(self, "allow_hedging", False) or getattr(engine, "allow_hedging", False)
+        if not allow_hedge and direction:
             dir_norm = str(direction).upper()
             is_incoming_buy = dir_norm in ("LONG", "BUY")
             is_incoming_sell = dir_norm in ("SHORT", "SELL")
@@ -339,6 +341,9 @@ class AntiSpamRateLimiter:
         eff_min_dist = min(self.min_price_distance_pct, 0.03) if bypass_cooldowns else self.min_price_distance_pct
         if eff_min_dist > 0 and matching_active and current_price > 0:
             for pos in matching_active:
+                pos_dir = str(getattr(pos, "direction", getattr(pos, "side", ""))).upper()
+                if allow_hedge and direction and pos_dir != str(direction).upper():
+                    continue
                 pos_entry = float(getattr(pos, "executed_price", 0.0) or getattr(pos, "entry_level", getattr(pos, "entry_price", 0.0)) or 0.0)
                 if pos_entry > 0:
                     dist_pct = abs(current_price - pos_entry) / pos_entry * 100.0
@@ -386,10 +391,13 @@ class AntiSpamRateLimiter:
         mode_icon = "🤖 AUTO (Adaptive)" if self.mode == "auto" else ("🔒 MANUAL (Fixed Cooldown)" if self.mode in ("on", "manual") else "⚠️ OFF (Bypassed)")
         spam_tag = f"⚡ ENABLED (Max {self.spam_trade_max_trades} Trades, No Cooldown)" if self.spam_trade_enabled else "🔒 DISABLED (Normal Protection)"
         max_total = self.spam_trade_max_trades if self.spam_trade_enabled else (int(getattr(engine, "max_open_trades", 6)) if engine is not None else 6)
+        import config
+        is_hedging = getattr(config, "is_hedging_allowed", lambda: False)() or getattr(self, "allow_hedging", False)
+        dir_rule = "Bi-Directional Hedging (Simultaneous BUY/SELL allowed)" if is_hedging else "Strict Single-Direction (Opposing BUY/SELL blocked)"
         lines = [
             "🛡️ **Anti-Spam & Cooldown Telemetry**",
             f"• **Scope:** `Enforced on BOTH Auto & Manual trading`",
-            f"• **Direction Rule:** `Strict Single-Direction (Opposing BUY/SELL blocked)`",
+            f"• **Direction Rule:** `{dir_rule}`",
             f"• **Operating Mode:** `{mode_icon}`",
             f"• **Spam Trade Mode:** `{spam_tag}`",
             f"• **Concurrency Limits:** Max `{max_total}` Total | Max `{'6' if self.spam_trade_enabled else '2'}` per Currency (2 Gold, 2 BTC)",

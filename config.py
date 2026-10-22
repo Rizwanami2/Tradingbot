@@ -553,3 +553,56 @@ SCALP_MIN_PRICE_DISTANCE_PCT = _safe_float(os.getenv("BOT_SCALP_MIN_PRICE_DISTAN
 
 SAFETY_REQUIRE_RISK_CAN_TRADE = os.getenv("BOT_SAFETY_REQUIRE_RISK", "true").lower() in ("true", "1", "yes", "on")
 LEARN_LIVE_VETO = os.getenv("BOT_LEARN_LIVE_VETO", "true").lower() in ("true", "1", "yes", "on")
+
+# Bi-Directional Hedging Mode (allow simultaneous BUY and SELL positions on same currency)
+HEDGE_SETTINGS_FILE = os.getenv("BOT_HEDGE_SETTINGS_FILE", ".runtime/hedge_settings.json")
+ALLOW_HEDGING = os.getenv("BOT_ALLOW_HEDGING", "true").lower() in ("true", "1", "yes", "on")
+_HEDGING_OVERRIDE: Optional[bool] = None
+
+
+def _load_persisted_hedge_settings() -> Dict[str, Any]:
+    p = Path(HEDGE_SETTINGS_FILE)
+    if not p.is_file():
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_persisted_hedge_settings(settings: Dict[str, Any]) -> None:
+    p = Path(HEDGE_SETTINGS_FILE)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
+def is_hedging_allowed() -> bool:
+    """Return True if hedging mode is enabled (allows simultaneous BUY and SELL on same asset)."""
+    global _HEDGING_OVERRIDE, ALLOW_HEDGING
+    if _HEDGING_OVERRIDE is not None:
+        return bool(_HEDGING_OVERRIDE)
+    persisted = _load_persisted_hedge_settings()
+    if "enabled" in persisted:
+        return bool(persisted["enabled"])
+    return bool(ALLOW_HEDGING)
+
+
+def set_hedging_mode(enabled: bool, persist: bool = True) -> bool:
+    """Configure hedging mode: True to allow simultaneous BUY & SELL, False for strict single-direction."""
+    global _HEDGING_OVERRIDE, ALLOW_HEDGING
+    _HEDGING_OVERRIDE = bool(enabled)
+    ALLOW_HEDGING = bool(enabled)
+    if persist:
+        cur = _load_persisted_hedge_settings()
+        cur["enabled"] = bool(enabled)
+        _save_persisted_hedge_settings(cur)
+    return bool(enabled)
+
