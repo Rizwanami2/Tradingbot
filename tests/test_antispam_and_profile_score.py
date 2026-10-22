@@ -170,6 +170,8 @@ class TestAntiSpamAndProfileScore(unittest.IsolatedAsyncioTestCase):
         """Verify that scalp gets score concession while balanced and swing require tight conviction."""
         learner = AutonomousLearner()
         learner.knowledge.enabled = True
+        learner.knowledge.banned_hours = []
+        learner.knowledge.banned_weekdays = []
         learner.knowledge.min_score = 1.30
         learner.knowledge.min_rr = 1.80
         learner.knowledge.min_agreement = 2
@@ -265,6 +267,8 @@ class TestAntiSpamAndProfileScore(unittest.IsolatedAsyncioTestCase):
         from autonomous_learner import AutonomousLearner
         learner = AutonomousLearner()
         learner.knowledge.enabled = True
+        learner.knowledge.banned_hours = []
+        learner.knowledge.banned_weekdays = []
         learner.knowledge.min_agreement = 4  # Simulate legacy or tightly escalated value
         learner.knowledge.min_score = 1.20
         learner.knowledge.min_rr = 1.00

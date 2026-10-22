@@ -262,7 +262,7 @@ def run_signal(
     return res
 
 
-def format_signal_message(res: Dict[str, Any]) -> str:
+def format_signal_message(res: Dict[str, Any], show_agent_votes: bool = False) -> str:
     sym = res.get("symbol", "?")
     price_val = float(res.get("price") or 0)
     votes = res.get("votes") or []
@@ -411,11 +411,12 @@ def format_signal_message(res: Dict[str, Any]) -> str:
             chart_txt = ""
 
     votes_txt = "\n".join(vote_lines) if vote_lines else "_No votes_"
-    votes_section = f"\n{matrix_txt}\n" if matrix_txt else f"\n**Agent Votes:**\n{votes_txt}\n\n⚡ **Consensus:** `{status}`"
+    matrix_section = f"\n{matrix_txt}\n" if matrix_txt else f"\n**Agent Votes:**\n{votes_txt}\n"
+    votes_section = matrix_section if (show_agent_votes or res.get("show_agent_votes")) else ""
 
     return (
         f"📊 **Multi-Agent Evaluation for {sym}**\n"
-        f"Mark: `${price_val:,.2f}` | Lev `{float(lev):.0f}x`\n"
+        f"Mark: `${price_val:,.2f}` | Lev `{float(lev):.0f}x` | ⚡ **Consensus:** `{status}`\n"
         f"{votes_section}"
         f"{sig_box}"
         f"{chart_txt}"
@@ -480,6 +481,37 @@ def try_paper_execute(engine, sig: Dict[str, Any], candle_price: Optional[float]
             return False, f"⏳ Trade blocked by Cooldown & Anti-Spam: {reason}\n_Applies to both auto and manual trades._"
     except Exception as _lim_err:
         pass
+
+    # Ensure brackets strictly satisfy ordering before registration
+    try:
+        e_val = float(sig.get("entry", 0.0))
+        s_val = float(sig.get("stop", 0.0))
+        t1_val = float(sig.get("tp1", 0.0))
+        t2_val = float(sig.get("tp2", 0.0))
+        min_buf = max(e_val * 0.0005, 0.1)
+
+        if "LONG" in dname or "BUY" in dname:
+            if not (s_val < e_val < t1_val <= t2_val):
+                raw_risk = abs(e_val - s_val)
+                risk = raw_risk if raw_risk >= min_buf else min_buf
+                if s_val >= e_val:
+                    sig["stop"] = round(e_val - risk, 4)
+                if t1_val <= e_val:
+                    sig["tp1"] = round(e_val + risk * 1.5, 4)
+                if t2_val < float(sig.get("tp1", t1_val)):
+                    sig["tp2"] = round(float(sig["tp1"]) + risk * 0.5, 4)
+        elif "SHORT" in dname or "SELL" in dname:
+            if not (s_val > e_val > t1_val >= t2_val):
+                raw_risk = abs(s_val - e_val)
+                risk = raw_risk if raw_risk >= min_buf else min_buf
+                if s_val <= e_val:
+                    sig["stop"] = round(e_val + risk, 4)
+                if t1_val >= e_val:
+                    sig["tp1"] = round(e_val - risk * 1.5, 4)
+                if t2_val > float(sig.get("tp1", t1_val)):
+                    sig["tp2"] = round(float(sig["tp1"]) - risk * 0.5, 4)
+    except Exception as _bracket_err:
+        logger.debug("try_paper_execute bracket sanitization note: %s", _bracket_err)
 
     try:
         order = engine.register_setup(sig, reason=sig.get("reason", "Multi-Agent Consensus"))

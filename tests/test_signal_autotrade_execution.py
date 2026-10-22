@@ -254,6 +254,124 @@ class TestSignalAutotradeExecution(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[Autotrade Executed]", out)
             self.assertTrue(len(self.engine.active_positions) > 0 or len(self.engine.pending_setups) > 0)
 
+    def test_format_signal_message_hides_all_agents_status_and_shows_entry_level(self):
+        """Verify format_signal_message hides verbose agent status by default and shows entry level setup."""
+        from signal_pipeline import format_signal_message
+        res = {
+            "symbol": "XAUUSD",
+            "price": 2725.50,
+            "status": "Scalp LONG score=1.85 (micro SL/TP)",
+            "leverage": 20,
+            "votes": [
+                {"agent": "TREND", "direction": "LONG", "reason": "EMA bullish cross"},
+                {"agent": "LIQUIDITY", "direction": "LONG", "reason": "BSL taken"},
+                {"agent": "INDICATOR", "direction": "LONG", "reason": "RSI oversold rebound"},
+            ],
+            "signal": {
+                "symbol": "XAUUSD",
+                "direction": "LONG",
+                "entry": 2725.50,
+                "stop": 2721.50,
+                "tp1": 2731.50,
+                "tp2": 2735.50,
+                "lots": 0.05,
+                "size": 5.0,
+                "leverage": 20.0,
+                "margin_required": 68.14,
+                "rr": 1.5,
+                "is_scalp": True,
+            },
+        }
+
+        # Default: all agents status hidden, only entry level / setup shown
+        msg_default = format_signal_message(res)
+        self.assertIn("Multi-Agent Evaluation for XAUUSD", msg_default)
+        self.assertIn("Consensus:", msg_default)
+        self.assertIn("TRADE SETUP (SCALP — CURRENT MARKET", msg_default)
+        self.assertIn("Entry:", msg_default)
+        self.assertIn("Stop Loss:", msg_default)
+        self.assertIn("Target 1:", msg_default)
+        self.assertNotIn("**Agent Votes:**", msg_default)
+        self.assertNotIn("TREND:", msg_default)
+        self.assertNotIn("LIQUIDITY:", msg_default)
+
+        # Explicit show_agent_votes=True includes individual agent breakdown or consensus matrix
+        msg_verbose = format_signal_message(res, show_agent_votes=True)
+        self.assertTrue("**Agent Votes:**" in msg_verbose or "CONSENSUS MATRIX" in msg_verbose)
+        self.assertIn("TREND", msg_verbose)
+        self.assertIn("LIQUIDITY", msg_verbose)
+
+    def test_register_setup_auto_heals_invalid_long_levels(self):
+        """Verify register_setup auto-heals misordered LONG levels without raising ValueError."""
+        inverted_long = {
+            "symbol": "XAUUSD",
+            "direction": "LONG",
+            "entry": 2725.0,
+            "stop": 2730.0,   # stop > entry (invalid)
+            "tp1": 2720.0,    # tp1 < entry (invalid)
+            "tp2": 2715.0,    # tp2 < tp1 (invalid)
+            "lots": 0.01,
+            "size": 1.0,
+            "leverage": 20.0,
+            "margin_required": 13.6,
+            "is_scalp": True,
+        }
+        order = self.engine.register_setup(inverted_long, reason="Auto-heal test")
+        self.assertIsNotNone(order)
+        self.assertLess(order.stop_loss, order.entry_level)
+        self.assertLess(order.entry_level, order.tp1)
+        self.assertLessEqual(order.tp1, order.tp2)
+
+    def test_register_setup_auto_heals_invalid_short_levels(self):
+        """Verify register_setup auto-heals misordered SHORT levels without raising ValueError."""
+        inverted_short = {
+            "symbol": "BTCUSDT",
+            "direction": "SHORT",
+            "entry": 65000.0,
+            "stop": 64500.0,   # stop < entry (invalid)
+            "tp1": 65500.0,    # tp1 > entry (invalid)
+            "tp2": 66000.0,    # tp2 > tp1 (invalid)
+            "lots": 0.01,
+            "size": 0.01,
+            "leverage": 20.0,
+            "margin_required": 32.5,
+            "is_scalp": True,
+        }
+        order = self.engine.register_setup(inverted_short, reason="Auto-heal short test")
+        self.assertIsNotNone(order)
+        self.assertGreater(order.stop_loss, order.entry_level)
+        self.assertGreater(order.entry_level, order.tp1)
+        self.assertGreaterEqual(order.tp1, order.tp2)
+
+    def test_attach_plan_to_signal_scalp_guarantees_bracket_ordering(self):
+        """Verify attach_plan_to_signal keeps valid bracket levels when price moves past original TP1."""
+        from entry_level_planner import EntryPlan, attach_plan_to_signal
+        plan = EntryPlan(
+            direction="LONG",
+            mark=2735.0,     # market price moved up to 2735
+            best_entry=2720.0,
+            entry_low=2718.0,
+            entry_high=2722.0,
+            stop=2715.0,
+            tp1=2725.0,
+            tp2=2730.0,
+            confidence=0.85,
+        )
+        sig = {
+            "symbol": "XAUUSD",
+            "direction": "LONG",
+            "entry": 2720.0,
+            "stop": 2715.0,
+            "tp1": 2725.0,
+            "tp2": 2730.0,
+            "is_scalp": True,
+        }
+        out = attach_plan_to_signal(sig, plan)
+        self.assertEqual(out["entry"], 2735.0)
+        self.assertLess(out["stop"], out["entry"])
+        self.assertLess(out["entry"], out["tp1"])
+        self.assertLessEqual(out["tp1"], out["tp2"])
+
 
 if __name__ == "__main__":
     unittest.main()

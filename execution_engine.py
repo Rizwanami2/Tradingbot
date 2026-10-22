@@ -1062,9 +1062,38 @@ class ExecutionEngine:
         if leverage > self.risk_manager.config.max_leverage:
             raise ValueError(f"Requested leverage {leverage:g}x exceeds configured cap {self.risk_manager.config.max_leverage:g}x.")
         if direction == "LONG" and not (stop < entry < tp1 <= tp2):
-            raise ValueError("Invalid LONG levels: expected stop < entry < TP1 <= TP2.")
+            min_buf = max(entry * 0.0005, 0.1)
+            raw_risk = abs(entry - stop)
+            risk = raw_risk if raw_risk >= min_buf else min_buf
+            if stop >= entry:
+                stop = round(entry - risk, 4)
+            if tp1 <= entry:
+                tp1 = round(entry + risk * max(rr, 1.5), 4)
+            if tp2 < tp1:
+                tp2 = round(tp1 + risk * 0.5, 4)
+            logger.warning(
+                "[ExecutionEngine] Auto-healed LONG levels: entry=%.4f, stop=%.4f, tp1=%.4f, tp2=%.4f",
+                entry, stop, tp1, tp2,
+            )
+            if not (stop < entry < tp1 <= tp2):
+                raise ValueError("Invalid LONG levels: expected stop < entry < TP1 <= TP2.")
+
         if direction == "SHORT" and not (stop > entry > tp1 >= tp2):
-            raise ValueError("Invalid SHORT levels: expected stop > entry > TP1 >= TP2.")
+            min_buf = max(entry * 0.0005, 0.1)
+            raw_risk = abs(stop - entry)
+            risk = raw_risk if raw_risk >= min_buf else min_buf
+            if stop <= entry:
+                stop = round(entry + risk, 4)
+            if tp1 >= entry:
+                tp1 = round(entry - risk * max(rr, 1.5), 4)
+            if tp2 > tp1:
+                tp2 = round(tp1 - risk * 0.5, 4)
+            logger.warning(
+                "[ExecutionEngine] Auto-healed SHORT levels: entry=%.4f, stop=%.4f, tp1=%.4f, tp2=%.4f",
+                entry, stop, tp1, tp2,
+            )
+            if not (stop > entry > tp1 >= tp2):
+                raise ValueError("Invalid SHORT levels: expected stop > entry > TP1 >= TP2.")
 
         cs = self.get_contract_size(symbol)
         actual_size = round(lots * cs, 4) if (cs > 1.0 and lots > 0) else size

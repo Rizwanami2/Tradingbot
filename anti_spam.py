@@ -322,7 +322,7 @@ class AntiSpamRateLimiter:
                 return False, f"Total open slots full ({open_n}/{max_open})"
             if curr_count >= self.max_positions_per_symbol:
                 return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
-            return True, "OK (antispam mode off — cooldowns skipped)"
+            return True, "OK (anti-spam manual OFF — cooldowns skipped)"
 
         # 2. Total capacity check across all symbols (default max 6)
         open_n = len(engine.active_positions) + len(engine.pending_setups)
