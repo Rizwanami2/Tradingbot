@@ -9,7 +9,10 @@ session_filter, market_regime) when available, with graceful fallback.
 from __future__ import annotations
 
 import json
+import logging
 import os
+
+logger = logging.getLogger("multi_agent")
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -961,7 +964,8 @@ class Arbiter:
                 pass
 
         # 100-Agent Specialized Strategy Swarm Consensus Integration (118 Agents Total)
-        if include_swarm and getattr(self, "swarm", None) is not None and build_market_context is not None:
+        _swarm_on = os.getenv("SWARM_ENABLED", "true").lower() in ("true", "1", "yes", "on")
+        if include_swarm and _swarm_on and getattr(self, "swarm", None) is not None and build_market_context is not None:
             try:
                 news_sent = 0.0
                 for v in votes:
@@ -979,6 +983,7 @@ class Arbiter:
                     news_sentiment=news_sent,
                 )
                 swarm_votes = self.swarm.evaluate(ctx)
+                logger.info("Swarm votes for %s: %d", symbol, len(swarm_votes or []))
                 for sv in swarm_votes:
                     sd_name = getattr(sv.direction, "name", str(sv.direction)).upper()
                     s_dir = Dir.LONG if "LONG" in sd_name else (Dir.SHORT if "SHORT" in sd_name else Dir.FLAT)

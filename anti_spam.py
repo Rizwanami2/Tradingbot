@@ -108,7 +108,7 @@ class AntiSpamRateLimiter:
 
     def set_entry_cooldown(self, seconds: int) -> int:
         """Set explicit entry cooldown in seconds (enforced for both auto and manual)."""
-        self.entry_cooldown_sec = max(5, int(seconds))
+        self.entry_cooldown_sec = max(0, int(seconds))
         self._custom_entry_cd = True
         if self.mode != "off":
             self.mode = "manual"
@@ -315,6 +315,14 @@ class AntiSpamRateLimiter:
             if open_n >= eff_max_open:
                 return False, f"Spam trade capacity reached ({open_n}/{eff_max_open})"
             return True, f"OK (Spam trade mode active: {open_n + 1}/{eff_max_open} without cooldown)"
+
+        if str(getattr(self, "mode", "auto")).lower() in ("off", "disabled", "none", "0"):
+            open_n = len(engine.active_positions) + len(engine.pending_setups)
+            if open_n >= max_open:
+                return False, f"Total open slots full ({open_n}/{max_open})"
+            if curr_count >= self.max_positions_per_symbol:
+                return False, f"Max {self.max_positions_per_symbol} positions reached for currency {curr} ({curr_count} active/pending)"
+            return True, "OK (antispam mode off — cooldowns skipped)"
 
         # 2. Total capacity check across all symbols (default max 6)
         open_n = len(engine.active_positions) + len(engine.pending_setups)

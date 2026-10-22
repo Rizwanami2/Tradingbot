@@ -35,6 +35,7 @@ class AgentConfig:
     overlap: Tuple[time, time] = (time(12, 0), time(16, 0))
     news_window_min: int = 30
     require_m1_align: bool = True
+    session_filter_enabled: bool = False
     allow_break_retest: bool = True
     journal_path: str = "data/combined_agent_journal.csv"
     min_trades_kill: int = 30
@@ -88,14 +89,19 @@ class CombinedBotAgent:
     """FIT-skill combined gate for autotrade signal path."""
 
     def __init__(self, cfg: Optional[AgentConfig] = None, state: Optional[AgentState] = None):
+        import os
         self.cfg = cfg or AgentConfig()
         self.state = state or AgentState()
+        self.cfg.session_filter_enabled = os.getenv("COMBINED_AGENT_SESSION_FILTER", "false").lower() in ("true", "1", "yes", "on")
+        self._disabled = os.getenv("COMBINED_AGENT_ENABLED", "true").lower() in ("false", "0", "no", "off")
 
     def set_live_opt_in(self, enabled: bool) -> None:
         self.state.live_opt_in = bool(enabled)
 
     def _session_ok(self, now: Optional[datetime]) -> Tuple[bool, str]:
         s = _session(now, self.cfg)
+        if not getattr(self.cfg, "session_filter_enabled", False):
+            return True, s if s != "off" else "all_sessions"
         if s == "off":
             return False, "session_off"
         return True, s
@@ -191,6 +197,9 @@ class CombinedBotAgent:
         reasons: List[str] = []
         sig = dict(sig or {})
         ctx = context or {}
+
+        if getattr(self, "_disabled", False):
+            return True, sig, ["combined_disabled"]
 
         if ctx.get("is_live") and not self.state.live_opt_in:
             # allow autotrade on demo; only hard-block when caller marks live + no opt-in
@@ -308,6 +317,16 @@ class CombinedBotAgent:
             "halted": self.state.halted,
             "halt_reason": self.state.halt_reason,
         }
+
+
+_AGENT_SINGLETON: Optional[CombinedBotAgent] = None
+
+
+def get_combined_agent() -> CombinedBotAgent:
+    global _AGENT_SINGLETON
+    if _AGENT_SINGLETON is None:
+        _AGENT_SINGLETON = CombinedBotAgent()
+    return _AGENT_SINGLETON
 
 
 def main():

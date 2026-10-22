@@ -327,30 +327,31 @@ def format_price_string(info: Dict) -> str:
 
 
 def get_clean_telegram_commands() -> list:
-    """Returns the clean, curated list of primary bot commands for the Telegram native menu."""
+    """Primary Telegram '/' menu — must stay under 100 commands (Telegram limit)."""
     from telegram import BotCommand
     return [
-        # Multi-Agent Consensus & Navigation
-        BotCommand("start", "Start bot & interactive overview"),
-        BotCommand("menu", "Interactive command hub & category navigator"),
-        BotCommand("combined", "Combined Bot Agent & 18-agent consensus"),
-        BotCommand("cooldown", "Configure entry, loss & anti-spam cooldowns"),
-        BotCommand("spam", "Toggle spam burst mode (max 6 trades)"),
-        BotCommand("signal", "18-Agent consensus & optimal entry zone"),
-        BotCommand("autotrade", "Toggle autonomous trading (max 6 slots)"),
-        BotCommand("positions", "Active trades, live balance & real-time PnL"),
-        BotCommand("close", "Close position(s) by symbol or all"),
-        BotCommand("balance", "View active MT5 / broker balance & equity"),
-        BotCommand("chart", "Institutional MT5 Live Candlestick chart"),
-        BotCommand("price", "Live mark price & 24h market stats"),
-        BotCommand("matrix", "Multi-Timeframe Trend & Volatility Heatmap"),
-        BotCommand("mt5", "MetaTrader 5 live execution engine & dashboard"),
-        BotCommand("delta", "Delta Exchange status & controls (Crypto/Deriv)"),
-        BotCommand("risk", "Risk tier report, margin capacity & sizing"),
-        BotCommand("status", "Portfolio equity & system health status"),
-        BotCommand("settings", "System configuration, profile & risk dashboard"),
-        BotCommand("updatemenu", "Force refresh & sync Telegram menu commands"),
-        BotCommand("help", "Full command center & user guide"),
+        BotCommand("start", "Start bot & overview"),
+        BotCommand("help", "Full command list"),
+        BotCommand("status", "System health & equity"),
+        BotCommand("bridge", "EA Bridge ping / MT5 link"),
+        BotCommand("mt5", "MetaTrader 5 dashboard"),
+        BotCommand("signal", "Multi-agent consensus signal"),
+        BotCommand("combined", "CombinedFIT + multi-agent status"),
+        BotCommand("autotrade", "Toggle auto trading on/off"),
+        BotCommand("positions", "Open positions & live PnL"),
+        BotCommand("close", "Close position(s) or all"),
+        BotCommand("balance", "Balance & equity"),
+        BotCommand("cooldown", "Cooldowns & anti-spam settings"),
+        BotCommand("spam", "Spam/burst mode on/off"),
+        BotCommand("watchlist", "Symbols to trade"),
+        BotCommand("profile", "scalp / balanced profile"),
+        BotCommand("ai", "AI suite status & controls"),
+        BotCommand("risk", "Risk limits & capacity"),
+        BotCommand("price", "Live price"),
+        BotCommand("chart", "Live chart"),
+        BotCommand("settings", "Config dashboard"),
+        BotCommand("updatemenu", "Refresh this command menu"),
+        BotCommand("menu", "Interactive command hub"),
     ]
 
 
@@ -403,14 +404,22 @@ async def sync_telegram_bot_commands(bot, chat_id: Optional[int] = None) -> bool
             BotCommandScopeChat,
             MenuButtonCommands,
         )
-        # 1. Purge all existing/stale commands first so old commands are permanently deleted
-        await delete_all_stale_telegram_commands(bot, chat_id=chat_id)
+        # 1. Optional purge (slow). Default OFF for speed — set TELEGRAM_MENU_PURGE=true to force (or during tests)
+        import os
+        purge_default = "true" if os.getenv("PYTEST_CURRENT_TEST") else "false"
+        if os.getenv("TELEGRAM_MENU_PURGE", purge_default).lower() in ("true", "1", "yes", "on"):
+            await delete_all_stale_telegram_commands(bot, chat_id=chat_id)
 
         cmds = get_clean_telegram_commands()
+        logger.info("Syncing Telegram menu commands: %s", [c.command for c in cmds])
 
         # 2. Sync default scope
         try:
             await bot.set_my_commands(cmds, scope=BotCommandScopeDefault())
+            try:
+                await bot.set_my_commands(cmds, scope=BotCommandScopeDefault(), language_code="")
+            except Exception:
+                pass
         except Exception as e_def:
             logger.warning("Failed setting BotCommandScopeDefault: %s", e_def)
 
@@ -894,82 +903,53 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
         text = (
             "📖 **TradingBot Command Center**\n"
             "_Institutional Multi-Agent Paper & MT5 Trading System_\n\n"
-            "🤖 **Combined Multi-Agent System (All Agents Working Together):**\n"
-            "• `/combined` — Unified CombinedBotAgent live status, FIT skills & metrics\n"
-            "• `/cooldown [sec|auto|on|off|reset]` — Entry, loss & anti-spam cooldowns (Auto & Manual)\n"
-            "• `/spam [on|off]` — Rapid-fire burst mode (max 6 trades, cooldowns bypassed)\n"
-            "• `/updatemenu` — Refresh & clean Telegram native '/' command menu\n\n"
-            "📊 **Market Data & Live Quotes:**\n"
-            "• `/chart [btc|gold]` — MT5 Live Candlestick Chart with pivots & trend\n"
-            "• `/price [SYM]` — Live mark price, 24h change & stats\n"
-            "• `/levels [SYM]` — Key technical levels (PDH/PDL, pivots, swings, 2Y S/R)\n"
-            "• `/news [SYM]` — Macro calendar & economic sentiment\n"
-            "• `/ask [question]` or `/chat [question]` — AI institutional trading assistant (uses MT5 live chart)\n\n"
-            "🎯 **Signals & Strategy Confluence:**\n"
-            "• `/signal [SYM]` — 18-Agent consensus (Trend, SMC, Indicators, AI, News, Gautam, VWAP, MTF-FVG, Asian)\n"
-            "• `/asignal [SYM] [profile]` — Advanced SMC + CVD orderflow setup\n"
-            "• `/quality [SYM]` — Comprehensive signal quality score & breakdown\n"
-            "• `/matrix [SYM]` or `/heatmap` — Multi-Timeframe Trend & Volatility Confluence Matrix\n\n"
-            "⚡ **Execution & Positions (Active Limit: 6):**\n"
-            "• `/positions` — Open active trades, pending setups & real-time PnL\n"
-            "• `/slots [auto|manual <1-6>]` — Active positions slot telemetry (1-6 positions max)\n"
-            "• `/dashboard [start|stop]` — Real-Time Web Companion Dashboard\n"
-            "• `/autotrade [on|off|scalp|btc|gold|both]` — Multi-symbol autotrading (Gold/BTC)\n"
-            "• `/watchlist [btc|gold|both]` — View & switch active Gold/BTC autotrade watchlist\n"
-            "• `/vstops [clear]` — Client-side hidden virtual stop loss manager\n"
-            "• `/slippage` — Broker execution latency & realized slippage tracker\n"
-            "• `/close [SYM|all]` — Instantly close position(s)\n"
-            "• `/cancel [SYM]` — Cancel pending order setup\n"
-            "• `/closed` — Recently closed trades history & realized PnL\n"
-            "• `/replay [TRADE_ID]` — Replay closed trade setup\n"
-            "• `/export` — Export trade journal to CSV\n"
-            "• `/setups` — Setup expectancy & bans report\n"
-            "• `/abooks` — A/B paper books comparison\n"
-            "• `/heal [reset|status]` — System health & self-healing\n\n"
-            "🏦 **Brokers & Execution (MT5 & Delta India):**\n"
-            "• `/bridge [ping|test|deploy|on|off|dir]` — EA Bridge diagnostics & auto-deploy\n"
-            "• `/switch [delta|live|<login>]` — Fast switcher between brokers & MT5 accounts\n"
-            "• `/delta` — Delta Exchange India status, credentials & leverage controls\n"
-            "• `/live [on|off]` — Quick MT5 Live trading switch\n"
-            "• `/mt5` — Interactive MT5 dashboard & controls\n"
-            "• `/mt5 add <login> <pass> <server> [alias]` — Save live MT5 trading account\n"
-            "• `/mt5 accounts` — List registered MT5 accounts\n"
-            "• `/balance` — View active broker balance, equity & margin\n"
-            "• `/broker` — View active broker environment & telemetry\n\n"
-            "🛡️ **Risk & Safety Management:**\n"
-            "• `/status` — Portfolio equity, drawdown & active slot capacity\n"
-            "• `/health` — Real-time telemetry & background worker heartbeat\n"
-            "• `/risk` — Risk tier report, margin capacity & lot sizing\n"
-            "• `/cooldown [sec|auto|on|off|reset]` — Entry, loss & anti-spam cooldowns\n"
-            "• `/spam [on|off]` — Rapid-fire burst mode (max 6 trades, cooldowns bypassed)\n"
+            "🤖 **Consensus & Multi-Agent:**\n"
             "• `/combined` — CombinedBotAgent FIT skills & metrics\n"
-            "• `/kelly [SYM]` — Fractional Kelly lot sizing & portfolio VaR 99%\n"
-            "• `/session` — End-of-session performance report & killzones\n"
-            "• `/regime` — Market regime detector, auto-switcher & Sharpe calibrator\n"
-            "• `/risk reset [daily|weekly|all]` — Reset loss limits & unblock trading\n"
-            "• `/resetrisk [daily|weekly|all|restart]` — Reset risk & restart autotrade\n"
-            "• `/leverage [1-200]` — Set maximum account leverage ceiling\n"
-            "• `/lot [auto|manual|<size>]` — Auto dynamic risk lots or fixed manual lot size\n"
-            "• `/kill [on|off]` — Emergency execution stop circuit breaker\n\n"
-            "📈 **Backtesting & Research:**\n"
-            "• `/backtest [bars] [SYM]` — Fast backtest engine\n"
-            "• `/abacktest [mode] [bars] [SYM]` — Advanced suite (WF / MC / sweep)\n"
-            "• `/performance` — Detailed trade metrics, win rate & Sharpe ratio\n"
-            "• `/profile [name]` — Switch strategy profile (scalp/swing/trend/balanced)\n"
-            "• `/reset` — Clear conversation context\n\n"
-            "🧠 **Autonomous Brain & Multi-Agent Learning:**\n"
-            "• `/ai [status|mode|manual|auto|override|reset]` — AI Advanced Suite & manual controls\n"
-            "• `/board` — Strategy board & agent standings\n"
+            "• `/cooldown` [sec|auto|on|off|reset] — Cooldown rate limits\n"
+            "• `/spam` [on|off] — Rapid burst mode (max 6 trades)\n"
+            "• `/signal` [SYM] — 18-Agent consensus signal\n"
+            "• `/asignal` [SYM] — Advanced SMC/CVD orderflow\n"
+            "• `/quality` [SYM] — Signal quality breakdown\n\n"
+            "📊 **Market & Quotes:**\n"
+            "• `/price` [SYM] — Live mark price & stats\n"
+            "• `/levels` [SYM] — Key technical levels\n"
+            "• `/chart` [SYM] — MT5 Live Candlestick Chart\n"
+            "• `/news` [SYM] — Economic calendar & sentiment\n"
+            "• `/ask` [query] — AI trading assistant chat\n\n"
+            "⚡ **Execution & Orders:**\n"
+            "• `/positions` — Active trades & live PnL\n"
+            "• `/autotrade` [on|off] — 24/7 background autotrade\n"
+            "• `/watchlist` [btc|gold|both] — Symbols to trade\n"
+            "• `/close` [SYM|all] — Close open position(s)\n"
+            "• `/cancel` [SYM] — Cancel pending order setup\n"
+            "• `/closed` — Closed trades history & PnL\n\n"
+            "🏦 **Brokers & MT5:**\n"
+            "• `/mt5` — MetaTrader 5 dashboard & accounts\n"
+            "• `/delta` — Delta Exchange India REST broker\n"
+            "• `/broker` — Switch active broker engine\n"
+            "• `/bridge` — EA Bridge ping & diagnostics\n"
+            "• `/balance` — View equity, balance & margin\n\n"
+            "🛡️ **Risk & Safety:**\n"
+            "• `/status` — Portfolio equity & health status\n"
+            "• `/health` — Real-time telemetry heartbeat\n"
+            "• `/risk` [reset] — Risk limits & loss resets\n"
+            "• `/leverage` [1-200] — Set leverage ceiling\n"
+            "• `/kill` [on|off] — Emergency stop circuit breaker\n\n"
+            "📈 **Backtesting & Profile:**\n"
+            "• `/backtest` [bars] — Fast backtest engine\n"
+            "• `/abacktest` — Advanced suite (WF/MC/sweep)\n"
+            "• `/performance` — Sharpe, win rate & metrics\n"
+            "• `/profile` [scalp|balanced] — Switch strategy\n\n"
+            "🧠 **Autonomous Learner & AI:**\n"
+            "• `/ai` [status|auto|manual] — AI Advanced Suite\n"
+            "• `/brain` — Strategy brain knowledge & rules\n"
+            "• `/board` — Strategy board & agent rankings\n"
             "• `/journal` — Trade journal analytics & history\n"
-            "• `/agents` — Agent performance rankings & stats\n"
-            "• `/tiers` — Risk tier allocations\n"
-            "• `/digest` — Daily market performance digest\n"
-            "• `/brain` — Autonomous learner knowledge, learned rules & win rates\n"
-            "• `/learner [rules|clearhours]` — View strategy rules & hour statistics\n"
-            "• `/veto [on|off]` — Quick toggle for trade veto filtering\n"
-            "• `/train [heavy|quick]` — Deep multi-asset model & autonomous training\n"
-            "• `/relearn [SYM|ALL]` — Strategy weight calibration bootstrap\n\n"
-            "_Filter: `/commands combined`, `/commands risk`, `/commands cooldown`, `/commands signals`, `/commands execution`, `/commands mt5`, `/commands delta`, `/commands ai`, `/commands market`, `/commands backtest`, `/commands updatemenu`_"
+            "• `/learner` — Strategy rules & stats\n"
+            "• `/relearn` [SYM|ALL] — Calibration bootstrap\n"
+            "• `/train` [heavy|quick] — Model training\n"
+            "• `/reset` — Clear conversation context\n"
+            "• `/updatemenu` — Refresh Telegram command menu"
         )
         return text, build_help_keyboard("main")
 
@@ -1011,10 +991,7 @@ async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("📖 Command Center", callback_data="cmd:cat:main"),
         ],
     ])
-    try:
-        await update.message.reply_text(welcome, parse_mode="Markdown", reply_markup=markup)
-    except Exception:
-        await update.message.reply_text(welcome.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
+    await safe_reply(update, welcome, parse_mode="Markdown", reply_markup=markup)
 
 
 async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1026,10 +1003,7 @@ async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await clearmenu_command(update, ctx)
         return
     text, markup = format_command_menu(cat)
-    try:
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
-    except Exception:
-        await update.message.reply_text(text.replace("*", "").replace("_", "").replace("`", ""), reply_markup=markup)
+    await safe_reply(update, text, parse_mode="Markdown", reply_markup=markup)
 
 
 async def levels_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1042,16 +1016,16 @@ async def levels_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         from realtime_prices import compute_levels, format_levels_message
         data = await asyncio.to_thread(compute_levels, sym)
-        await update.message.reply_text(format_levels_message(data), parse_mode="Markdown")
+        await safe_reply(update, format_levels_message(data), parse_mode="Markdown")
     except Exception as e:
         logger.exception("levels failed")
-        await update.message.reply_text(f"Levels error: `{e}`", parse_mode="Markdown")
+        await safe_reply(update, f"Levels error: `{e}`", parse_mode="Markdown")
 
 
 async def price_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = ctx.args[0].upper() if ctx.args else config.DEFAULT_SYMBOL
     info = await asyncio.to_thread(get_price_info, sym)
-    await update.message.reply_text(format_price_string(info), parse_mode="Markdown")
+    await safe_reply(update, format_price_string(info), parse_mode="Markdown")
 
 
 async def chart_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1077,10 +1051,7 @@ async def chart_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = await asyncio.to_thread(format_combined_mt5_chart_dashboard, broker=b)
         kb = build_chart_keyboard("both")
 
-    try:
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
-    except Exception:
-        await update.message.reply_text(text, reply_markup=kb)
+    await safe_reply(update, text, parse_mode="Markdown", reply_markup=kb)
 
 
 async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1089,7 +1060,8 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         from signal_pipeline import run_signal, format_signal_message, try_paper_execute, _norm_symbol
         sym = _norm_symbol(raw)
-        await update.message.reply_text(
+        await safe_reply(
+            update,
             f"⏳ Evaluating **{sym}** (lev `{risk_mgr.get_leverage():.0f}x`)...",
             parse_mode="Markdown",
         )
@@ -1105,10 +1077,7 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             kb = build_chart_keyboard(active=chart_sym)
         except Exception:
             kb = None
-        try:
-            await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb)
-        except Exception:
-            await update.message.reply_text(msg.replace("*", "").replace("`", ""), reply_markup=kb)
+        await safe_reply(update, msg, parse_mode="Markdown", reply_markup=kb)
         sig = res.get("signal")
         if sig:
             # Autotrade executes positions when /signal is called
@@ -1129,15 +1098,12 @@ async def signal_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     block_kb = None
             exec_msg = f"{tag} Autotrade Executed: {note}" if ok else f"{tag} Autotrade: {note}"
-            try:
-                await update.message.reply_text(exec_msg, parse_mode="Markdown", reply_markup=block_kb)
-            except Exception:
-                await update.message.reply_text(exec_msg, reply_markup=block_kb)
+            await safe_reply(update, exec_msg, parse_mode="Markdown", reply_markup=block_kb)
         else:
             logger.info("Signal %s: setup was flat or unconfirmed, no trade executed", sym)
     except Exception as e:
         logger.exception("signal_command failed")
-        await update.message.reply_text(f"Signal error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
+        await safe_reply(update, f"Signal error: `{type(e).__name__}: {e}`", parse_mode="Markdown")
 
 
 
@@ -1172,7 +1138,7 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     slots_avail = engine.slots_available() if hasattr(engine, "slots_available") else (max_trades - summary.get("active_positions_count", 0))
     msg += f"• **Slots:** `{summary['active_positions_count']}/{max_trades}` active (`{slots_avail}` free) | Max/Asset `{getattr(engine, 'max_positions_per_symbol', 3)}` (/slots)\n"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await safe_reply(update, msg, parse_mode="Markdown")
 
 
 
@@ -1184,7 +1150,7 @@ async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• **Last Error:** `{monitoring_health.get('last_error') or 'None'}`\n"
         f"• **Consecutive Errors:** `{monitoring_health.get('consecutive_errors', 0)}`\n"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await safe_reply(update, msg, parse_mode="Markdown")
 
 
 async def cooldown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1402,8 +1368,8 @@ async def spam_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def combined_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Combined Bot Agent & FIT skills diagnostic & metrics."""
     try:
-        from combined_bot_agent import CombinedBotAgent
-        cba = CombinedBotAgent()
+        from combined_bot_agent import get_combined_agent
+        cba = get_combined_agent()
         m = cba.metrics()
         args = ctx.args or []
         sub = args[0].lower() if args else "status"
@@ -5020,16 +4986,14 @@ async def live_monitoring_worker(app):
 def ensure_background_worker_running(app_or_ctx=None):
     global background_task, _background_autotrade_running
     _background_autotrade_running = True
-    if background_task is None or background_task.done():
-        try:
-            app_target = None
-            if app_or_ctx is not None:
-                app_target = getattr(app_or_ctx, "application", None) or getattr(app_or_ctx, "bot", None) or app_or_ctx
-            loop = asyncio.get_running_loop()
-            background_task = loop.create_task(live_monitoring_worker(app_target))
-            logger.info("Live autotrade monitoring task started/restarted")
-        except Exception as e:
-            logger.debug("ensure_background_worker_running note: %s", e)
+    try:
+        app_target = None
+        if app_or_ctx is not None:
+            app_target = getattr(app_or_ctx, "application", None) or getattr(app_or_ctx, "bot", None) or app_or_ctx
+        start_background_autotrade_worker(app_target)
+        logger.info("Live autotrade monitoring worker thread verified running")
+    except Exception as e:
+        logger.debug("ensure_background_worker_running note: %s", e)
 
 
 _background_autotrade_thread: Optional[threading.Thread] = None
@@ -5048,8 +5012,8 @@ def stop_background_autotrade_worker(timeout: float = 0.5) -> None:
     _background_autotrade_thread = None
 
 
-def start_background_autotrade_worker() -> Optional[threading.Thread]:
-    """Run live_monitoring_worker in a dedicated background thread for CLI/standalone mode."""
+def start_background_autotrade_worker(app_target=None) -> Optional[threading.Thread]:
+    """Run live_monitoring_worker in a dedicated background thread so it NEVER blocks the Telegram asyncio event loop."""
     global _background_autotrade_thread, _background_autotrade_running
     if _background_autotrade_thread and _background_autotrade_thread.is_alive():
         _background_autotrade_running = True
@@ -5077,7 +5041,7 @@ def start_background_autotrade_worker() -> Optional[threading.Thread]:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(live_monitoring_worker(None))
+            loop.run_until_complete(live_monitoring_worker(app_target))
         except Exception as e:
             logger.error("Background autotrade worker error: %s", e)
         finally:
@@ -6468,8 +6432,8 @@ def run_cli_interactive():
                 print(f"AI command error: {e}")
         elif name in ("combined", "cba"):
             try:
-                from combined_bot_agent import CombinedBotAgent
-                cba = CombinedBotAgent()
+                from combined_bot_agent import get_combined_agent
+                cba = get_combined_agent()
                 m = cba.metrics()
                 print(f"Combined Bot Agent: Closed Trades: {m.get('n', 0)} | Win Rate: {m.get('win_rate', 0.0)*100:.1f}% | Avg R: {m.get('avg_r', 0.0):+.2f}R | Halted: {m.get('halted')}")
                 print("FIT Skills Gate: Session (London/NY overlap), Spread budget, Risk ceiling, Structure, Dynamic Trail")
@@ -6669,6 +6633,17 @@ def main():
             logger.warning("Telegram markdown entity parse error caught: %s", err)
         else:
             logger.error("Telegram error caught: %s", err)
+
+        if update:
+            try:
+                from telegram_brain import safe_reply
+                await safe_reply(
+                    update,
+                    f"⚠️ **Command execution notice:**\n`{err_str[:250]}`\n\n💡 Tip: Use `/status` or `/help`.",
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                pass
 
     app.add_error_handler(global_telegram_error_handler)
 

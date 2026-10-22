@@ -624,10 +624,10 @@ async def live_monitoring_worker(
                                 import os as _os_cba
                                 if _os_cba.getenv("COMBINED_AGENT_ENABLED", "true").lower() not in ("true", "1", "yes", "on"):
                                     raise RuntimeError("combined agent disabled")
-                                from combined_bot_agent import CombinedBotAgent
-                                if not hasattr(live_monitoring_worker, "_combined_agent"):
-                                    live_monitoring_worker._combined_agent = CombinedBotAgent()
-                                _cba = live_monitoring_worker._combined_agent
+                                if sig.get("combined_merged"):
+                                    raise RuntimeError("already merged in Arbiter")
+                                from combined_bot_agent import get_combined_agent
+                                _cba = get_combined_agent()
                                 _spread = float(candle_dict.get("spread") or 0.0)
                                 try:
                                     if _spread <= 0 and "ask" in candle_dict and "bid" in candle_dict:
