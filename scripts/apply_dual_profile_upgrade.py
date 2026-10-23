@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Apply XAU dual-profile upgrade + CombinedFIT/anti-spam fixes. Idempotent."""
+"""Apply XAU dual-profile upgrade + CombinedFIT/anti-spam fixes. Idempotent.
+
+FILES THIS SCRIPT UPDATES (all required):
+  1. combined_bot_agent.py
+  2. autotrade_worker.py
+  3. anti_spam.py
+  4. strategy_profiles.py
+
+After git pull, run once:
+  python scripts/apply_dual_profile_upgrade.py
+"""
 from pathlib import Path
 import re
 import ast
