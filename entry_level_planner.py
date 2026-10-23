@@ -679,38 +679,38 @@ def attach_plan_to_signal(sig: Dict[str, Any], plan: EntryPlan) -> Dict[str, Any
             if is_scalp or cur_stop >= cur_entry:
                 orig_dist = abs(float(sig.get("entry", cur_entry)) - float(sig.get("stop", cur_entry - min_dist)))
                 risk_dist = max(orig_dist, min_dist)
-                out["stop"] = round(cur_entry - risk_dist, 4)
+                out["stop"] = round(cur_entry - risk_dist, 6)
             else:
-                out["stop"] = round(min(cur_stop, cur_entry - min_dist), 4)
+                out["stop"] = round(min(cur_stop, cur_entry - min_dist), 6)
 
             risk_dist = cur_entry - out["stop"]
             cur_tp1 = float(out.get("tp1") or (cur_entry + risk_dist * 1.5))
             if is_scalp or cur_tp1 <= cur_entry:
-                out["tp1"] = round(cur_entry + max(risk_dist * 1.5, min_dist), 4)
+                out["tp1"] = round(cur_entry + max(risk_dist * 1.5, min_dist), 6)
             else:
-                out["tp1"] = round(max(cur_tp1, cur_entry + min_dist), 4)
+                out["tp1"] = round(max(cur_tp1, cur_entry + min_dist), 6)
 
             cur_tp2 = float(out.get("tp2") or (out["tp1"] + risk_dist))
-            out["tp2"] = round(max(cur_tp2, out["tp1"]), 4)
+            out["tp2"] = round(max(cur_tp2, out["tp1"]), 6)
 
         elif "SHORT" in dname or "SELL" in dname:
             cur_stop = float(out.get("stop") or (cur_entry + min_dist))
             if is_scalp or cur_stop <= cur_entry:
                 orig_dist = abs(float(sig.get("entry", cur_entry)) - float(sig.get("stop", cur_entry + min_dist)))
                 risk_dist = max(orig_dist, min_dist)
-                out["stop"] = round(cur_entry + risk_dist, 4)
+                out["stop"] = round(cur_entry + risk_dist, 6)
             else:
-                out["stop"] = round(max(cur_stop, cur_entry + min_dist), 4)
+                out["stop"] = round(max(cur_stop, cur_entry + min_dist), 6)
 
             risk_dist = out["stop"] - cur_entry
             cur_tp1 = float(out.get("tp1") or (cur_entry - risk_dist * 1.5))
             if is_scalp or cur_tp1 >= cur_entry:
-                out["tp1"] = round(cur_entry - max(risk_dist * 1.5, min_dist), 4)
+                out["tp1"] = round(cur_entry - max(risk_dist * 1.5, min_dist), 6)
             else:
-                out["tp1"] = round(min(cur_tp1, cur_entry - min_dist), 4)
+                out["tp1"] = round(min(cur_tp1, cur_entry - min_dist), 6)
 
             cur_tp2 = float(out.get("tp2") or (out["tp1"] - risk_dist))
-            out["tp2"] = round(min(cur_tp2, out["tp1"]), 4)
+            out["tp2"] = round(min(cur_tp2, out["tp1"]), 6)
     except Exception:
         pass
     return out
