@@ -228,13 +228,13 @@ class TestHedgingMode(unittest.IsolatedAsyncioTestCase):
 
         # 1. When hedging is OFF, decide returns None because opposing LONG exists
         config.set_hedging_mode(False, persist=False)
-        sig_off, reason_off, _ = arb.decide(df, df, df, df, None, self.risk_mgr, symbol="XAUUSD", engine=self.engine, include_swarm=False)
+        sig_off, reason_off, _ = arb.decide(df, df, df, df, None, self.risk_mgr, symbol="XAUUSD", engine=self.engine, include_swarm=False, on_demand=True)
         self.assertIsNone(sig_off)
         self.assertIn("Opposing direction", reason_off)
 
         # 2. When hedging is ON, decide successfully generates SHORT setup despite open LONG
         config.set_hedging_mode(True, persist=False)
-        sig_on, reason_on, _ = arb.decide(df, df, df, df, None, self.risk_mgr, symbol="XAUUSD", engine=self.engine, include_swarm=False)
+        sig_on, reason_on, _ = arb.decide(df, df, df, df, None, self.risk_mgr, symbol="XAUUSD", engine=self.engine, include_swarm=False, on_demand=True)
         self.assertIsNotNone(sig_on)
         self.assertEqual(sig_on["direction"], Dir.SHORT)
 

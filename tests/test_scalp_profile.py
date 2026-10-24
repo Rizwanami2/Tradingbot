@@ -38,8 +38,8 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         self.assertFalse(p.require_killzone)
         self.assertTrue(p.allow_asian)
         self.assertEqual(p.min_agreement, 2)
-        self.assertAlmostEqual(p.min_score, 1.0)
-        self.assertAlmostEqual(p.min_rr, 1.0)
+        self.assertAlmostEqual(p.min_score, 1.1)
+        self.assertAlmostEqual(p.min_rr, 1.15)
         self.assertAlmostEqual(p.scalp_tp_pct, 0.10)
         self.assertAlmostEqual(p.scalp_sl_pct, 0.12)
         self.assertAlmostEqual(p.scalp_tp_usd, 2.50)
@@ -63,14 +63,14 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         self.assertTrue(self.arbiter.is_scalp)
         self.assertTrue(self.arbiter.fast_market_fill)
         self.assertEqual(self.arbiter.MIN_AGREEMENT, 2)
-        self.assertAlmostEqual(self.arbiter.MIN_SCORE, 1.0)
+        self.assertAlmostEqual(self.arbiter.MIN_SCORE, 1.1)
         self.assertFalse(self.arbiter.require_killzone)
         self.assertTrue(self.arbiter.allow_asian)
 
         # Check risk manager
-        self.assertAlmostEqual(self.risk_mgr.config.min_rr, 1.0)
-        self.assertAlmostEqual(self.risk_mgr.config.tp1_r, 1.0)
-        self.assertAlmostEqual(self.risk_mgr.config.tp2_r, 1.5)
+        self.assertAlmostEqual(self.risk_mgr.config.min_rr, 1.15)
+        self.assertAlmostEqual(self.risk_mgr.config.tp1_r, 1.15)
+        self.assertAlmostEqual(self.risk_mgr.config.tp2_r, 1.725)
 
         # Check execution engine
         self.assertTrue(self.engine.scalp_mode)
@@ -90,7 +90,7 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         p = profiles["xau_scalp"]
         self.assertTrue(p.is_scalp)
         self.assertFalse(p.allow_asian)
-        self.assertAlmostEqual(p.min_score, 1.20)
+        self.assertAlmostEqual(p.min_score, 1.15)
         self.assertAlmostEqual(p.min_rr, 1.20)
         self.assertAlmostEqual(p.scalp_tp_usd, 3.00)
         self.assertAlmostEqual(p.scalp_sl_usd, 2.50)
@@ -152,9 +152,9 @@ class TestScalpProfileAndSpamTrading(unittest.TestCase):
         stop_dist = abs(entry - stop)
         self.assertLess(stop_dist, entry * 0.003)
         self.assertGreater(stop_dist, 0.0)
-        # TP1 should be tightly placed at ~1.0R
+        # TP1 should be tightly placed at ~1.15R
         tp_dist = abs(tp1 - entry)
-        self.assertAlmostEqual(tp_dist / stop_dist, 1.0, delta=0.1)
+        self.assertAlmostEqual(tp_dist / stop_dist, 1.15, delta=0.15)
 
     def test_instant_market_trigger_for_scalp_setup(self):
         self.engine.scalp_mode = True

@@ -30,6 +30,7 @@ performance_stats.json
 ai_advanced_state.json
 heavy_training_report.json
 data_cache/
+data/
 *.jsonl
 *.log
 attachments/

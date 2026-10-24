@@ -166,22 +166,27 @@ class CombinedBotAgent:
                 return False, "m1_not_aligned"
             if d in shortish and m1 not in shortish:
                 return False, "m1_not_aligned"
-        su = (setup or "pullback").lower()
-        # Free-text reason strings (e.g. "consensus long score=28.62") or long strings must never be false-vetoed
-        if "=" in su or "score" in su or len(su) > 24:
-            return True, "structure_ok"
-        allowed = {"pullback", "sweep_reclaim", "sweep", "liquidity", "consensus", "balanced", ""}
+        su = (setup or "pullback").lower().strip()
+        ok_keywords = (
+            "pull", "sweep", "liquid", "trend", "scalp", "consensus", "score",
+            "long", "short", "agent", "arbiter", "swarm", "break", "fvg", "ob",
+            "ote", "bos", "choch", "smc", "ict", "pivot", "fib", "balanced",
+            "perfect", "entry",
+        )
+        allowed = {
+            "pullback", "sweep_reclaim", "sweep", "liquidity", "consensus",
+            "multi_agent", "swarm", "scalp", "break_retest", "breakout",
+            "balanced", "",
+        }
         if self.cfg.allow_break_retest:
             allowed |= {"break_retest", "breakout"}
-        allowed_keywords = (
-            "consensus", "score", "long", "short", "agent", "arbiter", "swarm",
-            "pull", "sweep", "liquid", "trend", "scalp", "balanced", "perfect",
-            "entry", "fvg", "ob", "ote", "bos", "smc", "ict"
-        )
-        if su and su not in allowed:
-            if not any(k in su for k in allowed_keywords):
-                return False, f"setup_blocked:{su[:40]}"
-        return True, "structure_ok"
+        if not su or su in allowed:
+            return True, "structure_ok"
+        if any(k in su for k in ok_keywords):
+            return True, "structure_ok"
+        if "score" in su or "=" in su or len(su) > 24:
+            return True, "structure_ok"
+        return False, f"setup_blocked:{su[:40]}"
 
     def _apply_levels(self, sig: dict, direction: str, entry: float) -> dict:
         sig = dict(sig)

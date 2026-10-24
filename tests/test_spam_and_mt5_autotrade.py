@@ -275,9 +275,9 @@ class TestSpamAndMT5Autotrade(unittest.IsolatedAsyncioTestCase):
         detail_freed = engine.format_positions_detail()
         self.assertIn("5/6 active | 1 slots free", detail_freed)
 
-        # 6. Verify balanced profile also defaults to 6
+        # 6. Verify balanced profile sets controlled limit (3)
         apply_profile("balanced", engine=engine)
-        self.assertEqual(engine.max_open_trades, 6)
+        self.assertEqual(engine.max_open_trades, 3)
 
 
 if __name__ == "__main__":

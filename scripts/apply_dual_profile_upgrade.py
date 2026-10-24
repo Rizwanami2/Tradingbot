@@ -58,16 +58,17 @@ NEW_STRUCT = (
 def fix_combined():
     p = Path("combined_bot_agent.py")
     t = p.read_text(encoding="utf-8")
-    t2, n = re.subn(
-        r"        su = \(setup or \"pullback\"\)\.lower\(\).*?return True, \"structure_ok\"\n",
-        NEW_STRUCT, t, count=1, flags=re.S,
-    )
-    if not n:
+    if "ok_keywords = (" not in t:
         t2, n = re.subn(
-            r"        su = \(setup or \"pullback\"\)\.lower\(\).*?return False, f\"setup_blocked:\{su\[:40\]\}\"\n        return True, \"structure_ok\"\n",
+            r"        su = \(setup or \"pullback\"\)\.lower\(\).*?return True, \"structure_ok\"\n",
             NEW_STRUCT, t, count=1, flags=re.S,
         )
-    t = t2 if n else t
+        if not n:
+            t2, n = re.subn(
+                r"        su = \(setup or \"pullback\"\)\.lower\(\).*?return False, f\"setup_blocked:\{su\[:40\]\}\"\n        return True, \"structure_ok\"\n",
+                NEW_STRUCT, t, count=1, flags=re.S,
+            )
+        t = t2 if n else t
     if "def get_combined_agent" not in t:
         t += "\n\n_AGENT_SINGLETON = None\n\ndef get_combined_agent():\n    global _AGENT_SINGLETON\n    if _AGENT_SINGLETON is None:\n        _AGENT_SINGLETON = CombinedBotAgent()\n    return _AGENT_SINGLETON\n"
     if "session_filter_enabled" not in t:
@@ -109,7 +110,7 @@ def fix_antispam():
     t = re.sub(r"(self\.loss_cooldown_sec = )max\(5, int\(seconds\)\)", r"\1max(0, int(seconds))", t)
     t = re.sub(r"(self\.global_cooldown_sec = )max\(5, int\(seconds\)\)", r"\1max(0, int(seconds))", t)
     needle = '            return True, f"OK (Spam trade mode active: {open_n + 1}/{eff_max_open} without cooldown)"\n'
-    if "antispam mode off" not in t and needle in t:
+    if "cooldowns skipped" not in t and needle in t:
         t = t.replace(needle, needle + (
             "\n        if str(getattr(self, \"mode\", \"auto\")).lower() in (\"off\", \"disabled\", \"none\", \"0\"):\n"
             "            open_n = len(engine.active_positions) + len(engine.pending_setups)\n"

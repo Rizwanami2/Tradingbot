@@ -86,7 +86,20 @@ class TestOpsDashboard(unittest.TestCase):
                 thread.join(timeout=3)
 
     def test_web_dashboard_html_and_companion_endpoints(self):
-        with tempfile.TemporaryDirectory() as directory:
+        from unittest.mock import patch
+        from mtf_matrix import MatrixSnapshot
+        mock_snap = MatrixSnapshot(
+            symbol="XAUUSD",
+            current_price=2720.0,
+            timeframes={},
+            overall_score=75.0,
+            confluence_grade="STRONG BUY",
+            ltf_htf_alignment="ALIGNED",
+            top_bias="BULLISH",
+            recommendation="Bullish continuation",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        with tempfile.TemporaryDirectory() as directory, patch("mtf_matrix.analyze_symbol_mtf", return_value=mock_snap):
             path = Path(directory) / "status.json"
             StatusStore(path).write({
                 "symbol": "XAUUSD",
