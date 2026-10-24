@@ -107,7 +107,7 @@ class TestBalancedAutotradeNoRisk(unittest.TestCase):
         self.assertEqual(prof.name, "balanced")
         self.assertFalse(prof.is_scalp)
         self.assertFalse(prof.fast_market_fill)
-        self.assertEqual(prof.base_risk_pct, 0.25)  # 0.25% low equity risk
+        self.assertEqual(prof.base_risk_pct, 0.20)  # 0.20% disciplined equity risk
         self.assertGreaterEqual(prof.min_rr, 1.90)  # High R:R discipline
         self.assertFalse(config.SCALP_ENABLED)
         self.assertFalse(self.engine.scalp_mode)

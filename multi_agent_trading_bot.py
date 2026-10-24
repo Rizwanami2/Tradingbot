@@ -840,11 +840,13 @@ class Arbiter:
                 pass
 
         if getattr(self, "mt5_chart", None) is not None:
-            try:
-                cv = self.mt5_chart.vote(df1, symbol=symbol)
-                votes.append(cv)
-            except Exception:
-                pass
+            fast_mode = os.getenv("BOT_FAST_MODE", "false").lower() in ("true", "1", "yes", "on")
+            if not fast_mode:
+                try:
+                    cv = self.mt5_chart.vote(df1, symbol=symbol)
+                    votes.append(cv)
+                except Exception:
+                    pass
 
         if getattr(self, "orr", None) is not None:
             try:
@@ -1225,7 +1227,8 @@ class Arbiter:
             except Exception as _plan_err:
                 logger.debug("Entry level planning note in arbiter: %s", _plan_err)
 
-        if not os.getenv("PYTEST_CURRENT_TEST"):
+        fast_mode = os.getenv("BOT_FAST_MODE", "false").lower() in ("true", "1", "yes", "on")
+        if not os.getenv("PYTEST_CURRENT_TEST") and not fast_mode:
             try:
                 from mt5_chart import get_mt5_live_chart
                 ch_data = get_mt5_live_chart(symbol=symbol, timeframe="1m")
@@ -1235,6 +1238,45 @@ class Arbiter:
                 pass
         else:
             sig["mt5_chart"] = {"ok": True, "symbol": symbol, "timeframe": "1m"}
+
+        # Optional Arbiter Merge: run CombinedFIT directly in Arbiter and tag sig["combined_merged"] = True
+        merge_opt = os.getenv("COMBINED_MERGE_IN_ARBITER", "false").lower() in ("true", "1", "yes", "on")
+        if merge_opt and os.getenv("COMBINED_AGENT_ENABLED", "true").lower() in ("true", "1", "yes", "on"):
+            try:
+                from combined_bot_agent import get_combined_agent
+                cba = get_combined_agent()
+                spread_val = 0.0
+                if engine is not None and hasattr(engine, "get_spread"):
+                    try:
+                        spread_val = float(engine.get_spread(symbol) or 0.0)
+                    except Exception:
+                        pass
+                open_trades_val = len(getattr(engine, "active_positions", {})) if engine else 0
+                open_sym_val = engine.count_symbol_positions(symbol) if (engine and hasattr(engine, "count_symbol_positions")) else 0
+                max_open_val = getattr(engine, "max_concurrent_positions", 3) if engine else 3
+                max_sym_val = getattr(engine, "max_positions_per_symbol", 2) if engine else 2
+
+                ok_fit, sig, fit_reasons = cba.evaluate(
+                    sig,
+                    {
+                        "spread": spread_val,
+                        "open_trades": open_trades_val,
+                        "open_for_symbol": open_sym_val,
+                        "max_open": max_open_val,
+                        "max_per_symbol": max_sym_val,
+                        "htf_bias": str(sig.get("regime") or direction.name),
+                        "m1_direction": direction.name,
+                        "setup": str(sig.get("setup") or "consensus"),
+                        "entry": float(sig.get("entry") or entry),
+                    },
+                )
+                if not ok_fit:
+                    veto_why = ", ".join(fit_reasons) if fit_reasons else "CombinedFIT gate"
+                    return None, f"CombinedFIT veto: {veto_why}", votes
+                sig["combined_merged"] = True
+                votes.append(Vote("CombinedFIT", direction, 1.0, f"Passed FIT skills ({', '.join(fit_reasons) or 'clean'})"))
+            except Exception as _cba_merge_err:
+                logger.debug("CombinedFIT Arbiter merge note: %s", _cba_merge_err)
 
         status_msg = (
             f"⚡ SCALP {direction.name} score={score:.2f} (micro SL/TP)"

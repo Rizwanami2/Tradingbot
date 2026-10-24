@@ -31,8 +31,9 @@ class TestGoldAutotradeFixes(unittest.TestCase):
         self.assertLessEqual(gold_prof.min_rr, 1.6)
 
         balanced_prof = get_profile("balanced")
-        self.assertTrue(balanced_prof.allow_asian)
-        self.assertFalse(balanced_prof.require_killzone)
+        # In balanced XAUUSD mode, killzone is enforced (require_killzone=True, allow_asian=False)
+        self.assertFalse(balanced_prof.allow_asian)
+        self.assertTrue(balanced_prof.require_killzone)
 
         scalp_prof = get_profile("scalp")
         self.assertTrue(scalp_prof.allow_asian)

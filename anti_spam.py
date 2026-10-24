@@ -91,7 +91,7 @@ class AntiSpamRateLimiter:
             return "manual"
         if m in ("on", "enable", "enabled", "strict", "1", "true", "active", "activate", "activated"):
             return "on"
-        if m in ("off", "disable", "disabled", "bypass", "0", "false", "deactivate", "deactivated", "inactive"):
+        if m in ("off", "disable", "disabled", "bypass", "0", "false", "none", "deactivate", "deactivated", "inactive"):
             return "off"
         return "auto"
 
@@ -318,7 +318,8 @@ class AntiSpamRateLimiter:
                 return False, f"Spam trade capacity reached ({open_n}/{eff_max_open})"
             return True, f"OK (Spam trade mode active: {open_n + 1}/{eff_max_open} without cooldown)"
 
-        if str(getattr(self, "mode", "auto")).lower() in ("off", "disabled", "none", "0"):
+        env_mode = os.getenv("ANTISPAM_MODE", "").strip().lower()
+        if str(getattr(self, "mode", "auto")).lower() in ("off", "disabled", "none", "0") or env_mode in ("off", "disabled", "none", "0"):
             open_n = len(engine.active_positions) + len(engine.pending_setups)
             if open_n >= max_open:
                 return False, f"Total open slots full ({open_n}/{max_open})"

@@ -644,7 +644,7 @@ async def live_monitoring_worker(
                                         "max_per_symbol": getattr(engine, "max_positions_per_symbol", 3),
                                         "htf_bias": str(sig.get("regime") or dname),
                                         "m1_direction": dname,
-                                        "setup": str(sig.get("setup") or sig.get("reason") or "pullback"),
+                                        "setup": str(sig.get("setup") or "consensus"),
                                         "is_live": bool(getattr(config, "BOT_AUTOTRADE_LIVE_OPT_IN", False) or getattr(config, "AUTOTRADE_LIVE_OPT_IN", False)),
                                         "entry": float(candle_dict.get("close") or 0.0),
                                     },

@@ -68,9 +68,14 @@ class TradeJournal:
         return self
 
     def _load(self):
-        if os.path.exists(self.path):
+        target_path = self.path
+        if not os.path.exists(target_path):
+            mirror_path = os.path.join("data", os.path.basename(self.path))
+            if os.path.exists(mirror_path):
+                target_path = mirror_path
+        if os.path.exists(target_path):
             try:
-                with open(self.path, "r", encoding="utf-8") as f:
+                with open(target_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self.entries = data.get("closed", [])
                 for raw in data.get("open", []):
@@ -81,6 +86,9 @@ class TradeJournal:
 
     def _save(self):
         try:
+            p_dir = os.path.dirname(self.path)
+            if p_dir:
+                os.makedirs(p_dir, exist_ok=True)
             payload = {
                 "closed": self.entries[-500:],  # keep last 500
                 "open": [asdict(e) for e in self.open.values()],
@@ -88,6 +96,16 @@ class TradeJournal:
             }
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
+            # Persistent mirror to data/ directory so restarts preserve memory
+            if not self.path.startswith("data" + os.sep) and os.path.exists("data"):
+                try:
+                    data_mirror = os.path.join("data", os.path.basename(self.path))
+                    with open(data_mirror, "w", encoding="utf-8") as f_m:
+                        json.dump(payload, f_m, indent=2)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[TradeJournal] save error: {e}")
         except Exception as e:
             print(f"[TradeJournal] save error: {e}")
 

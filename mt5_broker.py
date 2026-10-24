@@ -811,7 +811,9 @@ class MT5Broker(Broker):
         resolved_sym = resolve_mt5_symbol(symbol)
         fill_price = float(price) if price is not None and price > 0 else 100.0
 
-        if self.mode == "live" and self._connected:
+        if self.mode == "live":
+            if not self._connected:
+                raise ExecutionError(f"MT5 live broker is not connected (backend={self.effective_backend}). Live order cannot be placed.")
             if self.effective_backend == "ea_bridge":
                 from bridge import ea_client
                 sl_val = float(stop_loss) if stop_loss else 0.0
@@ -1155,7 +1157,9 @@ class MT5Broker(Broker):
 
         resolved_sym = resolve_mt5_symbol(symbol)
 
-        if self.mode == "live" and self._connected:
+        if self.mode == "live":
+            if not self._connected:
+                raise ExecutionError(f"MT5 live broker is not connected (backend={self.effective_backend}). Live order cannot be placed.")
             if self.effective_backend == "ea_bridge":
                 from bridge import ea_client
                 t_int = int(ticket) if ticket and str(ticket).isdigit() else 0
@@ -1396,7 +1400,9 @@ class MT5Broker(Broker):
     ) -> bool:
         """Modify SL and TP of an open MT5 position (e.g. for dynamic trailing stop), optionally targeting a ticket."""
         resolved_sym = resolve_mt5_symbol(symbol)
-        if self.mode == "live" and self._connected:
+        if self.mode == "live":
+            if not self._connected:
+                raise ExecutionError(f"MT5 live broker is not connected (backend={self.effective_backend}). Live order cannot be placed.")
             if self.effective_backend == "ea_bridge":
                 from bridge import ea_client
                 t_int = int(ticket) if ticket and str(ticket).isdigit() else 0
@@ -1748,7 +1754,9 @@ class MT5Broker(Broker):
 
     def get_account_info(self) -> MT5AccountInfo:
         """Return standardized MT5 account telemetry."""
-        if self.mode == "live" and self._connected:
+        if self.mode == "live":
+            if not self._connected:
+                raise ExecutionError(f"MT5 live broker is not connected (backend={self.effective_backend}). Live order cannot be placed.")
             if self.effective_backend == "ea_bridge":
                 login_val = self.login
                 try:

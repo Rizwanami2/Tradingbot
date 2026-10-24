@@ -1138,19 +1138,31 @@ async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     slots_avail = engine.slots_available() if hasattr(engine, "slots_available") else (max_trades - summary.get("active_positions_count", 0))
     hedge_st = "🟢 ON (Hedged)" if getattr(config, "is_hedging_allowed", lambda: False)() else "⚪ OFF (Single-Dir)"
+    swarm_icon = "🟢 ON (150 Swarm Agents)" if os.getenv("SWARM_ENABLED", "false").lower() in ("true", "1", "yes", "on") else "⚪ OFF (Core Multi-Agents Only)"
+    fast_icon = "⚡ ON" if os.getenv("BOT_FAST_MODE", "false").lower() in ("true", "1", "yes", "on") else "⚪ OFF"
     msg += f"• **Slots:** `{summary['active_positions_count']}/{max_trades}` active (`{slots_avail}` free) | Max/Asset `{getattr(engine, 'max_positions_per_symbol', 3)}` (/slots)\n"
     msg += f"• **Hedging:** `{hedge_st}` (/hedge [on|off])\n"
+    msg += f"• **Swarm Mode:** `{swarm_icon}` | **Fast Mode:** `{fast_icon}`\n"
+    last_xau_eval = monitoring_health.get("XAUUSD_eval")
+    if last_xau_eval:
+        msg += f"• **Last XAUUSD Eval:** `{last_xau_eval}`\n"
     await safe_reply(update, msg, parse_mode="Markdown")
 
 
 
 async def health_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    evals = [f"  - `{k}`: `{v}`" for k, v in monitoring_health.items() if k.endswith("_eval")]
+    eval_text = "\n".join(evals) if evals else "  - None recorded yet"
+    swarm_st = "ON" if os.getenv("SWARM_ENABLED", "false").lower() in ("true", "1", "yes", "on") else "OFF (Core Agents)"
+    fast_st = "ON" if os.getenv("BOT_FAST_MODE", "false").lower() in ("true", "1", "yes", "on") else "OFF"
     msg = (
         f"❤️ **Health Telemetry**\n"
         f"• **Last Poll:** `{monitoring_health.get('last_poll_at')}`\n"
         f"• **Last Success:** `{monitoring_health.get('last_success_at')}`\n"
         f"• **Last Error:** `{monitoring_health.get('last_error') or 'None'}`\n"
         f"• **Consecutive Errors:** `{monitoring_health.get('consecutive_errors', 0)}`\n"
+        f"• **Swarm / Fast:** Swarm `{swarm_st}` | Fast `{fast_st}`\n\n"
+        f"🔍 **Latest Symbol Signal Evals:**\n{eval_text}\n"
     )
     await safe_reply(update, msg, parse_mode="Markdown")
 

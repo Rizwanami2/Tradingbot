@@ -116,10 +116,11 @@ class CombinedBotAgent:
                 return False, "news_window"
         return True, "news_clear"
 
-    def _spread_ok(self, spread: float) -> Tuple[bool, str]:
-        budget = abs(self.cfg.tp_usd) * self.cfg.max_spread_frac_of_tp
-        if spread is None or spread < 0:
-            return False, "spread_invalid"
+    def _spread_ok(self, spread: Optional[float], tp_dist: Optional[float] = None) -> Tuple[bool, str]:
+        if spread is None or spread <= 0:
+            return True, "spread_unknown_allow"
+        effective_tp = float(tp_dist) if (tp_dist is not None and tp_dist > 0) else abs(self.cfg.tp_usd)
+        budget = effective_tp * self.cfg.max_spread_frac_of_tp
         if spread > budget:
             return False, f"spread>{budget:.2f}"
         return True, "spread_ok"
@@ -166,12 +167,19 @@ class CombinedBotAgent:
             if d in shortish and m1 not in shortish:
                 return False, "m1_not_aligned"
         su = (setup or "pullback").lower()
+        # Free-text reason strings (e.g. "consensus long score=28.62") or long strings must never be false-vetoed
+        if "=" in su or "score" in su or len(su) > 24:
+            return True, "structure_ok"
         allowed = {"pullback", "sweep_reclaim", "sweep", "liquidity", "consensus", "balanced", ""}
         if self.cfg.allow_break_retest:
             allowed |= {"break_retest", "breakout"}
-        if su and su not in allowed and "pullback" not in su and "sweep" not in su:
-            # allow long reason strings containing pullback/sweep/consensus/balanced
-            if not any(k in su for k in ("pull", "sweep", "liquid", "trend", "scalp", "consensus", "balanced", "perfect", "entry")):
+        allowed_keywords = (
+            "consensus", "score", "long", "short", "agent", "arbiter", "swarm",
+            "pull", "sweep", "liquid", "trend", "scalp", "balanced", "perfect",
+            "entry", "fvg", "ob", "ote", "bos", "smc", "ict"
+        )
+        if su and su not in allowed:
+            if not any(k in su for k in allowed_keywords):
                 return False, f"setup_blocked:{su[:40]}"
         return True, "structure_ok"
 
@@ -239,12 +247,17 @@ class CombinedBotAgent:
             return False, sig, [why]
 
         spread = float(ctx.get("spread") or sig.get("spread") or 0.0)
-        # If spread unknown (0), do not block — only block when measured wide
+        # If spread unknown (0/None), do not block — only block when measured wide relative to planned TP
         if spread > 0:
-            ok, why = self._spread_ok(spread)
+            entry_p = float(sig.get("entry") or ctx.get("entry") or 0.0)
+            tp_p = float(sig.get("tp1") or sig.get("tp") or 0.0)
+            tp_dist = abs(tp_p - entry_p) if (entry_p > 0 and tp_p > 0) else None
+            ok, why = self._spread_ok(spread, tp_dist=tp_dist)
             if not ok:
                 return False, sig, [why]
             reasons.append(why)
+        else:
+            reasons.append("spread_ok")
 
         ok, why = self._risk_ok(
             int(ctx.get("open_trades") or 0),
