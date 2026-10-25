@@ -31,6 +31,7 @@ ai_advanced_state.json
 heavy_training_report.json
 data_cache/
 data/
+trader/state/
 *.jsonl
 *.log
 attachments/

@@ -350,6 +350,7 @@ def get_clean_telegram_commands() -> list:
         BotCommand("price", "Live price"),
         BotCommand("chart", "Live chart"),
         BotCommand("settings", "Config dashboard"),
+        BotCommand("skills", "11 Trader Skills Hub"),
         BotCommand("updatemenu", "Refresh this command menu"),
         BotCommand("menu", "Interactive command hub"),
     ]
@@ -550,8 +551,38 @@ def build_help_keyboard(active_cat: str = "main") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⚙️ Settings", callback_data="cmd:cat:settings"),
             ],
             [
+                InlineKeyboardButton("🧰 11 Trader Skills", callback_data="cmd:cat:skills"),
                 InlineKeyboardButton("🔄 Sync Menu", callback_data="cmd:run:updatemenu"),
+            ],
+            [
                 InlineKeyboardButton("📖 Full Catalog", callback_data="cmd:cat:all"),
+            ],
+        ])
+    elif cat in ("skills", "skill", "traderskills", "traderskill", "hub"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🏛️ Pelosi / Congress", callback_data="ts:pelosi"),
+                InlineKeyboardButton("🐋 13F Copycat", callback_data="ts:copycat"),
+            ],
+            [
+                InlineKeyboardButton("📰 SEC 8-K News", callback_data="ts:secnews"),
+                InlineKeyboardButton("📊 SEC XBRL Analyst", callback_data="ts:analyst"),
+            ],
+            [
+                InlineKeyboardButton("🎯 Stock Screener", callback_data="ts:screener"),
+                InlineKeyboardButton("💰 Budget & Sizing", callback_data="ts:budget"),
+            ],
+            [
+                InlineKeyboardButton("🛡️ Risk Firewall", callback_data="ts:risk"),
+                InlineKeyboardButton("🎫 Order Tickets", callback_data="ts:ticket"),
+            ],
+            [
+                InlineKeyboardButton("📑 Tax & Wash Sales", callback_data="ts:tax"),
+                InlineKeyboardButton("⏰ NYSE Clock", callback_data="ts:nyse"),
+            ],
+            [
+                InlineKeyboardButton("⚖️ Rebalance", callback_data="ts:rebalance"),
+                InlineKeyboardButton("🔙 Main Menu", callback_data="cmd:cat:main"),
             ],
         ])
     elif cat in ("update", "updatemenu", "sync", "syncmenu", "clear", "clearmenu", "deletemenu"):
@@ -766,6 +797,31 @@ def format_command_menu(cat: str = "main") -> Tuple[str, InlineKeyboardMarkup]:
             "💡 _All 18 institutional strategies work together under unified consensus; individual/single mode is superseded by CombinedBotAgent._"
         )
         return text, build_help_keyboard("combined")
+
+    elif cat in ("skills", "skill", "traderskills", "traderskill", "hub"):
+        text = (
+            "🧰 **11 Trader Skills Hub (Institutional & Quantitative Suite):**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🏛️ **Institutional & Regulatory Intelligence:**\n"
+            "• `/pelosi [member]` — Congressional stock disclosures (STOCK Act PTRs)\n"
+            "• `/copycat [filer]` — 13F-HR institutional reverse engineering (Buffett, Dalio, Burry)\n"
+            "• `/secnews [tickers]` — Breaking 8-K filings & financial headlines\n\n"
+            "📊 **Fundamental Analysis & Screening:**\n"
+            "• `/analyst [SYM]` — SEC XBRL quarterly financials & earnings (10-Q/10-K)\n"
+            "• `/screener [rules]` — Rule-based quantitative equity screener\n\n"
+            "💰 **Capital Sizing & Allocation:**\n"
+            "• `/budget [amt]` — Position sizing with cash buffer & caps\n"
+            "• `/rebalance [band]` — Portfolio drift calculator & rebalance tickets\n\n"
+            "🛡️ **Risk Firewall & Execution Safeguards:**\n"
+            "• `/riskcheck` — Pre-trade compliance checker (leverage, caps, limits)\n"
+            "• `/ticket [index]` — Two-yes human approval gate & order tickets\n\n"
+            "📑 **Operations & Accounting:**\n"
+            "• `/tax [SYM|harvest]` — Cost-basis lots, wash sale validator & harvesting\n"
+            "• `/nyse` — NYSE trading clock, holidays (2026/2027) & early closes\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 _All 11 skills run 100% standard library Python with zero external API dependencies._"
+        )
+        return text, build_help_keyboard("skills")
 
     elif cat in ("update", "updatemenu", "sync", "syncmenu"):
         cmds = get_clean_telegram_commands()
@@ -6674,6 +6730,13 @@ def main():
         register_ai_commands(app)
     except Exception as _ai_err:
         logger.warning("Failed to register AI suite commands: %s", _ai_err)
+
+    # 11 Trader Skills Suite
+    try:
+        from telegram_trader_skills import register_trader_skills
+        register_trader_skills(app)
+    except Exception as _ts_err:
+        logger.warning("Failed to register trader skills suite commands: %s", _ts_err)
 
     # Conversational Assistant & Controls
     app.add_handler(CommandHandler(["ask", "chat"], ask_command))
