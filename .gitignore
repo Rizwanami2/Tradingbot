@@ -40,5 +40,10 @@ attachments/
 virtual_stops_state.json
 execution_analytics.json
 
+# Trader skills data (research layer)
+trader/config.json
+trader/*.json
+!trader/*.example.json
+
 # Never track README files
 [Rr][Ee][Aa][Dd][Mm][Ee]*

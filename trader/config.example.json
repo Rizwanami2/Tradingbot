@@ -1,0 +1,7 @@
+{
+  "sec_user_agent": "Your Name you@example.com",
+  "paper": true,
+  "cash_buffer_pct": 10,
+  "max_position_pct": 25,
+  "max_order_usd": 5000
+}
