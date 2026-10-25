@@ -26,6 +26,7 @@ from telegram_trader_skills import (
     skills_command,
     tax_command,
     ticket_command,
+    bridge_status_command,
 )
 
 
@@ -45,12 +46,12 @@ class TestTelegramTraderSkills(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(mock_app.add_handler.call_count, 12)
 
     async def test_build_skills_keyboard(self):
-        """Verify build_skills_keyboard produces all 6 rows with 12 buttons."""
+        """Verify build_skills_keyboard produces all 7 rows with 13 buttons."""
         kb = build_skills_keyboard("main")
         self.assertIsNotNone(kb)
-        self.assertEqual(len(kb.inline_keyboard), 6)
+        self.assertEqual(len(kb.inline_keyboard), 7)
         all_buttons = [btn for row in kb.inline_keyboard for btn in row]
-        self.assertEqual(len(all_buttons), 12)
+        self.assertEqual(len(all_buttons), 13)
 
     async def test_skills_command(self):
         """Verify /skills returns the 11 skills hub overview."""
@@ -196,6 +197,7 @@ class TestTelegramTraderSkills(unittest.IsolatedAsyncioTestCase):
             ("ts:tax", tax_command),
             ("ts:nyse", nyse_command),
             ("ts:rebalance", rebalance_command),
+            ("ts:bridge", bridge_status_command),
         ]
 
         for data, target_fn in callbacks:
@@ -203,6 +205,16 @@ class TestTelegramTraderSkills(unittest.IsolatedAsyncioTestCase):
             with patch("telegram_trader_skills.safe_reply", new_callable=AsyncMock):
                 await skills_callback_handler(self.update, self.ctx)
                 cb_query.answer.assert_called()
+
+    async def test_bridge_status_command(self):
+        """Verify /skillsbridge displays the agent-skills architectural synergy."""
+        with patch("telegram_trader_skills.safe_reply", new_callable=AsyncMock) as mock_reply:
+            await bridge_status_command(self.update, self.ctx)
+            mock_reply.assert_called_once()
+            call_text = mock_reply.call_args[0][1]
+            self.assertIn("Agent-Skills Unified Architecture Bridge", call_text)
+            self.assertIn("SKILL-FUNDAMENTAL", call_text)
+            self.assertIn("Pre-Trade Risk Firewall", call_text)
 
     def test_trader_skills_package_wrappers(self):
         """Verify trader_skills package programmatic wrappers."""

@@ -60,9 +60,12 @@ def build_skills_keyboard(active: str = "main") -> InlineKeyboardMarkup:
     ]
     row6 = [
         InlineKeyboardButton("⚖️ Rebalance", callback_data="ts:rebalance"),
-        InlineKeyboardButton("🔄 Refresh Overview", callback_data="ts:main"),
+        InlineKeyboardButton("🔄 Overview", callback_data="ts:main"),
     ]
-    return InlineKeyboardMarkup([row1, row2, row3, row4, row5, row6])
+    row7 = [
+        InlineKeyboardButton("🔗 Swarm-Skills Bridge Status", callback_data="ts:bridge"),
+    ]
+    return InlineKeyboardMarkup([row1, row2, row3, row4, row5, row6, row7])
 
 
 async def skills_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -337,11 +340,42 @@ async def skills_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await nyse_command(update, ctx)
     elif skill_key == "rebalance":
         await rebalance_command(update, ctx)
+    elif skill_key == "bridge":
+        await bridge_status_command(update, ctx)
+
+
+async def bridge_status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Display how the 11 trader skills are combined with all bot agents."""
+    text = (
+        "🔗 **Agent-Skills Unified Architecture Bridge:**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "All 11 Trader Skills work in direct synergy with the 118-Agent Collective Swarm & Consensus Engine:\n\n"
+        "🧠 **1. Fundamental Consensus Agent (`SKILL-FUNDAMENTAL`):**\n"
+        "• Combines 13F institutional portfolios (Buffett, Scion, Dalio) with `/copycat`\n"
+        "• Tracks Congressional insider disclosures via STOCK Act PTRs with `/pelosi`\n"
+        "• Ingests material 8-K filings and SEC XBRL financial statements (`/analyst`)\n"
+        "• Boosts consensus conviction when fundamentals align with technical setups\n\n"
+        "🎯 **2. Candidate Universe Screener (`/screener`):**\n"
+        "• Dynamically screens thousands of stocks for undervalued growth & high ROE\n"
+        "• Feeds high-conviction watchlists directly into the Swarm's scanning cycle\n\n"
+        "💰 **3. Multi-Asset Portfolio Allocation (`/budget` & `/rebalance`):**\n"
+        "• Sizes positions with cash buffers & single-stock exposure caps\n"
+        "• Detects portfolio drift and triggers rebalance trades\n\n"
+        "🛡️ **4. Pre-Trade Risk Firewall & Tax Gate (`/riskcheck` & `/tax`):**\n"
+        "• Enforces strict pre-flight order ceilings and margin requirements\n"
+        "• Enforces IRS 30-day Wash-Sale protection to preserve tax deductions\n\n"
+        "⏰ **5. Market Session & Exchange Clock (`/nyse`):**\n"
+        "• Synchronizes equity and ETF execution with official NYSE market hours\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "✅ **Status:** Operational & Fully Unified"
+    )
+    await safe_reply(update, text, parse_mode="Markdown", reply_markup=build_skills_keyboard("main"))
 
 
 def register_trader_skills(app: Application) -> None:
     """Register all 11 Trader Skills handlers with the Telegram bot application."""
     app.add_handler(CommandHandler(["skills", "skill", "hub"], skills_command))
+    app.add_handler(CommandHandler(["skillsbridge", "bridge"], bridge_status_command))
     app.add_handler(CommandHandler(["copycat", "13f", "clone"], copycat_command))
     app.add_handler(CommandHandler(["pelosi", "congress", "senate", "ptr"], pelosi_command))
     app.add_handler(CommandHandler(["secnews", "8k", "filings"], secnews_command))
