@@ -27,6 +27,8 @@ from telegram_trader_skills import (
     tax_command,
     ticket_command,
     bridge_status_command,
+    gold_command,
+    btc_command,
 )
 
 
@@ -46,12 +48,12 @@ class TestTelegramTraderSkills(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(mock_app.add_handler.call_count, 12)
 
     async def test_build_skills_keyboard(self):
-        """Verify build_skills_keyboard produces all 7 rows with 13 buttons."""
+        """Verify build_skills_keyboard produces all 8 rows with 15 buttons."""
         kb = build_skills_keyboard("main")
         self.assertIsNotNone(kb)
-        self.assertEqual(len(kb.inline_keyboard), 7)
+        self.assertEqual(len(kb.inline_keyboard), 8)
         all_buttons = [btn for row in kb.inline_keyboard for btn in row]
-        self.assertEqual(len(all_buttons), 13)
+        self.assertEqual(len(all_buttons), 15)
 
     async def test_skills_command(self):
         """Verify /skills returns the 11 skills hub overview."""
@@ -198,6 +200,8 @@ class TestTelegramTraderSkills(unittest.IsolatedAsyncioTestCase):
             ("ts:nyse", nyse_command),
             ("ts:rebalance", rebalance_command),
             ("ts:bridge", bridge_status_command),
+            ("ts:gold", gold_command),
+            ("ts:btc", btc_command),
         ]
 
         for data, target_fn in callbacks:
@@ -215,6 +219,26 @@ class TestTelegramTraderSkills(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Agent-Skills Unified Architecture Bridge", call_text)
             self.assertIn("SKILL-FUNDAMENTAL", call_text)
             self.assertIn("Pre-Trade Risk Firewall", call_text)
+
+    async def test_gold_command(self):
+        """Verify /gold displays dedicated Gold (XAUUSD) institutional intelligence."""
+        with patch("telegram_trader_skills.safe_reply", new_callable=AsyncMock) as mock_reply:
+            await gold_command(self.update, self.ctx)
+            mock_reply.assert_called_once()
+            call_text = mock_reply.call_args[0][1]
+            self.assertIn("Gold (XAUUSD / GLD / Miners)", call_text)
+            self.assertIn("Bridgewater", call_text)
+            self.assertIn("Wash-Sale Family", call_text)
+
+    async def test_btc_command(self):
+        """Verify /btc displays dedicated Bitcoin (BTCUSDT) institutional intelligence."""
+        with patch("telegram_trader_skills.safe_reply", new_callable=AsyncMock) as mock_reply:
+            await btc_command(self.update, self.ctx)
+            mock_reply.assert_called_once()
+            call_text = mock_reply.call_args[0][1]
+            self.assertIn("Bitcoin (BTCUSDT / IBIT / MSTR)", call_text)
+            self.assertIn("Spot ETFs", call_text)
+            self.assertIn("MicroStrategy", call_text)
 
     def test_trader_skills_package_wrappers(self):
         """Verify trader_skills package programmatic wrappers."""

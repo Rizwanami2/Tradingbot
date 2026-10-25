@@ -149,9 +149,56 @@ def session(d):
     return OPEN, (EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE)
 
 
-def market_status(now_utc):
+def market_status(now_utc, symbol=None):
     local = to_eastern(now_utc)
     d = local.date()
+
+    if symbol:
+        sym = symbol.upper().replace("/", "").replace("-", "").strip()
+        if any(c in sym for c in ("BTC", "ETH", "SOL", "USDT", "CRYPTO")):
+            return {
+                "asset": sym,
+                "market": "crypto",
+                "now_new_york": local.strftime("%Y-%m-%d %H:%M"),
+                "date": d.isoformat(),
+                "weekday": local.strftime("%A"),
+                "open": True,
+                "reason": "continuous 24/7/365 crypto session",
+                "calendar_known": True,
+            }
+        if sym in ("XAUUSD", "GOLD", "XAU", "PAXG", "XAUT"):
+            weekday = local.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
+            t = local.time()
+            is_open = False
+            reason = "weekend closed"
+            if weekday == 6 and t >= datetime.time(17, 0):
+                is_open = True
+                reason = "spot metals session open"
+            elif 0 <= weekday <= 3:
+                if datetime.time(17, 0) <= t < datetime.time(18, 0):
+                    is_open = False
+                    reason = "daily metals rollover pause (17:00-18:00 EST)"
+                else:
+                    is_open = True
+                    reason = "spot metals session open"
+            elif weekday == 4:
+                if t < datetime.time(16, 0):
+                    is_open = True
+                    reason = "spot metals session open"
+                else:
+                    is_open = False
+                    reason = "metals weekend close (closed Friday 16:00 EST)"
+            return {
+                "asset": sym,
+                "market": "spot_metals",
+                "now_new_york": local.strftime("%Y-%m-%d %H:%M"),
+                "date": d.isoformat(),
+                "weekday": local.strftime("%A"),
+                "open": is_open,
+                "reason": reason,
+                "calendar_known": True,
+            }
+
     ok, reason = trading_day(d)
     st = {"now_new_york": local.strftime("%Y-%m-%d %H:%M"), "date": d.isoformat(),
           "weekday": local.strftime("%A"), "calendar_known": d.year in CALENDAR_YEARS,
@@ -184,8 +231,12 @@ def stooq_url(sym):
 
 
 def yahoo_url(sym):
-    return "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=1d" % (
-        sym.upper().replace(".", "-"))
+    s = sym.upper().replace(".", "-")
+    if s in ("BTC", "BTCUSD", "BTCUSDT", "BITCOIN"):
+        s = "BTC-USD"
+    elif s in ("XAUUSD", "GOLD", "XAU"):
+        s = "GC=F"
+    return "https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=1d" % s
 
 
 def parse_stooq(text, sym):

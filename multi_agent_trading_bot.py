@@ -693,6 +693,7 @@ class Arbiter:
         "RIBBON-SCALP": 1.45,
         "STOCH-RSI-SCALP": 1.50,
         "AUTO-TREND-1M": 1.60,
+        "SKILL-FUNDAMENTAL": 1.25,
     }
     MIN_AGREEMENT = 2
     MIN_SCORE = 1.2
@@ -760,6 +761,13 @@ class Arbiter:
         self.ribbon = RibbonScalpAgent() if RibbonScalpAgent is not None else None
         self.stoch = StochRSIScalpAgent() if StochRSIScalpAgent is not None else None
         self.auto_trend_1m = AutoTrend1mAgent() if AutoTrend1mAgent is not None else None
+        try:
+            from trader_skills_agent_bridge import FundamentalSkillAgent
+            self.skill_fundamental = FundamentalSkillAgent()
+            if self.skill_fundamental.name not in self.WEIGHTS:
+                self.WEIGHTS[self.skill_fundamental.name] = 1.25
+        except Exception:
+            self.skill_fundamental = None
         self.swarm = get_agent_swarm() if get_agent_swarm is not None else None
         if self.swarm:
             for sa in self.swarm.agents:
@@ -966,16 +974,27 @@ class Arbiter:
             except Exception:
                 pass
 
+        # Trader Skills Fundamental & Institutional Consensus Integration
+        if getattr(self, "skill_fundamental", None) is not None:
+            try:
+                skill_v = self.skill_fundamental.vote(symbol=symbol, df=df1)
+                if skill_v and skill_v.direction != Dir.FLAT:
+                    votes.append(skill_v)
+            except Exception as _skill_err:
+                logger.debug("Skill fundamental agent note: %s", _skill_err)
+
         # 100-Agent Specialized Strategy Swarm Consensus Integration (118 Agents Total)
         _swarm_on = os.getenv("SWARM_ENABLED", "true").lower() in ("true", "1", "yes", "on")
         if include_swarm and _swarm_on and getattr(self, "swarm", None) is not None and build_market_context is not None:
             try:
                 news_sent = 0.0
                 for v in votes:
-                    if v.agent == "NEWS":
+                    if v.agent in ("NEWS", "SKILL-FUNDAMENTAL"):
                         dname = getattr(v.direction, "name", str(v.direction)).upper()
-                        news_sent = 0.8 if "LONG" in dname else (-0.8 if "SHORT" in dname else 0.0)
-                        break
+                        if "LONG" in dname:
+                            news_sent = max(news_sent, 0.8)
+                        elif "SHORT" in dname:
+                            news_sent = min(news_sent, -0.8)
                 ctx = build_market_context(
                     symbol=symbol,
                     df1=df1,
@@ -1032,7 +1051,7 @@ class Arbiter:
         # Institutional Synergy Booster:
         # Multiple institutional smart-money confirmations (Liquidity, MTF, ORR, S/D, OTE, AutoTrend1M)
         # reinforce high-accuracy trade execution
-        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT", "VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP", "AUTO-TREND-1M"}
+        INSTITUTIONAL_AGENTS = {"LIQUIDITY", "MTF-CONFLUENCE", "ORR-STRATEGY", "SUPPLY-DEMAND", "OTE-STRATEGY", "FAKE-BREAKOUT", "VOLATILITY-SQUEEZE", "RIBBON-SCALP", "STOCH-RSI-SCALP", "AUTO-TREND-1M", "SKILL-FUNDAMENTAL"}
         long_inst_n = sum(1 for v in votes if (v.agent in INSTITUTIONAL_AGENTS or v.agent.startswith(("ICT-", "MTF-", "PIVOT-", "FIB-", "SD-"))) and v.direction == Dir.LONG and v.strength >= 0.75)
         short_inst_n = sum(1 for v in votes if (v.agent in INSTITUTIONAL_AGENTS or v.agent.startswith(("ICT-", "MTF-", "PIVOT-", "FIB-", "SD-"))) and v.direction == Dir.SHORT and v.strength >= 0.75)
         if long_inst_n >= 2:

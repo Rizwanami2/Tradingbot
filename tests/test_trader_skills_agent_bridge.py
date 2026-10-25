@@ -17,12 +17,24 @@ from trader_skills_agent_bridge import (
 )
 
 
-def test_fundamental_agent_crypto():
+def test_fundamental_agent_btc():
     agent = FundamentalSkillAgent()
     vote = agent.vote("BTCUSDT")
     assert isinstance(vote, Vote)
-    assert vote.direction == Dir.FLAT
-    assert "Macro/Forex" in vote.reason or "fundamentals not applicable" in vote.reason
+    assert vote.direction == Dir.LONG
+    assert vote.strength >= 0.80
+    assert "Bitcoin Institutional Synergy" in vote.reason
+    assert "Spot ETF" in vote.reason
+
+
+def test_fundamental_agent_gold():
+    agent = FundamentalSkillAgent()
+    vote = agent.vote("XAUUSD")
+    assert isinstance(vote, Vote)
+    assert vote.direction == Dir.LONG
+    assert vote.strength >= 0.80
+    assert "Gold Institutional Synergy" in vote.reason
+    assert "Bridgewater" in vote.reason
 
 
 def test_fundamental_agent_equity():

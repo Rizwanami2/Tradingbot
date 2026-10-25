@@ -25,6 +25,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 import trader_skills
+from trader_skills_agent_bridge import get_skills_bridge
 from telegram_brain import safe_reply
 
 logger = logging.getLogger("TelegramTraderSkills")
@@ -38,6 +39,10 @@ async def _run_in_thread(func, *args):
 
 def build_skills_keyboard(active: str = "main") -> InlineKeyboardMarkup:
     """Build interactive inline keyboard for navigating trader skills."""
+    row0 = [
+        InlineKeyboardButton("🥇 Gold Skills (XAUUSD)", callback_data="ts:gold"),
+        InlineKeyboardButton("⚡ Bitcoin Skills (BTC)", callback_data="ts:btc"),
+    ]
     row1 = [
         InlineKeyboardButton("🏛️ Pelosi / Congress", callback_data="ts:pelosi"),
         InlineKeyboardButton("🐋 13F Copycat", callback_data="ts:copycat"),
@@ -65,7 +70,7 @@ def build_skills_keyboard(active: str = "main") -> InlineKeyboardMarkup:
     row7 = [
         InlineKeyboardButton("🔗 Swarm-Skills Bridge Status", callback_data="ts:bridge"),
     ]
-    return InlineKeyboardMarkup([row1, row2, row3, row4, row5, row6, row7])
+    return InlineKeyboardMarkup([row0, row1, row2, row3, row4, row5, row6, row7])
 
 
 async def skills_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -342,6 +347,66 @@ async def skills_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await rebalance_command(update, ctx)
     elif skill_key == "bridge":
         await bridge_status_command(update, ctx)
+    elif skill_key == "gold":
+        await gold_command(update, ctx)
+    elif skill_key == "btc":
+        await btc_command(update, ctx)
+
+
+async def gold_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Institutional Intelligence & Skills Report for Gold (XAUUSD / GLD / Miners)."""
+    bridge = get_skills_bridge()
+    vote = bridge.get_fundamental_vote("XAUUSD")
+    open_ok, market_status_msg = bridge.market_hours_guard.is_market_open("XAUUSD")
+
+    msg = (
+        "🥇 **Gold (XAUUSD / GLD / Miners) Trader Skills Intelligence:**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 **Institutional Consensus:** `{vote.direction.name}` (Conviction: `{vote.strength:.0%}`)\n"
+        f"💡 **Synergy:** _{vote.reason}_\n\n"
+        f"⏰ **Market Session:** {'🟢 OPEN' if open_ok else '🔴 CLOSED'} — {market_status_msg}\n"
+        "• *Trading Week:* Sunday 22:00 UTC (17:00 EST) to Friday 21:00 UTC (16:00 EST)\n"
+        "• *Daily Rollover:* 17:00 – 18:00 EST maintenance window\n\n"
+        "🐋 **Institutional 13F Exposure:**\n"
+        "• Ray Dalio / Bridgewater: Core historical GLD/IAU physical gold trusts\n"
+        "• Duquesne & Greenlight: Macro sovereign inflation hedge reserves\n"
+        "• Gold Miner Proxies: NEM, GOLD (Barrick), AEM, GDX\n\n"
+        "🛡️ **Risk & Execution Safeguards:**\n"
+        "• Sizing: Fractional & MT5 Lot Support (0.01 micro lot = 1 oz)\n"
+        "• Wash-Sale Family: XAUUSD, GLD, IAU, GDX, NEM, PAXG linked for IRS safety\n"
+        "• Pre-Trade Audit: Auto-verified by `SkillRiskGate` before execution\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 _Use `/ticket BUY 0.10 XAUUSD` or `/riskcheck` to stage verified trades._"
+    )
+    await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_skills_keyboard("main"))
+
+
+async def btc_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Institutional Intelligence & Skills Report for Bitcoin (BTCUSDT / Spot ETFs / Proxies)."""
+    bridge = get_skills_bridge()
+    vote = bridge.get_fundamental_vote("BTCUSDT")
+    open_ok, market_status_msg = bridge.market_hours_guard.is_market_open("BTCUSDT")
+
+    msg = (
+        "⚡ **Bitcoin (BTCUSDT / IBIT / MSTR) Trader Skills Intelligence:**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 **Institutional Consensus:** `{vote.direction.name}` (Conviction: `{vote.strength:.0%}`)\n"
+        f"💡 **Synergy:** _{vote.reason}_\n\n"
+        f"⏰ **Market Session:** {'🟢 OPEN' if open_ok else '🔴 CLOSED'} — {market_status_msg}\n"
+        "• *Continuous Trading:* 24 hours / 7 days / 365 days never closes\n\n"
+        "🐋 **Institutional 13F & SEC Filings:**\n"
+        "• Spot ETFs: BlackRock IBIT & Fidelity FBTC 13F institutional accumulation\n"
+        "• Corporate Balance Sheets: MicroStrategy (MSTR) material 8-K Bitcoin debt/buys\n"
+        "• Custody & Exchange: Coinbase (COIN) transaction & institutional custody flows\n"
+        "• Top Filers: ARK Invest (Cathie Wood), Renaissance, Citadel, Millennium\n\n"
+        "🛡️ **Risk & Execution Safeguards:**\n"
+        "• Sizing: Fractional Coin / Satoshis sizing via `trader-budget`\n"
+        "• Wash-Sale Family: BTCUSDT, BTCUSD, WBTC, IBIT, FBTC, BITO linked\n"
+        "• Volatility Buffer: Dynamic margin buffer & daily loss limits enforced\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 _Use `/ticket BUY 0.05 BTCUSDT` or `/riskcheck` to stage verified trades._"
+    )
+    await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_skills_keyboard("main"))
 
 
 async def bridge_status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -376,6 +441,8 @@ def register_trader_skills(app: Application) -> None:
     """Register all 11 Trader Skills handlers with the Telegram bot application."""
     app.add_handler(CommandHandler(["skills", "skill", "hub"], skills_command))
     app.add_handler(CommandHandler(["skillsbridge", "bridge"], bridge_status_command))
+    app.add_handler(CommandHandler(["gold", "xau", "xauusd"], gold_command))
+    app.add_handler(CommandHandler(["btc", "bitcoin", "btcusdt"], btc_command))
     app.add_handler(CommandHandler(["copycat", "13f", "clone"], copycat_command))
     app.add_handler(CommandHandler(["pelosi", "congress", "senate", "ptr"], pelosi_command))
     app.add_handler(CommandHandler(["secnews", "8k", "filings"], secnews_command))

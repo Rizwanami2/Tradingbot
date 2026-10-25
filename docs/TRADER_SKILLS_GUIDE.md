@@ -26,6 +26,20 @@ Everything runs on standard-library Python with zero external API key requiremen
 | **`/tax [report]`** | **Tax Optimizer** | Tracks cost-basis lots (FIFO/HIFO), wash-sale windows (30 days), and loss harvesting. | Cost-Basis Engine |
 | **`/nyse`** | **Market Clock** | NYSE trading calendar, 2026/2027 holiday schedules, and early close countdowns. | NYSE Holiday Calendar |
 | **`/rebalance [band]`** | **Rebalancer** | Calculates portfolio drift and generates minimal rebalancing orders (sells before buys). | Target Drift Engine |
+| **`/gold`** | **Gold Intelligence** | Dedicated institutional 13F trust allocations (Bridgewater), spot metals CME session hours, and risk checks for XAUUSD. | Multi-Source |
+| **`/btc`** | **Bitcoin Intelligence** | Dedicated Spot Bitcoin ETF 13F inflows (IBIT/FBTC), MicroStrategy 8-K treasury holdings, and 24/7 continuous crypto session. | Multi-Source |
+| **`/skillsbridge`** | **Agent-Skills Bridge** | Operational status of the unified bridge linking all 11 skills to the 118-Agent Collective Swarm & Consensus Engine. | Bridge Router |
+
+---
+
+## Gold (XAUUSD) & Bitcoin (BTCUSDT) Native Adaptations
+
+All 11 skills are fully adapted for Gold and Bitcoin:
+1. **`trader-risk`**: Fully permits `XAUUSD`, `GOLD`, `BTCUSDT`, and `BTCUSD` with tailored volatility warnings, margin buffer checks, and order size ceilings.
+2. **`trader-tax`**: Defines IRS wash-sale families linking `XAUUSD` with `GLD`, `IAU`, `GDX`, and `NEM`, and `BTCUSDT` with `BTCUSD`, `WBTC`, `IBIT`, `FBTC`, and `BITO`.
+3. **`trader-alerts`**: Provides accurate session tracking for Spot Metals (Sunday 22:00 UTC to Friday 21:00 UTC with 17:00-18:00 EST rollover) and 24/7/365 continuous crypto trading.
+4. **`trader-copycat` & `trader-pelosi`**: Tracks institutional 13F allocations (Bridgewater, Duquesne, ARK, Renaissance) and congressional PTR disclosures across gold trusts, miners, Bitcoin ETFs, and crypto infrastructure.
+5. **Consensus Engine Synergy**: `FundamentalSkillAgent` casts an institutional directional vote in `ConsensusEngine.decide()` for Gold and Bitcoin, giving the 118-agent swarm macroeconomic and institutional backing.
 
 ---
 

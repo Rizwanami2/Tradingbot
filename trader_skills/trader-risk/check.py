@@ -44,6 +44,7 @@ DEFAULTS = {
     "budget": None, "cash_buffer_pct": 10, "max_position_pct": 25, "max_order_usd": 2000,
     "min_order_usd": 5, "max_orders_per_day": 10, "paper": True, "blocked": [],
     "allow_options": False, "allow_margin": False, "allow_short": False,
+    "allow_commodities": True, "allow_crypto": False,
 }
 ALPACA_FIELDS = ("symbol", "side", "qty", "notional", "type", "time_in_force", "limit_price",
                  "stop_price", "trail_price", "trail_percent", "extended_hours", "client_order_id",
@@ -187,12 +188,28 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None):
                          % (o.get("order_class") or "advanced_instructions"))
 
         # asset
-        if sym and OCC.match(sym.replace(" ", "")):
+        is_opt = bool(sym and OCC.match(sym.replace(" ", "")))
+        is_gold = sym in ("XAUUSD", "GOLD", "XAU", "PAXG", "XAUT")
+        is_btc = sym in ("BTCUSD", "BTCUSDT", "BTC", "WBTC") or (sym.startswith("BTC") and "/" not in sym)
+        is_crypto = is_btc or "/" in sym or sym.endswith("USDT")
+
+        if is_opt:
             if not c.get("allow_options"):
                 reasons.append("asset: %s is an option contract; options are off "
                                "(\"allow_options\": false)" % sym)
             else:
                 warns.append("option order: options can lose 100%% of what you pay")
+        elif is_gold:
+            if not c.get("allow_commodities", True) and not c.get("allow_gold", True):
+                reasons.append("asset: %s is a commodity/metals symbol; commodities are off" % sym)
+            else:
+                warns.append("commodity order (%s): precious metals subject to volatility" % sym)
+        elif is_crypto:
+            if not c.get("allow_crypto", False):
+                reasons.append("asset: %s does not look like a US stock or ETF ticker; "
+                               "this pack trades stocks and ETFs only" % sym)
+            else:
+                warns.append("crypto order (%s): high volatility 24/7 digital asset" % sym)
         elif sym and ("/" in sym or not TICKER.match(sym)):
             reasons.append("asset: %s does not look like a US stock or ETF ticker; "
                            "this pack trades stocks and ETFs only" % sym)

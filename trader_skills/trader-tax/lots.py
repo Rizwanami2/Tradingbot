@@ -40,8 +40,12 @@ import json
 import os
 import sys
 
-FAMILIES = [{"GOOGL", "GOOG"}, {"BRK.A", "BRK.B", "BRK-A", "BRK-B"}, {"FOXA", "FOX"},
-            {"NWSA", "NWS"}, {"LLYVA", "LLYVK"}, {"LEN", "LEN.B"}, {"UA", "UAA"}]
+FAMILIES = [
+    {"GOOGL", "GOOG"}, {"BRK.A", "BRK.B", "BRK-A", "BRK-B"}, {"FOXA", "FOX"},
+    {"NWSA", "NWS"}, {"LLYVA", "LLYVK"}, {"LEN", "LEN.B"}, {"UA", "UAA"},
+    {"XAUUSD", "GOLD", "XAU", "GLD", "IAU", "PAXG", "XAUT"},
+    {"BTCUSD", "BTCUSDT", "BTC", "WBTC", "IBIT", "FBTC", "BITO"},
+]
 EPS = 1e-9
 
 
