@@ -76,6 +76,7 @@ class TradeOrder:
     highest_price: float = 0.0
     lowest_price: float = 0.0
     be_stage: int = 0  # 0: initial, 1: +0.1R locked, 2: full BE
+    be_profit_booked: bool = False
     close_reason: str = ""
     is_scalp: bool = False
     fast_market_fill: bool = False
@@ -496,16 +497,51 @@ class ExecutionEngine:
             except Exception:
                 pass
 
+            booked_pnl = 0.0
+            close_lots = 0.0
+            entry_p = float(pos.executed_price or pos.entry_level or 0.0)
+            is_long = "LONG" in str(pos.direction).upper() or "BUY" in str(pos.direction).upper()
+            in_profit = (curr_price > entry_p) if is_long else (curr_price < entry_p)
+            cfg = getattr(self.risk_manager, "config", None)
+            be_tp_enabled = getattr(cfg, "auto_be_take_profit", True) if cfg else True
+            be_close_pct = float(getattr(cfg, "be_close_pct", 0.33)) if cfg else 0.33
+
+            if (
+                be_tp_enabled
+                and in_profit
+                and not getattr(pos, "be_profit_booked", False)
+                and getattr(pos, "remaining_lots", 0.0) >= 0.02
+            ):
+                close_lots = round(pos.remaining_lots * be_close_pct, 4)
+                if pos.remaining_lots - close_lots < 0.01:
+                    close_lots = round(pos.remaining_lots / 2, 2)
+                if close_lots > 0:
+                    try:
+                        self._broker_close(pos.symbol, qty=close_lots, price=curr_price, ticket=pos_ticket)
+                    except Exception as _ex:
+                        logger.error("[ExecutionEngine] BE snap broker close error for %s: %s", pos.symbol, _ex)
+                    booked_pnl = self.calc_position_pnl(pos, curr_price, closed_lots=close_lots)
+                    pos.realized_pnl += booked_pnl
+                    pos.remaining_lots = round(pos.remaining_lots - close_lots, 4)
+                    pos.remaining_size = max(0.0, pos.remaining_size * (1.0 - be_close_pct))
+                    pos.be_profit_booked = True
+
+            profit_note = ""
+            if booked_pnl > 0 or close_lots > 0:
+                profit_note = f"\n💰 **Profit Booked on BE:** `+${booked_pnl:,.2f}` ({close_lots} lots @ `${curr_price:,.2f}`)\nRemaining: `{pos.remaining_lots}` lots running risk-free."
+
             ev = {
                 "event": "PROFIT_FADE_PROTECT",
                 "order": pos,
                 "closed_full": False,
                 "new_stop": pos.stop_loss,
+                "booked_pnl": booked_pnl,
+                "closed_lots": close_lots,
                 "message": (
                     f"🔒 **AUTO-DECISION: PROFIT FADE DEFENSE (BE Locked)** ({pos.symbol} [#{pos.id}])\n"
                     f"Peak gain reached `+{decision.peak_r:.2f}R`, but momentum faded back to `{decision.r_multiple:+.2f}R`.\n"
                     f"Stop snapped to Break-Even: `${old_stop:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
-                    f"_Capital fully shielded against turning a winning trade into a loss._"
+                    f"_Capital fully shielded against turning a winning trade into a loss._{profit_note}"
                 ),
             }
             return ev
@@ -1669,6 +1705,7 @@ class ExecutionEngine:
                 be_act_pct = float(getattr(self, "scalp_trail_activation_pct", 0.06))
                 move_gain_pct = ((pos.highest_price - entry) / entry * 100.0) if is_long else ((entry - pos.lowest_price) / entry * 100.0)
                 if pos.be_stage < 1 and (pos.highest_profit_usd >= be_act_usd or move_gain_pct >= be_act_pct):
+                    candidate_be = None
                     if is_long:
                         target_be = round(entry * 1.0002, 4)
                         if target_be < curr_price:
@@ -1686,13 +1723,6 @@ class ExecutionEngine:
                                 self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
                             except Exception:
                                 pass
-                            be_msg = (
-                                f"🛡️ **SCALP BREAK-EVEN SECURED** ({pos.symbol} [#{pos.id}])\n"
-                                f"SL secured: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
-                                f"Profit protected: `+${pos.highest_profit_usd:,.2f}`"
-                            )
-                            events.append({"event": "SCALP_BE_LOCKED", "order": pos, "new_stop": pos.stop_loss, "message": be_msg})
-                            self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
                     else:
                         target_be = round(entry * 0.9998, 4)
                         if target_be > curr_price:
@@ -1710,13 +1740,45 @@ class ExecutionEngine:
                                 self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
                             except Exception:
                                 pass
-                            be_msg = (
-                                f"🛡️ **SCALP BREAK-EVEN SECURED** ({pos.symbol} [#{pos.id}])\n"
-                                f"SL secured: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
-                                f"Profit protected: `+${pos.highest_profit_usd:,.2f}`"
-                            )
-                            events.append({"event": "SCALP_BE_LOCKED", "order": pos, "new_stop": pos.stop_loss, "message": be_msg})
-                            self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
+
+                    if pos.be_stage >= 1 and candidate_be is not None:
+                        # Book profit when scalp SL on break-even
+                        scalp_booked_pnl = 0.0
+                        scalp_close_lots = 0.0
+                        cfg = getattr(self.risk_manager, "config", None)
+                        be_tp_enabled = getattr(cfg, "auto_be_take_profit", True) if cfg else True
+                        be_close_pct = float(getattr(cfg, "be_close_pct", 0.33)) if cfg else 0.33
+                        if (
+                            be_tp_enabled
+                            and not getattr(pos, "be_profit_booked", False)
+                            and getattr(pos, "remaining_lots", 0.0) >= 0.02
+                        ):
+                            scalp_close_lots = round(pos.remaining_lots * be_close_pct, 4)
+                            if pos.remaining_lots - scalp_close_lots < 0.01:
+                                scalp_close_lots = round(pos.remaining_lots / 2, 2)
+                            if scalp_close_lots > 0:
+                                try:
+                                    self._broker_close(pos.symbol, qty=scalp_close_lots, price=curr_price, ticket=pos_ticket)
+                                except Exception as _ex:
+                                    logger.error("[ExecutionEngine] Scalp BE profit broker close error: %s", _ex)
+                                scalp_booked_pnl = self.calc_position_pnl(pos, curr_price, closed_lots=scalp_close_lots)
+                                pos.realized_pnl += scalp_booked_pnl
+                                pos.remaining_lots = round(pos.remaining_lots - scalp_close_lots, 4)
+                                pos.remaining_size = max(0.0, pos.remaining_size * (1.0 - be_close_pct))
+                                pos.be_profit_booked = True
+
+                        profit_txt = ""
+                        if scalp_booked_pnl > 0 or scalp_close_lots > 0:
+                            profit_txt = f"\n💰 **Profit Booked on BE:** `+${scalp_booked_pnl:,.2f}` ({scalp_close_lots} lots @ `${curr_price:,.2f}`)\nRemaining: `{pos.remaining_lots}` lots running risk-free."
+
+                        be_msg = (
+                            f"🛡️ **SCALP BREAK-EVEN SECURED** ({pos.symbol} [#{pos.id}])\n"
+                            f"SL secured: `${old_sl:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                            f"Profit protected: `+${pos.highest_profit_usd:,.2f}`"
+                            f"{profit_txt}"
+                        )
+                        events.append({"event": "SCALP_BE_LOCKED", "order": pos, "new_stop": pos.stop_loss, "message": be_msg})
+                        self._dispatch_event("SCALP_BE_LOCKED", pos, be_msg)
 
                 # (2) Scalp Dynamic Trailing Stop
                 trail_on = bool(getattr(self, "scalp_trail_enabled", True))
@@ -2131,6 +2193,10 @@ class ExecutionEngine:
                 # Micro-scalp positions are fully managed by the dedicated scalp lifecycle above
                 continue
 
+            eval_high = curr_price if just_executed else high
+            eval_low = curr_price if just_executed else low
+            tp1_hit = (eval_high >= pos.tp1) if is_long else (eval_low <= pos.tp1)
+
             # (B) Check Progressive Auto Break-Even
             old_stop = pos.stop_loss
             be_stop, be_reason = self.risk_manager.auto_breakeven_stop(
@@ -2151,33 +2217,88 @@ class ExecutionEngine:
                         get_virtual_stop_manager().update_stop(getattr(pos, "ticket", None) or pos.id, be_stop)
                     except Exception:
                         pass
+
+                    # Book profit when SL is placed on break-even
+                    booked_pnl = 0.0
+                    close_lots = 0.0
+                    cfg = getattr(self.risk_manager, "config", None)
+                    be_tp_enabled = getattr(cfg, "auto_be_take_profit", True) if cfg else True
+                    min_stage = getattr(cfg, "be_close_stage", 1) if cfg else 1
+                    be_close_pct = float(getattr(cfg, "be_close_pct", 0.33)) if cfg else 0.33
+
+                    if (
+                        be_tp_enabled
+                        and stage >= min_stage
+                        and not getattr(pos, "be_profit_booked", False)
+                        and pos.partials_done == 0
+                        and not tp1_hit
+                        and getattr(pos, "remaining_lots", 0.0) > 0.0
+                    ):
+                        close_lots = round(pos.remaining_lots * be_close_pct, 4)
+                        if pos.remaining_lots - close_lots < 0.01 and pos.remaining_lots >= 0.02:
+                            close_lots = round(pos.remaining_lots / 2, 2)
+                        if close_lots > 0:
+                            pos_ticket = getattr(pos, "ticket", None) or pos.id
+                            try:
+                                self._broker_close(pos.symbol, qty=close_lots, price=curr_price, ticket=pos_ticket)
+                            except Exception as _ex:
+                                logger.error("[ExecutionEngine] Auto BE profit broker close error for %s: %s", pos.symbol, _ex)
+                            booked_pnl = self.calc_position_pnl(pos, curr_price, closed_lots=close_lots)
+                            pos.realized_pnl += booked_pnl
+                            pos.remaining_lots = round(pos.remaining_lots - close_lots, 4)
+                            pos.remaining_size = max(0.0, pos.remaining_size * (1.0 - be_close_pct))
+                            pos.be_profit_booked = True
+
+                    profit_note = ""
+                    if booked_pnl > 0 or close_lots > 0:
+                        profit_note = (
+                            f"\n💰 **Profit Booked on BE:** `+${booked_pnl:,.2f}` "
+                            f"({close_lots} lots @ `${curr_price:,.2f}`)\n"
+                            f"Remaining: `{pos.remaining_lots}` lots running risk-free."
+                        )
+
                     ev = {
                         "event": "AUTO_BE_LOCKED",
                         "order": pos,
                         "new_stop": be_stop,
+                        "booked_pnl": booked_pnl,
+                        "closed_lots": close_lots,
                         "message": (
                             f"🛡️ **AUTO BREAK-EVEN LOCKED** ({pos.symbol} [#{pos.id}])\n"
                             f"Stop Loss advanced: `${old_stop:,.2f}` ➔ `${be_stop:,.2f}`\n"
                             f"Stage: {be_reason}"
+                            f"{profit_note}"
                         ),
                     }
                     events.append(ev)
                     self._dispatch_event(ev["event"], pos, ev["message"])
 
+                    if booked_pnl > 0 or close_lots > 0:
+                        ev_profit = {
+                            "event": "BE_PROFIT_BOOKED",
+                            "order": pos,
+                            "booked_pnl": booked_pnl,
+                            "closed_lots": close_lots,
+                            "price": curr_price,
+                            "message": f"💰 **BREAK-EVEN PROFIT BOOKED** ({pos.symbol} [#{pos.id}]): +${booked_pnl:,.2f} ({close_lots} lots @ ${curr_price:,.2f})",
+                        }
+                        events.append(ev_profit)
+                        self._dispatch_event(ev_profit["event"], pos, ev_profit["message"])
+
             # (C) Check TP1 (+1.5R)
             tp1_just_hit = False
-            eval_high = curr_price if just_executed else high
-            eval_low = curr_price if just_executed else low
-            tp1_hit = (eval_high >= pos.tp1) if is_long else (eval_low <= pos.tp1)
             if pos.partials_done == 0 and tp1_hit:
                 tp1_just_hit = True
                 close_fraction = self.risk_manager.config.tp1_close_pct  # 50%
                 closed_size = pos.size * close_fraction
-                pos.remaining_size -= closed_size
-                pos.remaining_lots = round(pos.lots * (1.0 - close_fraction), 4)
+                pos.remaining_size = max(0.0, pos.remaining_size - closed_size)
+                close_lots = round(pos.remaining_lots * close_fraction, 4) if getattr(pos, "be_profit_booked", False) else round(pos.lots * close_fraction, 4)
+                if close_lots > pos.remaining_lots:
+                    close_lots = pos.remaining_lots
+                pos.remaining_lots = round(max(0.0, pos.remaining_lots - close_lots), 4)
                 pos.partials_done = 1
 
-                partial_pnl = self.calc_position_pnl(pos, pos.tp1, closed_lots=round(pos.lots * close_fraction, 4))
+                partial_pnl = self.calc_position_pnl(pos, pos.tp1, closed_lots=close_lots)
                 pos.realized_pnl += partial_pnl
 
                 # Move stop to BE with buffer
@@ -2186,7 +2307,7 @@ class ExecutionEngine:
                 pos.be_stage = 2
 
                 try:
-                    self._broker_close(pos.symbol, qty=round(pos.lots * close_fraction, 4), price=pos.tp1, ticket=getattr(pos, "ticket", None) or pos.id)
+                    self._broker_close(pos.symbol, qty=close_lots, price=pos.tp1, ticket=getattr(pos, "ticket", None) or pos.id)
                 except Exception as ex:
                     print(f"[ExecutionEngine] Broker TP1 close: {ex}")
                 try:

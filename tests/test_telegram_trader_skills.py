@@ -30,6 +30,7 @@ from telegram_trader_skills import (
     gold_command,
     btc_command,
     autodoctor_command,
+    beprofit_command,
 )
 
 
@@ -252,6 +253,26 @@ class TestTelegramTraderSkills(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Adverse Stall Defense", call_text)
             self.assertIn("Thesis Invalidation Early Cut", call_text)
             self.assertIn("Profit Fade Defense", call_text)
+
+    async def test_beprofit_command(self):
+        """Verify /beprofit displays and updates Break-Even profit booking settings."""
+        with patch("telegram_trader_skills.safe_reply", new_callable=AsyncMock) as mock_reply:
+            # Query status
+            self.ctx.args = []
+            await beprofit_command(self.update, self.ctx)
+            mock_reply.assert_called()
+            call_text = mock_reply.call_args[0][1]
+            self.assertIn("Break-Even Profit Booking Status", call_text)
+            self.assertIn("Close Percentage", call_text)
+
+            # Update percentage
+            mock_reply.reset_mock()
+            self.ctx.args = ["50%"]
+            await beprofit_command(self.update, self.ctx)
+            mock_reply.assert_called()
+            call_text2 = mock_reply.call_args[0][1]
+            self.assertIn("Break-Even Profit Booking Updated", call_text2)
+            self.assertIn("50%", call_text2)
 
     def test_trader_skills_package_wrappers(self):
         """Verify trader_skills package programmatic wrappers."""

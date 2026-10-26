@@ -377,11 +377,59 @@ async def autodoctor_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• Shields capital against turning winning trades into losers.\n\n"
         "⏱️ **4. Time Stagnation Scratch (`30 bars / 45m`):**\n"
         "• Automatically scratches trades stuck in consolidation chop while in loss.\n"
-        "• Unlocks margin for fresh high-probability setups.\n"
+        "• Unlocks margin for fresh high-probability setups.\n\n"
+        "💰 **5. Break-Even Profit Booking (`AUTO_BE_PROFIT`):**\n"
+        "• When SL is placed on Break-Even, bot auto-books **33% profit** at market.\n"
+        "• Leaves 67% runner active with SL at entry + buffer (100% risk-free trade).\n"
+        "• Customize anytime via `/beprofit <pct>` (e.g. `/beprofit 50` or `/beprofit 25`).\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "✅ **Status:** Active & monitoring live market ticks across Gold, BTC & FX."
     )
     await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_skills_keyboard("main"))
+
+
+async def beprofit_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """View or adjust Break-Even Profit Booking percentage."""
+    from risk_manager import get_risk_manager
+    rm = get_risk_manager()
+    args = ctx.args or []
+    if args:
+        val_str = args[0].strip().replace("%", "")
+        if val_str.lower() in ("off", "false", "0"):
+            rm.config.auto_be_take_profit = False
+            msg = "🛡️ **Break-Even Profit Booking:** Deactivated (`OFF`). SL moves to BE without partial take-profit."
+        elif val_str.lower() in ("on", "true"):
+            rm.config.auto_be_take_profit = True
+            msg = f"🛡️ **Break-Even Profit Booking:** Activated (`ON`). Default booking: `{rm.config.be_close_pct:.0%}`."
+        else:
+            try:
+                val = float(val_str)
+                if val > 1.0:
+                    val = val / 100.0
+                val = max(0.05, min(0.90, val))
+                rm.config.be_close_pct = val
+                rm.config.auto_be_take_profit = True
+                msg = (
+                    f"✅ **Break-Even Profit Booking Updated:**\n"
+                    f"• Partial take-profit on BE: **`{val:.0%}`**\n"
+                    f"• Status: `ACTIVE`\n"
+                    f"• When Stop Loss is advanced to Break-Even, bot will book `{val:.0%}` size in cash."
+                )
+            except ValueError:
+                msg = "⚠️ Invalid value. Use `/beprofit 33`, `/beprofit 50`, `/beprofit on`, or `/beprofit off`."
+    else:
+        st = "🟢 ACTIVE" if rm.config.auto_be_take_profit else "🔴 OFF"
+        msg = (
+            f"💰 **Break-Even Profit Booking Status:**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Status:** {st}\n"
+            f"• **Close Percentage:** `{rm.config.be_close_pct:.0%}` of position\n"
+            f"• **Trigger Stage:** When SL moves to Break-Even (Progressive Auto BE & Scalp BE)\n"
+            f"• **Rule:** Locks in profit while placing Stop Loss at entry + buffer, leaving remainder to run risk-free.\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 _Change with: `/beprofit 25`, `/beprofit 33`, `/beprofit 50`, `/beprofit off`_"
+        )
+    await safe_reply(update, msg, parse_mode="Markdown")
 
 
 async def gold_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -473,6 +521,7 @@ def register_trader_skills(app: Application) -> None:
     app.add_handler(CommandHandler(["skills", "skill", "hub"], skills_command))
     app.add_handler(CommandHandler(["autodoctor", "doctor", "tradesense"], autodoctor_command))
     app.add_handler(CommandHandler(["skillsbridge", "bridge"], bridge_status_command))
+    app.add_handler(CommandHandler(["beprofit", "bepnl", "profitbe"], beprofit_command))
     app.add_handler(CommandHandler(["gold", "xau", "xauusd"], gold_command))
     app.add_handler(CommandHandler(["btc", "bitcoin", "btcusdt"], btc_command))
     app.add_handler(CommandHandler(["copycat", "13f", "clone"], copycat_command))

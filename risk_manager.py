@@ -83,6 +83,9 @@ class RiskConfig:
     be_lock_r: float = 0.5        # early lock: move SL to +0.1R when price reaches +0.5R
     be_lock_offset_r: float = 0.1 # small profit locked at early stage
     be_buffer_r: float = 0.25     # buffer past entry at full BE stage (higher than early lock)
+    be_close_pct: float = 0.33    # book 33% profit when SL is moved to break-even
+    auto_be_take_profit: bool = True  # book partial profit when auto BE activates
+    be_close_stage: int = 1       # stage to book profit (1 = early BE lock, 2 = full BE)
     dd_reduce_at: float = 0.05
     dd_reduce_factor: float = 0.55
     dd_hard_at: float = 0.12
@@ -157,6 +160,17 @@ class RiskState:
 
 
 
+_global_risk_manager: Optional["RiskManager"] = None
+
+
+def get_risk_manager(equity: float = 10000.0, symbol: str = "XAUUSD") -> "RiskManager":
+    """Return the global RiskManager singleton instance."""
+    global _global_risk_manager
+    if _global_risk_manager is None:
+        _global_risk_manager = RiskManager(equity=equity, symbol=symbol)
+    return _global_risk_manager
+
+
 class RiskManager:
     def __init__(
         self,
@@ -168,6 +182,8 @@ class RiskManager:
         self.config = config or RiskConfig()
         self.set_symbol(symbol)
         self.state_file = state_file
+        global _global_risk_manager
+        _global_risk_manager = self
         try:
             import config
             if hasattr(config, "get_lot_size_mode"):
