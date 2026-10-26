@@ -312,6 +312,11 @@ class ExecutionEngine:
         self._last_closed_trade: Dict[str, Dict[str, Any]] = {}
         self.on_trade_closed_callback: Optional[Any] = None
         self._staged_next_setups: Dict[str, Any] = {}
+        try:
+            from adverse_trade_manager import AdverseTradeManager, get_adverse_trade_manager
+            self.adverse_trade_manager = get_adverse_trade_manager()
+        except Exception:
+            self.adverse_trade_manager = None
 
         if state_file:
             self.state_file: str = state_file
@@ -401,6 +406,153 @@ class ExecutionEngine:
 
         rem_size = float(pos.remaining_size or pos.size or 0.0)
         return round(diff * rem_size, 2)
+
+    def evaluate_adverse_trade(
+        self,
+        pos: TradeOrder,
+        candle: Dict[str, Any],
+        curr_price: float,
+        df: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Diagnoses open positions running poorly (adverse stall, profit fade, thesis invalidation,
+        or time stagnation in loss) and autonomously decides & executes the optimal risk mitigation.
+        """
+        if getattr(self, "adverse_trade_manager", None) is None:
+            return None
+
+        opposing_consensus = False
+        try:
+            from anti_spam import canonical_currency
+            pos_dir = str(getattr(pos, "direction", "LONG")).upper()
+            opp_dir = "SHORT" if pos_dir in ("LONG", "BUY") else "LONG"
+            curr_sym = canonical_currency(pos.symbol)
+            for other_p in list(self.active_positions.values()) + list(self.pending_setups.values()):
+                if getattr(other_p, "id", None) != pos.id and canonical_currency(getattr(other_p, "symbol", "")) == curr_sym:
+                    if str(getattr(other_p, "direction", "")).upper() == opp_dir:
+                        opposing_consensus = True
+                        break
+        except Exception:
+            pass
+
+        decision = self.adverse_trade_manager.diagnose(
+            pos=pos,
+            current_price=curr_price,
+            high=float(candle.get("high", curr_price)),
+            low=float(candle.get("low", curr_price)),
+            candle=candle,
+            df=df,
+            opposing_consensus=opposing_consensus,
+        )
+
+        from adverse_trade_manager import AdverseAction
+
+        # Action 1: DE-RISK 50%
+        if decision.action == AdverseAction.DE_RISK_50 and getattr(pos, "remaining_lots", 0.0) > 0.01:
+            close_lots = round(pos.remaining_lots * decision.close_ratio, 4)
+            pos_ticket = getattr(pos, "ticket", None) or pos.id
+            try:
+                self._broker_close(pos.symbol, qty=close_lots, price=curr_price, ticket=pos_ticket)
+            except Exception as _ex:
+                logger.error("[ExecutionEngine] De-risk broker close error for %s: %s", pos.symbol, _ex)
+
+            partial_pnl = self.calc_position_pnl(pos, curr_price, closed_lots=close_lots)
+            pos.realized_pnl += partial_pnl
+            pos.remaining_lots = round(pos.remaining_lots - close_lots, 4)
+            pos.remaining_size = max(0.0, pos.remaining_size * (1.0 - decision.close_ratio))
+            pos._adverse_derisked = True
+
+            old_stop = pos.stop_loss
+            if decision.new_stop is not None:
+                pos.stop_loss = decision.new_stop
+                try:
+                    self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                    pos.last_broker_sl = pos.stop_loss
+                except Exception:
+                    pass
+
+            ev = {
+                "event": "ADVERSE_DE_RISK",
+                "order": pos,
+                "closed_full": False,
+                "new_stop": pos.stop_loss,
+                "message": (
+                    f"🛡️ **AUTO-DECISION: ADVERSE STALL DEFENSE (50% De-Risk)** ({pos.symbol} [#{pos.id}])\n"
+                    f"Trade running adverse (`{decision.r_multiple:+.2f}R`). Bot auto-trimmed 50% size (`{close_lots}` lots @ `${curr_price:,.2f}`).\n"
+                    f"Stop Loss tightened: `${old_stop:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                    f"Remaining: `{pos.remaining_lots}` lots active with risk halved."
+                ),
+            }
+            return ev
+
+        # Action 2: BREAKEVEN SNAP (Profit Fade Defense)
+        elif decision.action == AdverseAction.BREAKEVEN_SNAP and decision.new_stop is not None:
+            old_stop = pos.stop_loss
+            pos.stop_loss = decision.new_stop
+            pos_ticket = getattr(pos, "ticket", None) or pos.id
+            try:
+                self._broker_modify(pos.symbol, stop_loss=pos.stop_loss, ticket=pos_ticket)
+                pos.last_broker_sl = pos.stop_loss
+            except Exception:
+                pass
+
+            ev = {
+                "event": "PROFIT_FADE_PROTECT",
+                "order": pos,
+                "closed_full": False,
+                "new_stop": pos.stop_loss,
+                "message": (
+                    f"🔒 **AUTO-DECISION: PROFIT FADE DEFENSE (BE Locked)** ({pos.symbol} [#{pos.id}])\n"
+                    f"Peak gain reached `+{decision.peak_r:.2f}R`, but momentum faded back to `{decision.r_multiple:+.2f}R`.\n"
+                    f"Stop snapped to Break-Even: `${old_stop:,.2f}` ➔ `${pos.stop_loss:,.2f}`\n"
+                    f"_Capital fully shielded against turning a winning trade into a loss._"
+                ),
+            }
+            return ev
+
+        # Action 3: EMERGENCY EXIT or STAGNATION SCRATCH
+        elif decision.action in (AdverseAction.EMERGENCY_EXIT, AdverseAction.STAGNATION_SCRATCH):
+            pos_ticket = getattr(pos, "ticket", None) or pos.id
+            try:
+                self._broker_close(pos.symbol, price=curr_price, ticket=pos_ticket)
+            except Exception as _ex:
+                logger.error("[ExecutionEngine] Adverse exit close error for %s: %s", pos.symbol, _ex)
+
+            exit_pnl = self.calc_position_pnl(pos, curr_price)
+            pos.realized_pnl += exit_pnl
+            pos.exit_price = curr_price
+            pos.status = OrderStatus.CLOSED
+            pos.closed_at = datetime.now(timezone.utc).isoformat()
+            action_label = "Thesis Invalidation" if decision.action == AdverseAction.EMERGENCY_EXIT else "Time Stagnation Scratch"
+            pos.close_reason = f"{action_label} ({decision.r_multiple:+.2f}R)"
+
+            try:
+                self.risk_manager.update_after_trade(pos.realized_pnl, r_multiple=decision.r_multiple)
+            except Exception:
+                pass
+            self._notify_brain_close(pos, decision.r_multiple)
+            self.trade_history.append(pos)
+            self.active_positions.pop(pos.id, None)
+            self.save_state()
+
+            event_type = "ADVERSE_EMERGENCY_EXIT" if decision.action == AdverseAction.EMERGENCY_EXIT else "STAGNATION_SCRATCH"
+            title = "🚨 **AUTO-DECISION: THESIS INVALIDATED (Early Exit)**" if decision.action == AdverseAction.EMERGENCY_EXIT else "⏱️ **AUTO-DECISION: TIME STAGNATION SCRATCH**"
+            ev = {
+                "event": event_type,
+                "order": pos,
+                "closed_full": True,
+                "exit_price": curr_price,
+                "final_pnl": pos.realized_pnl,
+                "message": (
+                    f"{title} ({pos.symbol} [#{pos.id}])\n"
+                    f"{decision.reason}\n"
+                    f"Exit Price: `${curr_price:,.2f}` | Final PnL: `${pos.realized_pnl:+,.2f}`\n"
+                    f"Capital & Margin immediately freed for fresh setups."
+                ),
+            }
+            return ev
+
+        return None
 
     def _broker_close(
         self,
@@ -1461,6 +1613,14 @@ class ExecutionEngine:
                 pos.unrealized_pnl = (curr_price - entry) * pos.remaining_size
             else:
                 pos.unrealized_pnl = (entry - curr_price) * pos.remaining_size
+
+            # (Adverse Trade Auto-Doctor): Evaluate positions running poorly and auto-decide risk mitigation
+            adverse_ev = self.evaluate_adverse_trade(pos, candle, curr_price)
+            if adverse_ev:
+                events.append(adverse_ev)
+                self._dispatch_event(adverse_ev["event"], pos, adverse_ev["message"])
+                if adverse_ev.get("closed_full", False):
+                    continue
 
             # Sync broker mark price if supported
             if getattr(self, "broker", None) is not None:

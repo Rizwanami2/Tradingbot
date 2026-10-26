@@ -68,7 +68,8 @@ def build_skills_keyboard(active: str = "main") -> InlineKeyboardMarkup:
         InlineKeyboardButton("🔄 Overview", callback_data="ts:main"),
     ]
     row7 = [
-        InlineKeyboardButton("🔗 Swarm-Skills Bridge Status", callback_data="ts:bridge"),
+        InlineKeyboardButton("🩺 Auto-Trade Doctor", callback_data="ts:doctor"),
+        InlineKeyboardButton("🔗 Swarm-Skills Bridge", callback_data="ts:bridge"),
     ]
     return InlineKeyboardMarkup([row0, row1, row2, row3, row4, row5, row6, row7])
 
@@ -351,6 +352,36 @@ async def skills_callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await gold_command(update, ctx)
     elif skill_key == "btc":
         await btc_command(update, ctx)
+    elif skill_key == "doctor":
+        await autodoctor_command(update, ctx)
+
+
+async def autodoctor_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Diagnose open trades and manage autonomous decisions for underperforming positions."""
+    from adverse_trade_manager import get_adverse_trade_manager
+    adm = get_adverse_trade_manager()
+
+    msg = (
+        "🩺 **Auto-Trade Doctor (Adverse Trade Decision Engine):**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "When an open trade is running poorly, the bot automatically diagnoses the condition "
+        "and executes the optimal capital-preservation decision:\n\n"
+        "🛡️ **1. Adverse Stall Defense (`-0.50R`):**\n"
+        "• Automatically trims **50% of position size** at market.\n"
+        "• Tightens stop loss on remaining 50% to **`-0.75R`** (halves risk exposure).\n\n"
+        "🚨 **2. Thesis Invalidation Early Cut (`-0.20R`):**\n"
+        "• If market consensus / 118-agent Swarm flips opposing while in loss.\n"
+        "• Automatically **exits immediately**, saving **60% to 75%** of stop-loss capital.\n\n"
+        "🔒 **3. Profit Fade Defense (`+0.65R` ➔ `+0.12R`):**\n"
+        "• If high profit fades back toward entry, **snaps stop to Break-Even**.\n"
+        "• Shields capital against turning winning trades into losers.\n\n"
+        "⏱️ **4. Time Stagnation Scratch (`30 bars / 45m`):**\n"
+        "• Automatically scratches trades stuck in consolidation chop while in loss.\n"
+        "• Unlocks margin for fresh high-probability setups.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "✅ **Status:** Active & monitoring live market ticks across Gold, BTC & FX."
+    )
+    await safe_reply(update, msg, parse_mode="Markdown", reply_markup=build_skills_keyboard("main"))
 
 
 async def gold_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -440,6 +471,7 @@ async def bridge_status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def register_trader_skills(app: Application) -> None:
     """Register all 11 Trader Skills handlers with the Telegram bot application."""
     app.add_handler(CommandHandler(["skills", "skill", "hub"], skills_command))
+    app.add_handler(CommandHandler(["autodoctor", "doctor", "tradesense"], autodoctor_command))
     app.add_handler(CommandHandler(["skillsbridge", "bridge"], bridge_status_command))
     app.add_handler(CommandHandler(["gold", "xau", "xauusd"], gold_command))
     app.add_handler(CommandHandler(["btc", "bitcoin", "btcusdt"], btc_command))
